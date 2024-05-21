@@ -98,15 +98,26 @@ rgn_list <- imas_effort_rgns %>%
 
 years <- c(2012:2020)
 
-## need to do CHN, NOR, RUS (canada/usa border one)
+# NOR; Bouvet Island GFW id is NA, so haven't pulled that info... 
+
 
 # iterate through all EEZ codes for all regions to extract apparent fishing hours:
 for(i in rgn_list) {
   
+   # i = "RUS"
    # i <- rgn_list[[1]]
   
+  if(i == "CHN"){
+     eez_code_df <- get_region_id(region_name = i, region_source = 'eez', key = key) %>%
+    filter(id == "49003") # filter for the smaller China region
+    
+  }else{
+  
   # create dataframe that contains the column `id` that is list of all EEZ codes for one region
-  eez_code_df <- get_region_id(region_name = i, region_source = 'eez', key = key)
+  eez_code_df <- get_region_id(region_name = i, region_source = 'eez', key = key) %>%
+    filter(!is.na(id)) # there is one NA, bouvet island, need to figure this one out separately
+  
+  }
   
   # convert that column into a numeric list of EEZ codes to feed into the next loop:
   eez_codes <- eez_code_df$id
@@ -114,14 +125,20 @@ for(i in rgn_list) {
   print(paste0("Processing apparent fishing hours for ", i, " EEZ code ", eez_codes))
   
   for(j in eez_codes) { 
-   # j = 8323
-    sub_region_label = eez_code_df %>% filter(id == j) %>%
+   # j = 5690
+
+    sub_region_label = eez_code_df %>% 
+      filter(id == j) %>%
       pull(label)
+
     
     for(y in years){
      # y = 2020
       
-    ## might have to change this to yearly... i think GFW has changed the maximum days allowed to process at one time to 366
+    options(timeout=100000)
+    httr::timeout(100000)
+    getOption('timeout') # don't think these timeouts are actually working
+  
     fishing_hours <- gfwr::get_raster(spatial_resolution = 'high', # high = 0.01 degree resolution which we think is close to 30 m resolution
                                       temporal_resolution = 'yearly',
                                       group_by = 'flagAndGearType', # maybe change to just geartype
@@ -129,6 +146,7 @@ for(i in rgn_list) {
                                       region = j, 
                                       region_source = 'eez',
                                       key = key) %>%
+     # httr2::req_timeout(10000) %>%
       # rename columns for clarity:
       rename(year = "Time Range",
              apparent_fishing_hours = "Apparent Fishing Hours",
@@ -174,122 +192,137 @@ for(i in rgn_list) {
 ### Loop through apparent fishing effort for China separately due to the large quantity of data over all years 
 
 ```{r}
-# Running CHN's first listed EEZ for all years, 2012-2020, breaks the API, so we need to pull data in 3 time chunks
+# Running CHN's first listed EEZ for all years, 2012-2020, breaks the API, so we need to pull data in 2 time chunks (Jan 1 to June 30; July 1 to Dec 31)
 
-chn_code_eez <- get_region_id(region_name = "CHN", region_source = 'eez', key = key)
+for(i in c("CHN")){
 
-# 2012-2015 for first code
-chn_eez1_2012_2015 <- gfwr::get_raster(spatial_resolution = 'high',
-                             temporal_resolution = 'yearly',
-                             group_by = 'flagAndGearType',
-                             date_range = '2012-01-01,2015-12-31',
-                             region = chn_code_eez$id[1],
-                             region_source = 'eez',
-                             key = key) %>% 
-  # rename columns for clarity:
+  # i = "CHN"
+  
+chn_code_eez <- get_region_id(region_name = i, region_source = 'eez', key = key) %>%
+  filter(id == 8486)
+
+chn_eez_codes <- chn_code_eez %>% 
+  pull(id)
+
+for(j in chn_eez_codes) { 
+
+#  j = 8486
+  
+sub_region_label = chn_code_eez %>% 
+      filter(id == j) %>%
+      pull(label)
+
+    
+    for(y in c(2018:2020)){
+     # y = 2020
+      
+
+  
+    fishing_hours_jan_apr <- gfwr::get_raster(spatial_resolution = 'high', # high = 0.01 degree resolution which we think is close to 30 m resolution
+                                      temporal_resolution = 'yearly',
+                                      group_by = 'flagAndGearType', # maybe change to just geartype
+                                      date_range = glue('{y}-01-01,{y}-04-30'), 
+                                      region = j, 
+                                      region_source = 'eez',
+                                      key = key) %>%
+     # httr2::req_timeout(10000) %>%
+      # rename columns for clarity:
       rename(year = "Time Range",
-             apparent_fishing_hours = "Apparent Fishing hours",
+             apparent_fishing_hours = "Apparent Fishing Hours",
              y = Lat,
              x = Lon,
-             geartype = Geartype) %>%
+             geartype = Geartype, 
+             year = "Time Range",
+             number_of_vessels = "Vessel IDs") %>%
       # keep track of the administrative country for each EEZ, even after we combine all data into one dataframe: 
-      mutate(eez_admin_rgn = "CHN") %>% 
-      select(year, apparent_fishing_hours, y, x, eez_admin_rgn, geartype) # note: we do not care about which region did the actual fishing, just about which country controls that EEZ, which is why we do not maintain the fishing region in the data moving forward
+      mutate(eez_admin_rgn = i,
+             sub_rgn_label = sub_region_label,
+             gfw_id = j) %>% 
+      select(year, apparent_fishing_hours, y, x, eez_admin_rgn, geartype, number_of_vessels, sub_rgn_label, gfw_id) # note: we do not care about which region did the actual fishing, just about which country controls that EEZ, which is why we do not maintain the fishing region in the data moving forward
     
-    # specify column types before saving the csv so we can correctly concatenate the rows later
-    chn_eez1_2012_2015$year <- as.numeric(chn_eez1_2012_2015$year)
-    chn_eez1_2012_2015$apparent_fishing_hours <- as.numeric(chn_eez1_2012_2015$apparent_fishing_hours)
-    chn_eez1_2012_2015$y <- as.numeric(chn_eez1_2012_2015$y)
-    chn_eez1_2012_2015$x <- as.numeric(chn_eez1_2012_2015$x)
-    chn_eez1_2012_2015$eez_admin_rgn <- as.character(chn_eez1_2012_2015$eez_admin_rgn)
-    chn_eez1_2012_2015$geartype <- as.character(chn_eez1_2012_2015$geartype)
-
-#  2016-2017 for first code
-chn_eez1_2016_2017 <- gfwr::get_raster(spatial_resolution = 'high',
-                             temporal_resolution = 'yearly',
-                             group_by = 'flagAndGearType',
-                             date_range = '2016-01-01,2017-12-31',
-                             region = chn_code_eez$id[1],
-                             region_source = 'eez',
-                             key = key) %>% 
-  # rename columns for clarity:
+        fishing_hours_may_aug <- gfwr::get_raster(spatial_resolution = 'high', # high = 0.01 degree resolution which we think is close to 30 m resolution
+                                      temporal_resolution = 'yearly',
+                                      group_by = 'flagAndGearType', # maybe change to just geartype
+                                      date_range = glue('{y}-05-01,{y}-08-31'), 
+                                      region = j, 
+                                      region_source = 'eez',
+                                      key = key) %>%
+     # httr2::req_timeout(10000) %>%
+      # rename columns for clarity:
       rename(year = "Time Range",
-             apparent_fishing_hours = "Apparent Fishing hours",
+             apparent_fishing_hours = "Apparent Fishing Hours",
              y = Lat,
              x = Lon,
-             geartype = Geartype) %>%
+             geartype = Geartype, 
+             year = "Time Range",
+             number_of_vessels = "Vessel IDs") %>%
       # keep track of the administrative country for each EEZ, even after we combine all data into one dataframe: 
-      mutate(eez_admin_rgn = "CHN") %>% 
-      select(year, apparent_fishing_hours, y, x, eez_admin_rgn, geartype) # note: we do not care about which region did the actual fishing, just about which country controls that EEZ, which is why we do not maintain the fishing region in the data moving forward
-    
-    # specify column types before saving the csv so we can correctly concatenate the rows later
-    chn_eez1_2016_2017$year <- as.numeric(chn_eez1_2016_2017$year)
-    chn_eez1_2016_2017$apparent_fishing_hours <- as.numeric(chn_eez1_2016_2017$apparent_fishing_hours)
-    chn_eez1_2016_2017$y <- as.numeric(chn_eez1_2016_2017$y)
-    chn_eez1_2016_2017$x <- as.numeric(chn_eez1_2016_2017$x)
-    chn_eez1_2016_2017$eez_admin_rgn <- as.character(chn_eez1_2016_2017$eez_admin_rgn)
-    chn_eez1_2016_2017$geartype <- as.character(chn_eez1_2016_2017$geartype)
-
-# 2018-2020 for first code
-chn_eez1_2018_2020 <- gfwr::get_raster(spatial_resolution = 'high',
-                             temporal_resolution = 'yearly',
-                             group_by = 'flagAndGearType',
-                             date_range = '2018-01-01,2020-12-31',
-                             region = chn_code_eez$id[1],
-                             region_source = 'eez',
-                             key = key) %>% 
-  # rename columns for clarity:
+      mutate(eez_admin_rgn = i,
+             sub_rgn_label = sub_region_label,
+             gfw_id = j) %>% 
+      select(year, apparent_fishing_hours, y, x, eez_admin_rgn, geartype, number_of_vessels, sub_rgn_label, gfw_id)
+        
+        
+                fishing_hours_sep_dec <- gfwr::get_raster(spatial_resolution = 'high', # high = 0.01 degree resolution which we think is close to 30 m resolution
+                                      temporal_resolution = 'yearly',
+                                      group_by = 'flagAndGearType', # maybe change to just geartype
+                                      date_range = glue('{y}-09-01,{y}-12-31'), 
+                                      region = j, 
+                                      region_source = 'eez',
+                                      key = key) %>%
+     # httr2::req_timeout(10000) %>%
+      # rename columns for clarity:
       rename(year = "Time Range",
-             apparent_fishing_hours = "Apparent Fishing hours",
+             apparent_fishing_hours = "Apparent Fishing Hours",
              y = Lat,
              x = Lon,
-             geartype = Geartype) %>%
+             geartype = Geartype, 
+             year = "Time Range",
+             number_of_vessels = "Vessel IDs") %>%
       # keep track of the administrative country for each EEZ, even after we combine all data into one dataframe: 
-      mutate(eez_admin_rgn = "CHN") %>% 
-      select(year, apparent_fishing_hours, y, x, eez_admin_rgn, geartype) # note: we do not care about which region did the actual fishing, just about which country controls that EEZ, which is why we do not maintain the fishing region in the data moving forward
+      mutate(eez_admin_rgn = i,
+             sub_rgn_label = sub_region_label,
+             gfw_id = j) %>% 
+      select(year, apparent_fishing_hours, y, x, eez_admin_rgn, geartype, number_of_vessels, sub_rgn_label, gfw_id)
+        
+            if(nrow(fishing_hours_jan_apr) + nrow(fishing_hours_may_aug) + nrow(fishing_hours_sep_dec) == 0){
+          print(paste0("Skipping, all empty df"))
+
+      next()
+    }
+        
+        
+        fishing_hours <- rbind(fishing_hours_jan_apr, fishing_hours_may_aug, fishing_hours_sep_dec) %>%
+          group_by(year, y, x, eez_admin_rgn, geartype, sub_rgn_label, gfw_id) %>%
+          summarise(apparent_fishing_hours = sum(apparent_fishing_hours, na.rm = TRUE),
+                    number_of_vessels = sum(number_of_vessels, na.rm = TRUE)) %>%
+          ungroup()
+        
     
     # specify column types before saving the csv so we can correctly concatenate the rows later
-    chn_eez1_2018_2020$year <- as.numeric(chn_eez1_2018_2020$year)
-    chn_eez1_2018_2020$apparent_fishing_hours <- as.numeric(chn_eez1_2018_2020$apparent_fishing_hours)
-    chn_eez1_2018_2020$y <- as.numeric(chn_eez1_2018_2020$y)
-    chn_eez1_2018_2020$x <- as.numeric(chn_eez1_2018_2020$x)
-    chn_eez1_2018_2020$eez_admin_rgn <- as.character(chn_eez1_2018_2020$eez_admin_rgn)
-    chn_eez1_2018_2020$geartype <- as.character(chn_eez1_2018_2020$geartype)
+    fishing_hours$year <- as.numeric(fishing_hours$year)
+    fishing_hours$apparent_fishing_hours <- as.numeric(fishing_hours$apparent_fishing_hours)
+    fishing_hours$y <- as.numeric(fishing_hours$y)
+    fishing_hours$x <- as.numeric(fishing_hours$x)
+    fishing_hours$x <- as.numeric(fishing_hours$x)
+    fishing_hours$gfw_id <- as.numeric(fishing_hours$gfw_id)
     
-# combine data for all 3 time periods into 1 dataframe for this one EEZ code for CHN
-chn_eez1_all_years <- bind_rows(chn_eez1_2012_2015, chn_eez1_2016_2017, chn_eez1_2018_2020)
-
-write_csv(chn_eez1_all_years, file = paste0(dir_M, "/git-annex/globalprep/_raw_data/global_fishing_watch/d2022/annual_mapping_api/CHN_", chn_code_eez$id[1], "_effort.csv"))
-
-
-
-# the second eez code for China is fine to process over all years
-chn_eez2 <- gfwr::get_raster(spatial_resolution = 'high',
-                             temporal_resolution = 'yearly',
-                             group_by = 'flagAndGearType',
-                             date_range = '2012-01-01,2020-12-31',
-                             region = chn_code_eez$id[2],
-                             region_source = 'eez',
-                             key = key) %>% 
-# rename columns for clarity:
-      rename(year = "Time Range",
-             apparent_fishing_hours = "Apparent Fishing hours",
-             y = Lat,
-             x = Lon,
-             geartype = Geartype) %>%
-      # keep track of the administrative country for each EEZ, even after we combine all data into one dataframe: 
-      mutate(eez_admin_rgn = "CHN") %>% 
-      select(year, apparent_fishing_hours, y, x, eez_admin_rgn, geartype) # note: we do not care about which region did the actual fishing, just about which country controls that EEZ, which is why we do not maintain the fishing region in the data moving forward
+    fishing_hours$eez_admin_rgn <- as.character(fishing_hours$eez_admin_rgn)
+    fishing_hours$geartype <- as.character(fishing_hours$geartype)
+    fishing_hours$sub_rgn_label <- as.character(fishing_hours$sub_rgn_label)
     
-    # specify column types before saving the csv so we can correctly concatenate the rows later
-    chn_eez2$year <- as.numeric(chn_eez2$year)
-    chn_eez2$apparent_fishing_hours <- as.numeric(chn_eez2$apparent_fishing_hours)
-    chn_eez2$y <- as.numeric(chn_eez2$y)
-    chn_eez2$x <- as.numeric(chn_eez2$x)
-    chn_eez2$eez_admin_rgn <- as.character(chn_eez2$eez_admin_rgn)
-    chn_eez2$geartype <- as.character(chn_eez2$geartype)
+    print(paste0("Extracted all apparent fishing hours for ", i, " EEZ code ",j, " ", sub_region_label, " year ", y))
+    
+    if(nrow(fishing_hours) == 0){
+          print(paste0("Skipping, empty df"))
 
-write_csv(chn_eez2, path = paste0(dir_M, "/git-annex/globalprep/_raw_data/global_fishing_watch/d2022/annual_mapping_api/CHN_", chn_code_eez$id[2], "_effort.csv"))
-
+      next()
+    }
+    
+    write_csv(fishing_hours, glue(rdsi_raw_dir, "/global_fishing_watch/apparent_fishing_hours/{i}_{j}_{y}_annual_effort_grid_highres.csv"))
+    
+    }
+  }
+}
 ```
 
