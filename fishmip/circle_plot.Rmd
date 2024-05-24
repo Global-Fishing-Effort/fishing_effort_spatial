@@ -1,5 +1,5 @@
 ---
-title: "Untitled"
+title: "Global plots for FISHMIP"
 output: html_document
 date: "2024-05-20"
 ---
@@ -10,12 +10,11 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(xlsx)
 library(here)
-# library(rnaturalearth)
-# library(maps)
-# library(countrycode)
 library(sf)
 library(glue)
 library(cowplot)
+library(ggpattern)
+library(ggimage)
 
 options(scipen = 999) ## To disable scientific notation
 
@@ -26,30 +25,59 @@ Read in data
 cmip_data <- read.xlsx(here("fishmip/data/table_stats_with_continent.xlsm"), sheetIndex = 1) %>%
   dplyr::select(1:15) %>%
     mutate(pos_neg = ifelse(mean > 0, "positive", "negative")) %>% # ~200 regions, makes sense
-  mutate(fa_ffcl_shrt = case_when(
+  mutate(fa_ffcl_shrt = case_when(  # fix region names
    fa_ffcl_shrt == "C√¥te d'Ivoire" ~ "Côte d'Ivoire", 
    fa_ffcl_shrt == "T√ºrkiye" ~ "Türkiye",
    fa_ffcl_shrt == "R√©union" ~ "Réunion",
   fa_ffcl_shrt == "Cura√ßao" ~ "Curaçao",
   TRUE ~ fa_ffcl_shrt
-  )) # fix region names
+  )) %>% 
+  mutate(uncertain = ifelse(
+    sd > abs(mean), "yes", "no"
+  ))
+
 
 ```
 
 
-Use code from food footprint, on one decade/scenario grouping for ease of use
+Make circle bar chart, similar to that of the circle plot presented here: https://www.nature.com/articles/s41893-022-00965-x/figures/7 
+ - Make one with categorical fill for <10%, 10-20%, 20-30%, and >30% change
+ - Make the same one, but with a pattern for uncertainty (if sd > mean) - NOTE: the pattern takes awhile to run ~10 mins per scenario.
+
 
 ```{r}
 
 decades <- c("2091-2100", "2041-2050")
 scenarios <- c("ssp585", "ssp126")
+spatial_scales <- c("countries_high_seas", "countries")
+
+for(spatial_type in spatial_scales){
+
+  #spatial_type = "countries"
+  
+  if(spatial_type == "countries_high_seas"){
+  
+cmip_data_plot <- cmip_data %>% 
+  filter(spatial_scale %in% c("countries", "FAO_area"))
+
+  }else{
+  cmip_data_plot <- cmip_data %>% 
+  filter(spatial_scale %in% c("countries"))
+    
+}
+
+# scale_max <- max(abs(cmip_data_plot$mean), na.rm = TRUE)
+# scale_mid <- max(abs(cmip_data_plot$mean), na.rm = TRUE)/2
+# 
+# scale_label_max <- glue("{round(scale_max)}%")
+# scale_label_mid <- glue("{ceiling(scale_mid)}%")
 
 
 for(decade_type in decades){
   for(scen in scenarios){
 
-  # scen = "ssp585"
-  # decade_type = "2091-2100"
+  # scen = "ssp126"
+  # decade_type = "2041-2050"
     
     scen_plot <- data.frame(scenario = scen) %>%
       mutate(scen_clean = case_when(
@@ -59,8 +87,19 @@ for(decade_type in decades){
       pull(scen_clean) %>% 
       unique() # pull a cleaned up version to label the plot
     
-plot_df <- cmip_data %>%
-  filter(spatial_scale %in% c("countries", "FAO_area")) %>%
+scen_decade_global_vals <- cmip_data %>%
+  filter(spatial_scale %in% c("global")) %>%
+  filter(decade == decade_type,
+         scenario == scen)
+
+
+scen_decade_global_sd <- scen_decade_global_vals %>%
+  pull(sd) %>% unique() %>% round
+scen_decade_global_mean <- scen_decade_global_vals %>%
+  pull(mean) %>% unique() %>% round()
+    
+plot_df <- cmip_data_plot %>%
+ # filter(spatial_scale %in% c("countries", "FAO_area")) %>%
   filter(decade == decade_type,
          scenario == scen) %>%
   data.frame() %>%
@@ -117,7 +156,8 @@ rank_rgn <- get_pos_neg_ranks %>%
  to_add$fa_ffcl_shrt <- as.character(1:empty_bar)
  rank_rgn_adj  <- rbind(to_add, rank_rgn)
 
-rank_rgn_adj$end_point <- max(abs(rank_rgn_adj$index), na.rm = TRUE) # point where we will want to place the country labels
+# rank_rgn_adj$end_point <- scale_max # point where we will want to place the country labels
+rank_rgn_adj$end_point <- 100 # point where we will want to place the country labels.. for this we'll just use 100.
 
  # some code to orient the country labels
 sequence_length = length(unique(rank_rgn_adj$fa_ffcl_shrt))
@@ -145,29 +185,29 @@ rank_rgn_adj <- rank_rgn_adj %>%
     index >= 10 & index < 20 ~ "Increase 10 to 20%", 
     index >= 20 & index <= 30 ~ "Increase 20 to 30%",
     index > 30 ~ "Increase >30%"
-  )) 
+  )) %>%
+  mutate(uncertain = ifelse(sd > new_index, "yes", "no")) %>%
+  mutate(uncertain = ifelse(is.na(uncertain), "no", uncertain))
 
 
 # get dataframe for continent text locations
+
+if(spatial_type == "countries_high_seas"){
 rgn_shift <- data.frame(
                          contnnt = rank_pos_neg$contnnt,
                          name_x = c(20, 75, 125, 165, 190, 215), # 140
                          name_y = c(70, 70, 70, 70, 70, 70))
 rgn_shift <- rgn_shift %>%
    mutate(contnnt = as.character(contnnt))
-
-
-# Define colors for each fill category
-fill_colors <- c(
-  "Decrease >30%" = "#AC390E",
-  "Increase <10%" = "#87ADDA",
-    "Decrease 20 to 30%" = "#BA4D27",
-  "Increase 10 to 20%" = "#437BC2",
-      "Decrease 10 to 20%" = "#C4603E",
-  "Increase 20 to 30%" = "#286AB9",
-    "Decrease <10%" = "#CB8567",
-  "Increase >30%" = "#0A5BB3"
-)
+}else{
+  rgn_shift <- data.frame(
+                         contnnt = rank_pos_neg$contnnt,
+                         name_x = c(20, 75, 125, 165, 200), # 140
+                         name_y = c(70, 70, 70, 70, 70))
+rgn_shift <- rgn_shift %>%
+   mutate(contnnt = as.character(contnnt))
+  
+}
 
 circle_theme <- theme(axis.line=element_blank(),
                       axis.text.y=element_blank(),
@@ -185,28 +225,148 @@ circle_theme <- theme(axis.line=element_blank(),
                       axis.text.x = element_blank(),
                       legend.key.width = unit(26, "mm"),
                       legend.key.height = unit(0.3, "cm"),
-                      plot.title = element_text(hjust = 0),
-                    plot.margin = margin(10, 40, 10, 10, unit = "pt"), # don't think this is doing anything to help with margins
+                      plot.title = element_text(hjust = 1),
+                     plot.caption = element_text(hjust = 1, size = 16),
+                    plot.margin = margin(30, 40, 10, 30, unit = "pt"), # don't think this is doing anything to help with margins
                       legend.spacing.y = unit(0, "pt"))
 
-# rank_rgn_adj <- rank_rgn_adj %>%
-#   mutate(sd = case_when(
-#     fa_ffcl_shrt == "Georgia" ~ 0, 
-#     fa_ffcl_shrt == "Türkiye" ~ 0,
-#     TRUE ~ sd
-#   ))
+
+# scale_label_max <- glue("{round(unique(rank_rgn_adj$end_point))}%")
+# scale_label_mid <- glue("{ceiling(unique(rank_rgn_adj$end_point)/2)}%")
+
+rank_rgn_adj$uncertain <- factor(rank_rgn_adj$uncertain, c("yes", "no"))
+
+# Define colors for each fill category
+fill_colors <- c(
+  "Decrease >30%" = "#AC390E",
+  "Increase <10%" = "honeydew3",
+    "Decrease 20 to 30%" = "#C4603E",
+  "Increase 10 to 20%" = "lightblue2",
+      "Decrease 10 to 20%" = "darksalmon",
+  "Increase 20 to 30%" = "#4297D3",
+    "Decrease <10%" = "wheat",
+  "Increase >30%" = "#1B194B"
+)
 
 
- 
-scale_label_max <- glue("{round(unique(rank_rgn_adj$end_point))}%")
-scale_label_mid <- glue("{ceiling(unique(rank_rgn_adj$end_point)/2)}%")
+all_categories <- c("Decrease >30%", "Increase <10%",  "Decrease 20 to 30%", "Increase 10 to 20%", "Decrease 10 to 20%", "Increase 20 to 30%", "Decrease <10%",  "Increase >30%")
+rank_rgn_adj$fill_category <- factor(rank_rgn_adj$fill_category, levels = all_categories)
+
+all_categories_new <- c("Decrease >30%", "Increase <10%",  "Decrease 20-30%", "Increase 10-20%", "Decrease 10-20%", "Increase 20-30%", "Decrease <10%",  "Increase >30%")
+  
+## categorical fill - pattern for uncertainty
+  
+  g <- ggplot(data = rank_rgn_adj, aes(x = fa_ffcl_shrt, y = new_index, fill = fill_category,
+                        pattern = uncertain
+                        )) +
+   # geom_bar(stat = "identity", show.legend = TRUE) +
+   geom_bar_pattern(stat = "identity",
+    pattern_density = .5,
+   pattern_spacing = 0.004,
+   pattern_frequency = 5,
+    pattern_fill = "white",
+    pattern_size = 0.05,
+    pattern_color = "white",
+   show.legend = TRUE
+    ) +
+  geom_errorbar(
+     aes(x = 1,
+    ymin = -end_point/4,
+    ymax = end_point,
+    alpha = 0),
+    color = "white"
+  ) +
+    geom_text(
+      data = rank_rgn_adj,
+       aes(x = fa_ffcl_shrt,
+           label = rgn_name_short,
+           angle = angle,
+           y = end_point,
+           hjust = hjust,
+               ),
+       inherit.aes = FALSE,
+       fontface = "bold",
+       alpha = 0.9,
+       size = 4) +
+   geom_segment(
+        x = 0,
+         y = 0,
+         xend = dim(rank_rgn_adj)[1]+1,
+         yend = 0,
+        alpha = 1,
+        color = "white",
+        size = 0.1) +
+           geom_segment(
+        x = 0,
+         y = 10,
+         xend = dim(rank_rgn_adj)[1]+1,
+         yend = 10,
+        alpha = 1,
+        color = "grey30",
+        size = 0.1,
+        linetype = "dashed") +
+               geom_segment(
+        x = 0,
+         y = 20,
+         xend = dim(rank_rgn_adj)[1]+1,
+         yend = 20,
+        alpha = 1,
+        color = "grey30",
+        size = 0.1,
+        linetype = "dashed") +
+                   geom_segment(
+        x = 0,
+         y = 30, # incase the scenario doesnt have any values > 30
+         xend = dim(rank_rgn_adj)[1]+1,
+         yend = 30,
+        alpha = 1,
+        color = "grey30",
+        size = 0.1,
+        linetype = "dashed") +
+           # georegion names
+    geom_text(
+      data = rgn_shift,
+      aes(y = unique(rank_rgn_adj$end_point)/1.5,
+          x = name_x,
+          label = contnnt),
+      inherit.aes=FALSE,
+      size=7) +
+    annotate("text",
+        x     = c(3, 3, 3),
+        y     = c(0, unique(rank_rgn_adj$end_point)/2, unique(rank_rgn_adj$end_point)),
+        label = c("0", "±50%", "±100%"),
+        color = "darkgray", angle = -4, size = 5) +
+       #  geom_image(x = 0, y = -unique(rank_rgn_adj$end_point)/4, image = here("fishmip/images/FishMIP_logo.png"), size = 0.15) + # for fishmip logo
+      geom_text(x = 0, y = -unique(rank_rgn_adj$end_point)/4, label = glue("{scen_decade_global_mean}% ±{scen_decade_global_sd}%"), size = 7) + ## place this in the middle of the plot
+      coord_polar(clip = "off") +
+      scale_pattern_manual(values = c("circle", "none")) +
+      scale_fill_manual(values = fill_colors, breaks = all_categories, labels = all_categories_new, drop = F,
+                        guide = guide_legend(override.aes = list(pattern = "none") # might be redundant (see below)
+                                             )) +  # Assign fill colors manually
+    circle_theme +
+    labs(caption = glue("{scen_plot}, {decade_type}"),
+         fill = "Average biomass change") +
+    guides(alpha = "none",
+           pattern = "none",
+           fill = guide_legend(
+               title.position = "bottom",
+               title.hjust = 0.5,
+               title.vjust = 1,
+               nrow = 2,
+               label.position = "bottom",
+               label.hjust = 0.5,
+               label.vjust = 1,
+               override.aes = list(pattern = "none")
+    ))
+
+
+
+  ggsave(glue(here("fishmip/figs/bar_{scen}_{decade_type}_{spatial_type}_pattern.png")), height=20, width=20, units=c("in"), bg = "white")
+
 
   
-## try bar chart; consider splitting by positive negative (like they do with the continents in food footprint plot)
-  
-  g <- ggplot(data = rank_rgn_adj, aes(x = fa_ffcl_shrt, y = new_index,
-        fill = fill_category)) + 
-  geom_bar(stat = "identity") +
+    g <- ggplot(data = rank_rgn_adj, aes(x = fa_ffcl_shrt, y = new_index, fill = fill_category)) + 
+   geom_bar(stat = "identity", show.legend = TRUE) + 
   geom_errorbar(
      aes(x = 1, 
     ymin = -end_point/4,
@@ -234,6 +394,33 @@ scale_label_mid <- glue("{ceiling(unique(rank_rgn_adj$end_point)/2)}%")
         alpha = 1,
         color = "white",
         size = 0.1) +
+           geom_segment(
+        x = 0,
+         y = 10,
+         xend = dim(rank_rgn_adj)[1]+1,
+         yend = 10,
+        alpha = 1,
+        color = "grey30",
+        size = 0.1,
+        linetype = "dashed") +
+               geom_segment(
+        x = 0,
+         y = 20,
+         xend = dim(rank_rgn_adj)[1]+1,
+         yend = 20,
+        alpha = 1,
+        color = "grey30",
+        size = 0.1,
+        linetype = "dashed") +
+                   geom_segment(
+        x = 0,
+         y = 30, # incase the scenario doesnt have any values > 30
+         xend = dim(rank_rgn_adj)[1]+1,
+         yend = 30,
+        alpha = 1,
+        color = "grey30",
+        size = 0.1,
+        linetype = "dashed") +
            # georegion names
     geom_text(
       data = rgn_shift,
@@ -245,263 +432,103 @@ scale_label_mid <- glue("{ceiling(unique(rank_rgn_adj$end_point)/2)}%")
     annotate("text",
         x     = c(3, 3, 3),
         y     = c(0, unique(rank_rgn_adj$end_point)/2, unique(rank_rgn_adj$end_point)),
-        label = c("0", glue("±{scale_label_mid}"), glue("±{scale_label_max}")),
+        label = c("0", glue("±50"), glue("±100%")),
         color = "darkgray", angle = -4, size = 5) +
+          geom_text(x = 0, y = -unique(rank_rgn_adj$end_point)/4, label = glue("Global Average \n{scen_decade_global_mean}% ±{scen_decade_global_sd}%"), size = 7) + ## place this in the middle of the plot
   coord_polar(clip = "off") +
-  scale_fill_manual(values = fill_colors, breaks = names(fill_colors)[!is.na(fill_colors)]) +  # Assign colors manually
-  #  scale_fill_gradient2() +
+        scale_pattern_manual(values = c("circle", "none")) +
+      scale_fill_manual(values = fill_colors, breaks = all_categories, labels = all_categories_new, drop = F) +  # Assign fill colors manually
   circle_theme +
-    labs(title = glue("Biomass change: {scen_plot}, {decade_type}"),
+    labs(caption = glue("{scen_plot}, {decade_type}"),
          fill = "Average biomass change") +
     guides(alpha = "none",
+
            fill = guide_legend(
-      title.position = "bottom",  
-      title.hjust = 0.5, 
-      title.vjust = 1,
-      nrow = 2, 
-      label.position = "bottom",  
-      label.hjust = 0.5,
-      label.vjust = 1
-    )) 
+               title.position = "bottom",  
+               title.hjust = 0.5, 
+               title.vjust = 1,
+               nrow = 2, 
+               label.position = "bottom",  
+               label.hjust = 0.5,
+               label.vjust = 1
+    ))
   
-  # +
-  #   annotate("text", 
-  #            label = "Decrease",
-  #            x = 165, 
-  #            y = 110)
-
-
-  ggsave(glue(here("fishmip/figs/bar_{scen}_{decade_type}.png")), height=20, width=20, units=c("in"), bg = "white")
   
-  ## try adding error bars... these get messy because of the "outliers", so might need to cap the error bars somehow. 
-  g +     geom_errorbar(aes(x = fa_ffcl_shrt, ymin = new_index - sd, ymax = new_index + sd), color = "orange", linewidth = 0.2, width = 0.4)
-    ggsave(glue(here("fishmip/figs/bar_sd_{scen}_{decade_type}.png")), height=18, width=18, units=c("in"), bg = "white")
 
-      
+  ggsave(glue(here("fishmip/figs/bar_{scen}_{decade_type}_{spatial_type}.png")), height=20, width=20, units=c("in"), bg = "white")
+
+    }
   }
+
 }
 
+## save legend
+  
+  
+g_legend <- cowplot::get_plot_component(g, "guide-box-bottom", return_all = TRUE)
+
+ggdraw(g_legend)
+
+ggsave(plot = g_legend, here("fishmip/figs/legend.png"), dpi = 300, height = 8, width =8)
 
 ```
 
-
-Make plot with increasing size circles, akin to this: https://onlinepublichealth.gwu.edu/wp-content/uploads/sites/47/2021/03/Climate_Change_carbon_v_vulnerability.jpeg 
+Put the scenarios into a panel... this doesn't work so well. I think I will combine them in some sort of image editor instead. Doing it in R doesn't really retain the resolution of the plot well. 
 
 ```{r}
-  scen = "ssp585"
-  decade_type = "2091-2100"
-    
-    scen_plot <- data.frame(scenario = scen) %>%
-      mutate(scen_clean = case_when(
-        scenario == "ssp126" ~ "SSP1-2.6",
-        scenario == "ssp585" ~ "SSP5-8.5"
-      )) %>%
-      pull(scen_clean) %>%
-      unique()
-    
-plot_df <- cmip_data %>%
-  filter(spatial_scale == "countries") %>%
-  filter(decade == decade_type,
-         scenario == scen) %>%
-  data.frame() %>%
-  arrange(pos_neg, abs(mean))
+library(png)
+library(grid)
+library(gridExtra)
 
-get_pos_neg_ranks <- plot_df %>%
-  group_by(pos_neg, fa_ffcl_shrt) %>%
-  summarise(index = sum(mean, na.rm = TRUE),
-            sd = sum(sd, na.rm = TRUE)) %>% # these are just distinct numbers, so group by is unneccessary i think?
-    mutate(new_index = abs(index)) %>%
-  arrange(pos_neg, -new_index)
+#Loading images and making grobs
 
-rank_pos_neg <- get_pos_neg_ranks %>%
-  group_by(pos_neg) %>% 
-  summarise(sum_mean = sum(new_index),
-            count = length(new_index)) %>%
-  ungroup()
+plots <- lapply(ll <- list.files(path = here("fishmip/figs/"), pattern = 'countries_high_seas.png', full.names = TRUE),function(x){
+    img <- as.raster(readPNG(x))
+    rasterGrob(img, interpolate = FALSE)
+})
 
-rank_pos_neg$pos_neg <- factor(rank_pos_neg$pos_neg, 
-                                         levels=unique(rank_pos_neg$pos_neg))
-get_pos_neg_ranks$pos_neg <- factor(get_pos_neg_ranks$pos_neg, 
-                                         levels=unique(rank_pos_neg$pos_neg))
+ggsave(here("fishmip/figs/Plots_Combined.png"),width=8.5, height=11, 
+       marrangeGrob(grobs = plots, nrow=2, ncol=2,top=NULL), bg = "white", dpi = 300)
 
-rank_rgn_adj <- get_pos_neg_ranks %>%
-  arrange(pos_neg, -new_index) %>%
-     mutate(rgn_name_short = fa_ffcl_shrt, 
-         rgn_name_short = gsub("Islands|islands", "Isl", rgn_name_short),
-         rgn_name_short = gsub("Island", "Isl", rgn_name_short),
-         rgn_name_short = gsub("Democratic", "Dem", rgn_name_short),
-         rgn_name_short = gsub("Republic", "Rep", rgn_name_short),
-         rgn_name_short = gsub("South", "S", rgn_name_short),
-         rgn_name_short = gsub("American", "Am", rgn_name_short),
-         rgn_name_short = gsub("the United States", "US", rgn_name_short),
-         rgn_name_short = gsub("Territory", "Terr", rgn_name_short),
-         rgn_name_short = gsub("Saint", "St", rgn_name_short),
-         rgn_name_short = gsub(" and ", " & ", rgn_name_short),
-         rgn_name_short = gsub("Republique", "Rep", rgn_name_short),
-         rgn_name_short = gsub("Dem Rep of the", "Dem Rep of", rgn_name_short),
-         rgn_name_short = gsub("Georgia and the", "Georgia and", rgn_name_short),
-         rgn_name_short = gsub("St Vincent and the", "St Vincent and", rgn_name_short),
-         rgn_name_short = gsub("Howland Isl & Baker Isl", "Howland & Baker Isl", rgn_name_short),
-         rgn_name_short = gsub("Northern", "N", rgn_name_short), 
-         rgn_name_short = gsub("Reunion", "Reunion", rgn_name_short))
-
-
-rank_rgn_adj$end_point <- max(abs(rank_rgn_adj$index), na.rm = TRUE) # point where we will want to place the country labels
-
- # some code to orient the country labels
-sequence_length = length(unique(rank_rgn_adj$fa_ffcl_shrt))
-first_sequence = c(1:(sequence_length%/%2)) 
-second_sequence = c((sequence_length%/%2+1):sequence_length) 
-first_angles = c(90 - 180/length(first_sequence) * first_sequence)
-second_angles = c(-90 - 180/length(second_sequence) * second_sequence)
-rank_rgn_adj$angle <- c(first_angles, second_angles)
-rank_rgn_adj$hjust <- c(rep(0, length(first_sequence)), 
-                    rep(1, length(second_sequence)))
-
-
-# color for region labels
-rank_rgn_adj <- rank_rgn_adj %>%
-  mutate(fa_ffcl_shrt = factor(fa_ffcl_shrt, unique(fa_ffcl_shrt))) %>%
-  mutate(pos_neg = factor(pos_neg, unique(pos_neg))) %>%
-  mutate(color = "black") %>%
-  mutate(color = ifelse(is.na(index), "white", color)) %>%
-  mutate(fill_category = case_when(
-    index < -30 ~ "Biomass decrease >30%",
-    index <= -20 & index >= -30 ~ "Biomass decrease 20 to 30%",
-    index <= -10 & index > -20 ~ "Biomass decrease 10 to 20%",
-    index <= 0 & index > -10 ~ "Biomass decrease <10%",
-    index >= 0 & index < 10 ~ "Biomass increase <10%",
-    index >= 10 & index < 20 ~ "Biomass increase 10 to 20%", 
-    index >= 20 & index <= 30 ~ "Biomass increase 20 to 30%",
-    index > 30 ~ "Biomass increase >30%"
-  )) 
-
-
-rank_rgn_adj_labs <- rank_rgn_adj %>%
-  mutate(rgn_name_short = case_when(
-   angle >= -90 ~ glue("-------{rgn_name_short}"),
-   angle < -90 ~ glue("{rgn_name_short}-------")
-    )
-    )
-
-
-circle_theme <- theme(axis.line=element_blank(),
-                      axis.text.y=element_blank(),
-                      axis.ticks=element_blank(),
-                      axis.title.x=element_blank(),
-                      axis.title.y=element_blank(),
-                      panel.background=element_blank(),
-                      panel.border=element_blank(),
-                      panel.grid.major=element_blank(),
-                      panel.grid.minor=element_blank(),
-                      plot.background=element_blank(),
-                      axis.text.x = element_blank(),
-                    #  legend.key.width = unit(26, "mm"),
-                     # legend.key.height = unit(0.3, "cm"),
-                      plot.title = element_text(hjust = 0.5),
-                      legend.spacing.y = unit(0, "pt"))
-fill_colors <- c(
-  "Biomass decrease >30%" = "#AC390E",
-  "Biomass decrease 20 to 30%" = "#BA4D27",
-  "Biomass decrease 10 to 20%" = "#C4603E",
-  "Biomass decrease <10%" = "#CB8567",
-  "Biomass increase <10%" = "#87ADDA",
-  "Biomass increase 10 to 20%" = "#437BC2",
-  "Biomass increase 20 to 30%" = "#286AB9",
-  "Biomass increase >30%" = "#0A5BB3"
-)
-
-g <- ggplot(data = rank_rgn_adj_labs, aes(x = fa_ffcl_shrt, y = 120, size = new_index,
-        fill = fill_category,
-        )) + 
-      scale_fill_manual(values = fill_colors, breaks = names(fill_colors)) +  # Assign colors manually, remove NA category
-      geom_point(shape = 21,
-             alpha = 0.6) +
-     geom_point(
-       shape = 21,
-       color = "black",
-        fill = "black",
-        size = 0.1
-               ) +
-    geom_text(
-      data = rank_rgn_adj_labs,
-       aes(x = fa_ffcl_shrt,
-           label = rgn_name_short,
-           angle = angle,
-           hjust = hjust,
-           y = 120
-              ),
-       alpha = 0.9,
-       size = 2) +
-  coord_polar() +
-  circle_theme +
-    guides(alpha = "none",
-            # fill = guide_legend(direction = "vertical", position = "left"),  # Fill legend settings
-           fill = "none",
-             # size = guide_legend(direction = "vertical", position = "right"), # size legend settings
-           size = "none",
-           color = "none"
-           ) +
-    scale_size_continuous(range = c(1, 10))
-
-
-
-size_legend <- get_legend(
-  ggplot(data = rank_rgn_adj_labs, aes(x = fa_ffcl_shrt, y = 120, size = new_index,
-        )) + 
-      geom_point(shape = 21,
-             alpha = 0.6) +
-  circle_theme +
-    #  theme(legend.position = "bottom") + 
-    guides(alpha = "none",
-            # fill = guide_legend(direction = "vertical", position = "left"),  # Fill legend settings
-           fill = "none",
-             size = guide_legend(direction = "horizontal"), # size legend settings
-           color = "none"
-           ) +
-    scale_size_continuous(range = c(1, 10),
-                          labels = c("0%", "±20%", "±40%", "±60%")) + 
-  labs(size = ""))
-
-## ok now lets add the legends and title 
-
- 
-label <- ggdraw() +
-  draw_figure_label(label = glue("Biomass change: {scen_plot}, {decade_type}"), size = 10, fontface = "bold") 
-  
-bottom_row <- plot_grid(size_legend, label, rel_widths = c(1, 1), nrow = 1)
-
-plot_fin <- plot_grid(g, size_legend, rel_heights = c(1, 0.05), ncol = 1, labels = c(glue("Biomass change: {scen_plot}, {decade_type}"))) 
-
-
-
-
-## ok not so bad this way... might be better tho. Maybe try with ggdraw and cowplot. Can add legends later. Then can also add a map into the middle
-
-
-
-  ggsave(plot = plot_fin, here("fishmip/figs/circle_ssp585_2091-2100.png"), height=8, width=8, units=c("in"), bg = "white", dpi = 300) # this is starting to feel like a waste of time... might just focus on the bar plot and maps. The plot definitely looks better just saving the actual graph without legend, could just add legends in post processing if we wanna use this plot type? 
-  
 ```
 
  
 Make map of mean change 
 
 ```{r}
+decades <- c("2091-2100", "2041-2050")
+scenarios <- c("ssp585", "ssp126")
+eez_shp <- vect(here("fishmip/data/"), crs = "+proj=moll +R=10567000 +lon_0=0 +x_0=0 +y_0=0 +units=m +towgs84=0,0,0,0,0,0,0 +no_defs") 
+eez_key <- read.csv(here("fishmip/data/FAO-Major-Areas_EEZ_continent_keys.csv")) %>%
+  mutate(figure_name = ifelse(!is.na(NAME_EN), NAME_EN, figure_name))
+
+for(decade_type in decades){
+  for(scen in scenarios){
+
+    # scen = "ssp585"
+    # decade_type = "2091-2100"
+    
+    scen_plot <- data.frame(scenario = scen) %>%
+      mutate(scen_clean = case_when(
+        scenario == "ssp126" ~ "SSP1-2.6",
+        scenario == "ssp585" ~ "SSP5-8.5"
+      )) %>%
+      pull(scen_clean) %>% 
+      unique() # pull a cleaned up version to label the plot
+        
  ## make map 
-
-
 plot_df <- cmip_data %>%
-  filter(spatial_scale == "countries")
+  filter(spatial_scale %in% c("countries", "FAO_area"),
+         decade == decade_type,
+         scenario == scen)
 
-eez_shp <- st_read(here("fishmip/data/"))
-
-eez_key <- read.csv(here("fishmip/data/FAO-Major-Areas_EEZ_continent_keys.csv"))
 
 eez_df <- eez_shp %>% 
- # st_drop_geometry() %>%
   left_join(eez_key) %>%
-  right_join(plot_df, by = c("figure_name" = "fa_ffcl_shrt"))
+  right_join(plot_df, by = c("figure_name" = "fa_ffcl_shrt")) 
+
+
+# test <- eez_df %>% st_drop_geometry()
 
 ## Let's ditch many of the unnecessary elements
 plain <- theme(
@@ -512,21 +539,314 @@ plain <- theme(
   panel.grid = element_blank(),
   axis.title = element_blank(),
   panel.background = element_rect(fill = "white"),
-  plot.title = element_text(hjust = 0.5)
+  plot.title = element_text(hjust = 0.5),
+  legend.position = "bottom"
 )
 
-worldmap <- 
-  ggplot(data = eez_df) + 
- # coord_fixed(1.3) +
-  geom_sf(aes(fill = mean)) +
-  scale_fill_distiller(palette = "RdBu", direction = 1) + # or direction=1
-  ggtitle("Mean % change") +
-  plain +
-  facet_grid(decade~scenario)
+        p1 <- ggplot() +
+          tidyterra::geom_spatvector(data = eez_df, 
+                                     aes(fill = mean) ) +
+            scale_fill_distiller(palette = "RdBu", direction = 1) +
+          plain +
+          labs(title = glue("Biomass change: {scen_plot}, {decade_type}"),
+               fill = "")
 
-
-ggsave(here("fishmip/figs/test.png")) ## maybe try using OHI code? 
+ggsave(glue(here("fishmip/figs/map_{scen}_{decade_type}.png")), bg = "white")
   
+}
+}
+```
+
+
+ARCHIVE: 
+Make plot with increasing size circles, akin to this: https://onlinepublichealth.gwu.edu/wp-content/uploads/sites/47/2021/03/Climate_Change_carbon_v_vulnerability.jpeg 
+
+```{r}
+#   scen = "ssp585"
+#   decade_type = "2091-2100"
+#     
+#     scen_plot <- data.frame(scenario = scen) %>%
+#       mutate(scen_clean = case_when(
+#         scenario == "ssp126" ~ "SSP1-2.6",
+#         scenario == "ssp585" ~ "SSP5-8.5"
+#       )) %>%
+#       pull(scen_clean) %>%
+#       unique()
+#     
+# plot_df <- cmip_data %>%
+#   filter(spatial_scale == "countries") %>%
+#   filter(decade == decade_type,
+#          scenario == scen) %>%
+#   data.frame() %>%
+#   arrange(pos_neg, abs(mean))
+# 
+# get_pos_neg_ranks <- plot_df %>%
+#   group_by(pos_neg, fa_ffcl_shrt) %>%
+#   summarise(index = sum(mean, na.rm = TRUE),
+#             sd = sum(sd, na.rm = TRUE)) %>% # these are just distinct numbers, so group by is unneccessary i think?
+#     mutate(new_index = abs(index)) %>%
+#   arrange(pos_neg, -new_index)
+# 
+# rank_pos_neg <- get_pos_neg_ranks %>%
+#   group_by(pos_neg) %>% 
+#   summarise(sum_mean = sum(new_index),
+#             count = length(new_index)) %>%
+#   ungroup()
+# 
+# rank_pos_neg$pos_neg <- factor(rank_pos_neg$pos_neg, 
+#                                          levels=unique(rank_pos_neg$pos_neg))
+# get_pos_neg_ranks$pos_neg <- factor(get_pos_neg_ranks$pos_neg, 
+#                                          levels=unique(rank_pos_neg$pos_neg))
+# 
+# rank_rgn_adj <- get_pos_neg_ranks %>%
+#   arrange(pos_neg, -new_index) %>%
+#      mutate(rgn_name_short = fa_ffcl_shrt, 
+#          rgn_name_short = gsub("Islands|islands", "Isl", rgn_name_short),
+#          rgn_name_short = gsub("Island", "Isl", rgn_name_short),
+#          rgn_name_short = gsub("Democratic", "Dem", rgn_name_short),
+#          rgn_name_short = gsub("Republic", "Rep", rgn_name_short),
+#          rgn_name_short = gsub("South", "S", rgn_name_short),
+#          rgn_name_short = gsub("American", "Am", rgn_name_short),
+#          rgn_name_short = gsub("the United States", "US", rgn_name_short),
+#          rgn_name_short = gsub("Territory", "Terr", rgn_name_short),
+#          rgn_name_short = gsub("Saint", "St", rgn_name_short),
+#          rgn_name_short = gsub(" and ", " & ", rgn_name_short),
+#          rgn_name_short = gsub("Republique", "Rep", rgn_name_short),
+#          rgn_name_short = gsub("Dem Rep of the", "Dem Rep of", rgn_name_short),
+#          rgn_name_short = gsub("Georgia and the", "Georgia and", rgn_name_short),
+#          rgn_name_short = gsub("St Vincent and the", "St Vincent and", rgn_name_short),
+#          rgn_name_short = gsub("Howland Isl & Baker Isl", "Howland & Baker Isl", rgn_name_short),
+#          rgn_name_short = gsub("Northern", "N", rgn_name_short), 
+#          rgn_name_short = gsub("Reunion", "Reunion", rgn_name_short))
+# 
+# 
+# rank_rgn_adj$end_point <- max(abs(rank_rgn_adj$index), na.rm = TRUE) # point where we will want to place the country labels
+# 
+#  # some code to orient the country labels
+# sequence_length = length(unique(rank_rgn_adj$fa_ffcl_shrt))
+# first_sequence = c(1:(sequence_length%/%2)) 
+# second_sequence = c((sequence_length%/%2+1):sequence_length) 
+# first_angles = c(90 - 180/length(first_sequence) * first_sequence)
+# second_angles = c(-90 - 180/length(second_sequence) * second_sequence)
+# rank_rgn_adj$angle <- c(first_angles, second_angles)
+# rank_rgn_adj$hjust <- c(rep(0, length(first_sequence)), 
+#                     rep(1, length(second_sequence)))
+# 
+# 
+# # color for region labels
+# rank_rgn_adj <- rank_rgn_adj %>%
+#   mutate(fa_ffcl_shrt = factor(fa_ffcl_shrt, unique(fa_ffcl_shrt))) %>%
+#   mutate(pos_neg = factor(pos_neg, unique(pos_neg))) %>%
+#   mutate(color = "black") %>%
+#   mutate(color = ifelse(is.na(index), "white", color)) %>%
+#   mutate(fill_category = case_when(
+#     index < -30 ~ "Biomass decrease >30%",
+#     index <= -20 & index >= -30 ~ "Biomass decrease 20 to 30%",
+#     index <= -10 & index > -20 ~ "Biomass decrease 10 to 20%",
+#     index <= 0 & index > -10 ~ "Biomass decrease <10%",
+#     index >= 0 & index < 10 ~ "Biomass increase <10%",
+#     index >= 10 & index < 20 ~ "Biomass increase 10 to 20%", 
+#     index >= 20 & index <= 30 ~ "Biomass increase 20 to 30%",
+#     index > 30 ~ "Biomass increase >30%"
+#   )) 
+# 
+# 
+# rank_rgn_adj_labs <- rank_rgn_adj %>%
+#   mutate(rgn_name_short = case_when(
+#    angle >= -90 ~ glue("-------{rgn_name_short}"),
+#    angle < -90 ~ glue("{rgn_name_short}-------")
+#     )
+#     )
+# 
+# 
+# circle_theme <- theme(axis.line=element_blank(),
+#                       axis.text.y=element_blank(),
+#                       axis.ticks=element_blank(),
+#                       axis.title.x=element_blank(),
+#                       axis.title.y=element_blank(),
+#                       panel.background=element_blank(),
+#                       panel.border=element_blank(),
+#                       panel.grid.major=element_blank(),
+#                       panel.grid.minor=element_blank(),
+#                       plot.background=element_blank(),
+#                       axis.text.x = element_blank(),
+#                     #  legend.key.width = unit(26, "mm"),
+#                      # legend.key.height = unit(0.3, "cm"),
+#                       plot.title = element_text(hjust = 0.5),
+#                       legend.spacing.y = unit(0, "pt"))
+# fill_colors <- c(
+#   "Biomass decrease >30%" = "#AC390E",
+#   "Biomass decrease 20 to 30%" = "#BA4D27",
+#   "Biomass decrease 10 to 20%" = "#C4603E",
+#   "Biomass decrease <10%" = "#CB8567",
+#   "Biomass increase <10%" = "#87ADDA",
+#   "Biomass increase 10 to 20%" = "#437BC2",
+#   "Biomass increase 20 to 30%" = "#286AB9",
+#   "Biomass increase >30%" = "#0A5BB3"
+# )
+# 
+# g <- ggplot(data = rank_rgn_adj_labs, aes(x = fa_ffcl_shrt, y = 120, size = new_index,
+#         fill = fill_category,
+#         )) + 
+#       scale_fill_manual(values = fill_colors, breaks = names(fill_colors)) +  # Assign colors manually, remove NA category
+#       geom_point(shape = 21,
+#              alpha = 0.6) +
+#      geom_point(
+#        shape = 21,
+#        color = "black",
+#         fill = "black",
+#         size = 0.1
+#                ) +
+#     geom_text(
+#       data = rank_rgn_adj_labs,
+#        aes(x = fa_ffcl_shrt,
+#            label = rgn_name_short,
+#            angle = angle,
+#            hjust = hjust,
+#            y = 120
+#               ),
+#        alpha = 0.9,
+#        size = 2) +
+#   coord_polar() +
+#   circle_theme +
+#     guides(alpha = "none",
+#             # fill = guide_legend(direction = "vertical", position = "left"),  # Fill legend settings
+#            fill = "none",
+#              # size = guide_legend(direction = "vertical", position = "right"), # size legend settings
+#            size = "none",
+#            color = "none"
+#            ) +
+#     scale_size_continuous(range = c(1, 10))
+# 
+# 
+# 
+# size_legend <- get_legend(
+#   ggplot(data = rank_rgn_adj_labs, aes(x = fa_ffcl_shrt, y = 120, size = new_index,
+#         )) + 
+#       geom_point(shape = 21,
+#              alpha = 0.6) +
+#   circle_theme +
+#     #  theme(legend.position = "bottom") + 
+#     guides(alpha = "none",
+#             # fill = guide_legend(direction = "vertical", position = "left"),  # Fill legend settings
+#            fill = "none",
+#              size = guide_legend(direction = "horizontal"), # size legend settings
+#            color = "none"
+#            ) +
+#     scale_size_continuous(range = c(1, 10),
+#                           labels = c("0%", "±20%", "±40%", "±60%")) + 
+#   labs(size = ""))
+# 
+# ## ok now lets add the legends and title 
+# 
+#  
+# label <- ggdraw() +
+#   draw_figure_label(label = glue("Biomass change: {scen_plot}, {decade_type}"), size = 10, fontface = "bold") 
+#   
+# bottom_row <- plot_grid(size_legend, label, rel_widths = c(1, 1), nrow = 1)
+# 
+# plot_fin <- plot_grid(g, size_legend, rel_heights = c(1, 0.05), ncol = 1, labels = c(glue("Biomass change: {scen_plot}, {decade_type}"))) 
+# 
+# 
+# 
+# 
+# ## ok not so bad this way... might be better tho. Maybe try with ggdraw and cowplot. Can add legends later. Then can also add a map into the middle
+# 
+# 
+# 
+#   ggsave(plot = plot_fin, here("fishmip/figs/circle_ssp585_2091-2100.png"), height=8, width=8, units=c("in"), bg = "white", dpi = 300) # this is starting to feel like a waste of time... might just focus on the bar plot and maps. The plot definitely looks better just saving the actual graph without legend, could just add legends in post processing if we wanna use this plot type? 
+  
+```
+
+Continuous color palette code 
+
+```{r}
+#     
+#  ## continuous fill 
+# #    # Define breaks and colors
+# breaks <- c(seq(-100, -10, by = 10), -0.002, 0, 0.002, seq(10, 100, by = 10)) # I dont want any of the colors to be truly white, so have to split it at 0.002 (the minumim in any scenario) 
+#     
+# labels <- c("-100", " ", "-80", " ", "-60", " ",  "-40", " ", "-20", " ", " " , "0", " ", " ", "20", " ", "40", " ",  "60", " ", "80", " ", "100" )
+# 
+# colors <- c(colorRampPalette(c("red4", "#D69C88"))(length(seq(-100, 0, by = 10))),
+#             "white",
+#             colorRampPalette(c("lightblue", "blue4"))(length(seq(0, 100, by = 10))))
+# 
+# 
+# # Test the color palette by plotting
+# # image(matrix(1:100, nrow = 10), col = colors_vector, axes = FALSE)
+#     
+#   g <- ggplot(data = rank_rgn_adj, aes(x = fa_ffcl_shrt, y = new_index,
+#         fill = index, pattern = uncertain, pattern_angle = angle)) + 
+#     geom_bar(stat = "identity") +
+#     geom_bar_pattern(stat = "identity", 
+#    # pattern_angle = 45,
+#     pattern_density = .01,
+#    pattern_spacing = .005,
+#     pattern_fill = "black"
+#     ) + 
+#     geom_errorbar(
+#        aes(x = 1, 
+#        ymin = -end_point/4,
+#        ymax = end_point,
+#        alpha = 0),
+#        color = "white"
+#     ) + 
+#     geom_text( 
+#       data = rank_rgn_adj,
+#        aes(x = fa_ffcl_shrt,
+#            label = rgn_name_short,
+#            angle = angle,
+#            y = end_point,
+#            hjust = hjust,
+#                ),
+#        inherit.aes = FALSE,
+#        fontface = "bold",
+#        alpha = 0.9,
+#        size = 4) +
+#    geom_segment(
+#         x = 0,
+#          y = 0,
+#          xend = dim(rank_rgn_adj)[1]+1,
+#          yend = 0,
+#         alpha = 1,
+#         color = "white",
+#         size = 0.1) +
+#            # continent names
+#     geom_text(
+#       data = rgn_shift,
+#       aes(y = unique(rank_rgn_adj$end_point)/1.5,
+#           x = name_x, 
+#           label = contnnt),
+#       inherit.aes=FALSE,
+#       size=7) +
+#     annotate("text",
+#         x     = c(3, 3, 3),
+#         y     = c(0, unique(rank_rgn_adj$end_point)/2, unique(rank_rgn_adj$end_point)),
+#         label = c("0", glue("±{scale_label_mid}"), glue("±{scale_label_max}")),
+#         color = "darkgray", angle = -4, size = 5) +
+#        geom_image(x = 0, y = -unique(rank_rgn_adj$end_point)/4, image = here("fishmip/images/FishMIP_logo.png"), size = 0.15) +
+#   coord_polar(clip = "off") +
+#      scale_fill_gradientn(name = "Average biomass change", breaks = breaks, colors = colors, limits = c(-100, 100), labels = labels) +  
+#   circle_theme +
+#    theme(legend.key.width = unit(36, "mm")) +
+#     labs(title = glue("Biomass change: {scen_plot}, {decade_type}"),
+#          fill = "Average biomass change") +
+#     guides(alpha = "none",
+#            pattern_angle = "none", 
+#     fill = guide_colorbar(title.position = "bottom",  
+#                               title.hjust = 0.5, 
+#                               title.vjust = 1,
+#                               nbin = 10))    +
+#     scale_pattern_manual(
+#     "Uncertainty",
+#     values = c("none", "stripe"),
+#     na.value = "none"
+#   )
+# 
+# 
+# 
+#   ggsave(glue(here("fishmip/figs/bar_{scen}_{decade_type}_continuous.png")), height=20, width=20, units=c("in"), bg = "white")
 ```
 
 
