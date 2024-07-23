@@ -1,0 +1,383 @@
+---
+title: "Download global fishing watch fishing effort"
+output: html_document
+date: "2024-05-14"
+---
+
+# Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# remotes::install_github("GlobalFishingWatch/gfwr") #install GFW api package
+
+library(gfwr)
+library(terra)
+library(tidyverse)
+library(here)
+library(glue)
+
+
+source(here("R/dir.R"))
+
+
+# Save API token information to an object every time you need to extract the token and pass it to `gfwr` functions
+# The use of gfwr requires a GFW API token, which users can request from the GFW API Portal. Save this token to your .Renviron file (using usethis::edit_r_environ()) by adding a variable named GFW_TOKEN to the file (GFW_TOKEN = "PASTE_YOUR_TOKEN_HERE"). Save the .Renviron file and restart the R session to make the edit effective.
+gages_key <- gfw_api_key <- read.delim(file.path(rdsi_raw_dir, "global_fishing_watch/gfw_api_key.txt")) %>%
+  colnames() %>%
+  unique() # now add this to usethis::edit_r_environ() and restart R. Only need to do this once? 
+
+# gage's key is saved to gage's .Renviron file, which is read by this function
+key <- gfw_auth()
+
+```
+
+# Summary
+
+In this script we download spatialized apparent fishing effort from global fishing watch for all years (2012 - 2020): https://globalfishingwatch.org/data-download/datasets/public-fishing-effort
+
+
+# Data Sources 
+
+## Global Fishing Watch Apparent Fishing Effort
+
+**Reference**:
+1. Global Fishing Watch. [2022]. www.globalfishingwatch.org\
+2. [`gfwr` API](https://github.com/GlobalFishingWatch/gfwr)
+
+**Downloaded**: May 14, 2024
+
+**Description**: API to extract apparent fishing effort within global EEZ's, labeled with geartype and date.
+
+**Native data resolution**: 0.01 degree
+
+**Time range**: 2012 - 2020
+
+**Format**:  API
+
+## IMAS Country-level Effort data
+
+**Reference**:
+1. [Rousseau et al. 2024](https://www.nature.com/articles/s41597-023-02824-6)
+2. [IMAS Metadata Catalogue](https://metadata.imas.utas.edu.au/geonetwork/srv/eng/catalog.search#/metadata/1241a51d-c8c2-4432-aa68-3d2bae142794)
+
+**Downloaded**: May 14, 2024
+
+**Description**: Data portal which contains data from Rousseau et al., 2019 and 2024
+
+**Native data resolution**: 0.5 degree
+
+**Time range**: 1950 - 2017
+
+**Format**:  csv
+
+# Methods 
+
+Pull apparent fishing effort data for all EEZs for 2012-2020 from the GFW API and save.
+
+## Get list of iso3c regions
+
+```{r}
+# here we read in the country level effort region lookup table  to get a list of regions contained in the effort data
+imas_effort_rgns <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv")
+
+rgn_list <- imas_effort_rgns %>%
+  distinct(Country) %>% # 167 countries
+  filter(!is.na(Country)) %>%
+  filter(Country != "") %>%
+  pull() %>%
+  unique()
+
+```
+
+## Iterate through all EEZ codes and extract apparent fishing hours
+ - Extract all fishing hours by eez and cell 
+
+```{r}
+
+years <- c(2012:2020)
+
+# NOR; Bouvet Island GFW id is NA, so haven't pulled that info... 
+#   [1] "AUS" "CXR" "NZL" "NFK" "ATG" "BHS" "BRB" "VGB" "CYM" "CUB" "DMA" "DOM" "GRD" "GLP" "HTI" "JAM" "MTQ" "MSR"
+#  [19] "ANT" "ABW" "CUW" "PRI" "KNA" "AIA" "LCA" "VCT" "TTO" "TCA" "VIR" "MAF" "BLM" "BLZ" "CRI" "SLV" "GTM" "HND"
+#  [37] "NIC" "PAN" "CHN" "TWN" "HKG" "MAC" "ALB" "BEL" "BIH" "BGR" "HRV" "CYP" "DNK" "EST" "FRO" "FIN" "FRA" "GEO"
+#  [55] "DEU" "GIB" "GRC" "GRL" "ISL" "IRL" "ITA" "LVA" "LTU" "MLT" "MCO" "NLD" "NOR" "POL" "PRT" "RAM" "RAA" "ROU"
+#  [73] "RUS" "SVN" "ESP" "SJM" "SWE" "UKR" "SUN" "GBR" "IMN" "YUG" "MNE" "BGD" "IOT" "IND" "PAK" "ASM" "BMU" "SLB"
+#  [91] "COK" "FJI" "PYF" "KIR" "GUM" "MDV" "NRU" "NCL" "VUT" "NIU" "MNP" "FSM" "MHL" "PLW" "PNG" "PCN" "SHN" "STP"
+# [109] "SYC" "TKL" "TON" "TUV" "WLF" "WSM" "JPN" "PRK" "KOR" "AFG" "AND" "AZE" "AUT" "ARM" "BTN" "BOL" "BWA" "BDI"
+# [127] "BLR" "CAF" "TCD" "CSK" "CZE" "ETH" "HUN" "KAZ" "KGZ" "LAO" "LSO" "LIE" "LUX" "MWI" "MLI" "MNG" "MDA" "NPL"
+# [145] "NER" "PRY" "RWA" "SMR" "SVK" "SWZ" "CHE" "TJK" "TKM" "UGA" "MKD" "BFA" "UZB" "SRB" "ZMB" "DZA" "LBY" "MRT"
+# [163] "MAR" "TUN" "BHR" "PSE" "IRN" "IRQ" "ISR" "JOR" "KWT" "LBN" "OMN" "QAT" "SAU" "ESH" "SYR" "ARE" "TUR" "EGY"
+# [181] "YEM" "CAN" "MEX" "SPM" "USA" "CPV" "GMB" "GIN" "GNB" "SEN" "SLE" "ARG" "BRA" "CHL" "COL" "ECU" "FLK" "GUF"
+# [199] "GUY" "PER" "SUR" "URY" "VEN" "BRN" "MMR" "KHM" "LKA" "IDN" "MYS" "PHL" "TLS" "SGP" "VNM" "THA" "AGO" "ERI"
+# [217] "CMR" "COM" "MYT" "COG" "COD" "BEN" "GNQ" "DJI" "GAB" "GHA" "CIV" "KEN" "LBR" "MDG" "MUS" "MOZ" "NAM" "NGA"
+# [235] "REU" "SOM" "ZAF" "ZWE" "SDN" "TGO" "TZA"
+
+# iterate through all EEZ codes for all regions to extract apparent fishing hours:
+for(i in rgn_list) {
+  
+   # i = "RUS"
+   # i <- rgn_list[[1]]
+  
+  if(i == "CHN"){
+     eez_code_df <- get_region_id(region_name = i, region_source = 'eez', key = key) %>%
+    filter(id == "49003") # filter for the smaller China region
+    
+  }else{
+  
+  # create dataframe that contains the column `id` that is list of all EEZ codes for one region
+  eez_code_df <- get_region_id(region_name = i, region_source = 'eez', key = key) %>%
+    filter(!is.na(id))  # there is one NA, bouvet island, need to figure this one out separately
+  
+  }
+  
+  # convert that column into a numeric list of EEZ codes to feed into the next loop:
+  eez_codes <- eez_code_df$id
+  
+  print(paste0("Processing apparent fishing hours for ", i, " EEZ code ", eez_codes))
+  
+  for(j in eez_codes) { 
+   # j = 8452
+
+    sub_region_label = eez_code_df %>% 
+      filter(id == j) %>%
+      pull(label)
+
+    
+    for(y in years){
+     # y = 2020
+      
+    options(timeout=100000)
+    httr::timeout(100000)
+    getOption('timeout') # don't think these timeouts are actually working
+  
+    fishing_hours <- gfwr::get_raster(spatial_resolution = 'high', # high = 0.01 degree resolution which we think is close to 30 m resolution
+                                      temporal_resolution = 'yearly',
+                                      group_by = 'flagAndGearType',
+                                      date_range = glue('{y}-01-01,{y}-12-31'), 
+                                      region = j, 
+                                      region_source = 'eez',
+                                      key = key) %>%
+     # httr2::req_timeout(10000) %>%
+      # rename columns for clarity:
+      rename(year = "Time Range",
+             apparent_fishing_hours = "Apparent Fishing Hours",
+             y = Lat,
+             x = Lon,
+             geartype = Geartype, 
+             year = "Time Range",
+             number_of_vessels = "Vessel IDs") %>%
+      # keep track of the administrative country for each EEZ, even after we combine all data into one dataframe: 
+      mutate(eez_admin_rgn = i,
+             sub_rgn_label = sub_region_label,
+             gfw_eez_id = j) %>% 
+      select(year, apparent_fishing_hours, y, x, eez_admin_rgn, geartype, number_of_vessels, sub_rgn_label, gfw_eez_id, flag = Flag) # need to maintain the flag country as well
+    
+    # specify column types before saving the csv so we can correctly concatenate the rows later
+    fishing_hours$year <- as.numeric(fishing_hours$year)
+    fishing_hours$apparent_fishing_hours <- as.numeric(fishing_hours$apparent_fishing_hours)
+    fishing_hours$y <- as.numeric(fishing_hours$y)
+    fishing_hours$x <- as.numeric(fishing_hours$x)
+    fishing_hours$x <- as.numeric(fishing_hours$x)
+    fishing_hours$gfw_eez_id <- as.numeric(fishing_hours$gfw_eez_id)
+    
+    fishing_hours$eez_admin_rgn <- as.character(fishing_hours$eez_admin_rgn)
+    fishing_hours$geartype <- as.character(fishing_hours$geartype)
+    fishing_hours$sub_rgn_label <- as.character(fishing_hours$sub_rgn_label)
+    fishing_hours$flag <- as.character(fishing_hours$flag)
+
+    
+    print(paste0("Extracted all apparent fishing hours for ", i, " EEZ code ",j, " ", sub_region_label, " year ", y))
+    
+    if(nrow(fishing_hours) == 0){
+          print(paste0("Skipping, empty df"))
+
+      next()
+    }
+    
+    write_csv(fishing_hours, glue(rdsi_raw_dir, "/global_fishing_watch/apparent_fishing_hours/{i}_{j}_{y}_annual_effort_grid_highres.csv"))
+    
+   }
+  }
+}
+
+```
+
+### Loop through apparent fishing effort for China separately due to the large quantity of data over all years 
+
+NOTE: June 25: Still need to download all of China
+
+```{r}
+# Running CHN's first listed EEZ for all years, 2012-2020, breaks the API, so we need to pull data in 2 time chunks (Jan 1 to June 30; July 1 to Dec 31)
+
+for(i in c("CHN")){
+
+  # i = "CHN"
+  
+chn_code_eez <- get_region_id(region_name = i, region_source = 'eez', key = key) %>%
+  filter(id == 8486)
+
+chn_eez_codes <- chn_code_eez %>% 
+  pull(id)
+
+for(j in chn_eez_codes) { 
+
+#  j = 8486
+  
+sub_region_label = chn_code_eez %>% 
+      filter(id == j) %>%
+      pull(label)
+
+    
+    for(y in c(2014:2020)){
+     # y = 2015
+      
+    fishing_hours_jan_apr <- gfwr::get_raster(spatial_resolution = 'high', # high = 0.01 degree resolution
+                                      temporal_resolution = 'yearly',
+                                      group_by = 'flagAndGearType', # maybe change to just geartype
+                                      date_range = glue('{y}-01-01,{y}-04-30'), 
+                                      region = j, 
+                                      region_source = 'eez',
+                                      key = key) %>%
+      # rename columns for clarity:
+      rename(year = "Time Range",
+             apparent_fishing_hours = "Apparent Fishing Hours",
+             y = Lat,
+             x = Lon,
+             geartype = Geartype, 
+             year = "Time Range",
+             number_of_vessels = "Vessel IDs") %>%
+      # keep track of the administrative country for each EEZ, even after we combine all data into one dataframe: 
+      mutate(eez_admin_rgn = i,
+             sub_rgn_label = sub_region_label,
+             gfw_eez_id = j) %>% 
+      select(year, apparent_fishing_hours, y, x, eez_admin_rgn, geartype, number_of_vessels, sub_rgn_label, gfw_eez_id, flag = Flag) 
+    
+        fishing_hours_may_aug <- gfwr::get_raster(spatial_resolution = 'high', # high = 0.01 degree resolution which we think is close to 30 m resolution
+                                      temporal_resolution = 'yearly',
+                                      group_by = 'flagAndGearType', # maybe change to just geartype
+                                      date_range = glue('{y}-05-01,{y}-08-31'), 
+                                      region = j, 
+                                      region_source = 'eez',
+                                      key = key) %>%
+      # rename columns for clarity:
+      rename(year = "Time Range",
+             apparent_fishing_hours = "Apparent Fishing Hours",
+             y = Lat,
+             x = Lon,
+             geartype = Geartype, 
+             year = "Time Range",
+             number_of_vessels = "Vessel IDs") %>%
+      # keep track of the administrative country for each EEZ, even after we combine all data into one dataframe: 
+      mutate(eez_admin_rgn = i,
+             sub_rgn_label = sub_region_label,
+             gfw_eez_id = j) %>% 
+      select(year, apparent_fishing_hours, y, x, eez_admin_rgn, geartype, number_of_vessels, sub_rgn_label, gfw_eez_id, flag = Flag)
+        
+        
+                fishing_hours_sep_dec <- gfwr::get_raster(spatial_resolution = 'high', # high = 0.01 degree resolution which we think is close to 30 m resolution
+                                      temporal_resolution = 'yearly',
+                                      group_by = 'flagAndGearType', # maybe change to just geartype
+                                      date_range = glue('{y}-09-01,{y}-12-31'), 
+                                      region = j, 
+                                      region_source = 'eez',
+                                      key = key) %>%
+      # rename columns for clarity:
+      rename(year = "Time Range",
+             apparent_fishing_hours = "Apparent Fishing Hours",
+             y = Lat,
+             x = Lon,
+             geartype = Geartype, 
+             year = "Time Range",
+             number_of_vessels = "Vessel IDs") %>%
+      # keep track of the administrative country for each EEZ, even after we combine all data into one dataframe: 
+      mutate(eez_admin_rgn = i,
+             sub_rgn_label = sub_region_label,
+             gfw_eez_id = j) %>% 
+      select(year, apparent_fishing_hours, y, x, eez_admin_rgn, geartype, number_of_vessels, sub_rgn_label, gfw_eez_id, flag = Flag)
+        
+            if(nrow(fishing_hours_jan_apr) + nrow(fishing_hours_may_aug) + nrow(fishing_hours_sep_dec) == 0){
+          print(paste0("Skipping, all empty df"))
+
+      next()
+    }
+        
+        
+        fishing_hours <- rbind(fishing_hours_jan_apr, fishing_hours_may_aug, fishing_hours_sep_dec) %>%
+          group_by(year, y, x, eez_admin_rgn, geartype, sub_rgn_label, gfw_eez_id, flag) %>%
+          summarise(apparent_fishing_hours = sum(apparent_fishing_hours, na.rm = TRUE),
+                    number_of_vessels = sum(number_of_vessels, na.rm = TRUE)) %>%
+          ungroup()
+        
+    
+    # specify column types before saving the csv so we can correctly concatenate the rows later
+    fishing_hours$year <- as.numeric(fishing_hours$year)
+    fishing_hours$apparent_fishing_hours <- as.numeric(fishing_hours$apparent_fishing_hours)
+    fishing_hours$y <- as.numeric(fishing_hours$y)
+    fishing_hours$x <- as.numeric(fishing_hours$x)
+    fishing_hours$x <- as.numeric(fishing_hours$x)
+    fishing_hours$gfw_id <- as.numeric(fishing_hours$gfw_id)
+    
+    fishing_hours$eez_admin_rgn <- as.character(fishing_hours$eez_admin_rgn)
+    fishing_hours$geartype <- as.character(fishing_hours$geartype)
+    fishing_hours$sub_rgn_label <- as.character(fishing_hours$sub_rgn_label)
+    fishing_hours$flag <- as.character(fishing_hours$flag)
+    
+    print(paste0("Extracted all apparent fishing hours for ", i, " EEZ code ",j, " ", sub_region_label, " year ", y))
+    
+    if(nrow(fishing_hours) == 0){
+          print(paste0("Skipping, empty df"))
+
+      next()
+    }
+    
+    write_csv(fishing_hours, glue(rdsi_raw_dir, "/global_fishing_watch/apparent_fishing_hours/{i}_{j}_{y}_annual_effort_grid_highres.csv"))
+    
+    }
+  }
+}
+
+```
+
+Download Paolo et al. 2024
+
+ - https://globalfishingwatch.org/data-download/datasets/public-paper-industrial-activity-2024
+
+```{r}
+
+
+```
+
+
+
+Compare GFW to Rousseau et al
+
+```{r}
+
+usa_files <- list.files(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours/"), pattern = "AUS_8323_2020", full.names = TRUE)
+
+gfw_app_eff <- lapply(usa_files, read.csv) %>%
+  bind_rows() ## read AUS effort
+
+rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/CapacityCountryLevel_Detailed.csv")
+
+mmsi_gfw_eff <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/fishing-vessels-v2.csv"))
+
+sort(unique(mmsi_gfw_eff$vessel_class_gfw))
+
+sort(unique(rousseau_eff$Gear))
+
+sort(unique(gfw_app_eff$geartype))
+
+
+sort(unique(mmsi_gfw_eff$length_m_gfw))
+
+sort(unique(rousseau_eff$Length_Category))
+
+
+```
+
+
+
