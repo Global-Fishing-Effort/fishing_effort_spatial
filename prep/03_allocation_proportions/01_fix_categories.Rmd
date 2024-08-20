@@ -1,0 +1,156 @@
+---
+title: "Extract fishing effort data for case studies"
+output: html_document
+date: "2024-07-02"
+---
+
+# Setup
+
+Load packages and directories
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(gfwr)
+library(terra)
+library(tidyverse)
+library(here)
+library(glue)
+library(data.table)
+library(janitor)
+library(sf)
+library(countrycode)
+library(raster)
+
+source(here("R/dir.R"))
+
+
+```
+
+# Summary
+
+We take GFW data and calculate for each gear type, vessel length, functional group (?), flag country (?), and EEZ, the proportion of catch occuring in that cell out of the total for those categories. 
+
+Then we have total amounts of those categories from Rousseau et al. and we can multiply the total amounts by the proportions to allocate catch in each cell.
+
+Here we calculate the proportion rasters. 
+
+
+# Data Sources 
+
+## Global Fishing Watch
+
+**Reference**:
+
+**Downloaded**: 
+
+
+# Methods 
+
+Load GFW and Rousseau data 
+
+```{r}
+# rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/CapacityCountryLevel_Detailed.csv")
+
+
+country_codes <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv")
+
+rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FishingCountry_LengthBoat_Gear_Sector.csv") %>%
+  filter(!is.na(Length_Category)) %>%
+  dplyr::select(-X) %>%
+  clean_names()
+
+
+
+```
+
+
+Now we need to reconcile the gfw data categories to those of the Rousseau categories. 
+ - Some of the gears have different names
+ - GFW reports length as a numeric but Rousseau is category
+
+
+```{r}
+
+gfw_2020 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/raw_mmsi_data/prepped_data/all_effort_2020.csv"))
+
+vessel_info <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/fishing-vessels-v2.csv"))
+
+## start with length, that is easy
+
+
+unique(rousseau_eff$length_category)
+sort(unique(rousseau_eff$gear)) # chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://openknowledge.fao.org/server/api/core/bitstreams/830259c5-cbba-49f8-ae0d-819cd54356d3/content
+
+ # "Falling_Gear"      "Lift_Nets"        "Others_Multiple_Gears"    "Others_Others"             "Others_Support"             "Trawl_Bottom"              "Trawl_Midwater_or_Unsp"
+
+sort(unique(vessel_info$vessel_class_gfw))
+#  "fixed_gear"     "squid_jigger"       "trawlers"     
+
+
+# Geartypes:
+# - fishing: a combination of vessels of unknown fishing gear
+#  - drifting_longlines: drifting longlines
+#  - seiners: vessels using seine nets, including potential purse seine vessels
+#    targeting tuna and other species, as well as danish and other seines
+#      - purse_seines: purse seines, both pelagic and demersal
+#         - tuna_purse_seines: large purse seines primarily fishing for tuna.
+#         - other_purse_seines: purse seiners fishing for mackerel, anchovies, etc, often smaller and operating nearer the coast than tuna purse seines.
+#     - other_seines: danish seines and other seiners not using purse seines.
+#  - trawlers: trawlers, all types
+#  - pole_and_line: vessel from which people fish with pole and line.
+#  - trollers: vessel that tows multiple fishing lines.
+#  - fixed_gear: a category that includes potential set longlines, set gillnets,  and pots and traps
+#      - pots_and_traps: vessel that deploys pots (small, portable traps) or traps to
+#        catch fish
+#      - set_longlines: vessel that fishes by setting longlines anchored to the
+#        seafloor. These lines have shorter hooked, typically baited, lines hanging
+#        from them
+#      - set_gillnets: vessel that fishes by setting gillnets anchored to the seafloor.
+#  - dredge_fishing: vessel that tows a dredge the scrapes up edible bottom
+#    dwellers such as scallops or oysters.
+#  - squid_jigger: squid jiggers, mostly large industrial pelagic operating vessels
+
+## ok so based on the gear types, we're going to have to do some combining... both for GFW and IMAS data
+
+
+## use vessel_class_gfw and length_m_gfw as these are the most filled in 
+
+gfw_fix <- vessel_info %>%
+  mutate(length_category = case_when(
+    length_m_gfw < 6  ~ "Less than 6m",
+    length_m_gfw >= 6 & length_m_gfw < 12 ~ "6-12m",
+    length_m_gfw >= 12 & length_m_gfw < 24 ~ "12-24m",
+    length_m_gfw >= 24 & length_m_gfw <= 50 ~ "24-50m",
+    length_m_gfw > 50 ~ "Over 50m",
+    TRUE ~ NA
+  )) %>%
+  mutate(gear = case_when(
+    vessel_class_gfw %in% c("dredge_fishing") ~ "Dredges",
+    vessel_class_gfw %in% c("") ~ "Falling_Gear",
+    vessel_class_gfw %in% c("set_gillnets") ~ "Gillnets",
+    vessel_class_gfw %in% c("") ~ "Lift_Nets",
+    vessel_class_gfw %in% c("pole_and_line") ~ "Lines_Handlines_and_poles",
+    vessel_class_gfw %in% c("drifting_longlines", "set_longlines") ~ "Lines_Longlines",
+    vessel_class_gfw %in% c("trollers") ~ "Lines_Unspecified",
+    vessel_class_gfw %in% c("") ~ "Others_Multiple_Gears",
+    vessel_class_gfw %in% c("") ~ "Others_Others",
+    vessel_class_gfw %in% c("") ~ "Others_Support", 
+    vessel_class_gfw %in% c("fishing") ~ "Others_Unknown",
+    vessel_class_gfw %in% c("pots_and_traps") ~ "Pots_and_Traps",
+    vessel_class_gfw %in% c("other_seines", "seiners") ~ "Seine_Danish_and_Other",
+    vessel_class_gfw %in% c("other_purse_seines", "purse_seines", "tuna_purse_seines") ~ "Seine_Purse_Seine",
+    vessel_class_gfw %in% c("") ~ "Trawl_Bottom",
+    vessel_class_gfw %in% c("") ~ "Trawl_Midwater_or_Unsp"
+   ))
+
+test <- gfw_fix %>%
+  filter(is.na(length_category)) ## there are some NAs here... we'll just have to make an assumption of some sort. It is probably a vessel >12m as it is likely to be industrial
+
+unique(gfw_fix$length_category) # [1] "24-50m"       "Over 50m"     "12-24m"       "6-12m"        NA             "Less than 6m"
+## weird there are small scale boats here... What is Yannicks definition of "industrial"? We might need to adopt that definition here. 
+
+
+```
+
+

@@ -19,7 +19,9 @@ library(tidyverse)
 library(here)
 library(glue)
 library(data.table)
-
+library(sf)
+library(fasterize)
+library(raster)
 
 source(here("R/dir.R"))
 
@@ -388,18 +390,93 @@ this_fleet <- lapply(files, read.csv) %>%
 ```
 
 
+Make reference raster with x, y, EEZ id 
+
+```{r}
+## need to get a raster with EEZ names, so we can group by EEZ, flag country, vessel length, gear type 
+
+# Define the extent for the raster (for example, global extent)
+xmin <- -180
+xmax <- 180
+ymin <- -90
+ymax <- 90
+
+# Create an empty SpatRaster with 0.1-degree resolution
+raster_empty <- rast(
+  ncol = 3600, 
+  nrow = 1800, 
+  xmin = xmin, xmax = xmax, 
+  ymin = ymin, ymax = ymax
+  #, 
+  # crs = "EPSG:4326"
+)
+
+# Initialize the raster values to NA (or 0 if you prefer)
+values(raster_empty) <- NA
+
+writeRaster(raster_empty, here("raw/spatial/empty_rast_0.1.tif"), overwrite = TRUE)
+
+## 0.1 res 
+
+## read in shapefile
+
+# World polygons from the maps package
+world_shp <- sf::st_as_sf(maps::map("world", plot = FALSE, fill = TRUE))
+
+# Load EEZ polygons
+eezs <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"), layer = 'eez_v12') #%>% 
+#  filter(POL_TYPE == '200NM') %>% # select the 200 nautical mile polygon layer
+ # vect()
+
+test <- st_as_sf(eezs) %>% st_drop_geometry() %>%
+  dplyr::select(MRGID, MRGID_SOV1, TERRITORY1, ISO_TER1, SOVEREIGN1, ISO_SOV1, GEONAME) %>%
+  add_row(MRGID = 99999, MRGID_SOV1 = 99999, TERRITORY1 = NA, ISO_TER1 = NA, SOVEREIGN1 = "High seas", ISO_SOV1 = "HSX", GEONAME = "High seas region") %>%
+    add_row(MRGID = 999999, MRGID_SOV1 = 999999, TERRITORY1 = NA, ISO_TER1 = NA, SOVEREIGN1 = "Land", ISO_SOV1 = "LND", GEONAME = "Land region")
+
+write.csv(test, here("raw/spatial/eez_lookup.csv"), row.names = FALSE)
+
+## get regions IDs
+
+## rasterize to 0.1 by 0.1, using MRGID column (this is the ID for territory EEZs)
+
+eez_rast <- fasterize::fasterize(eezs, raster(raster_empty), field = "MRGID")
+eez_rast
+
+eez_rast[is.na(eez_rast)] <- 99999 # save a value high seas, not if rousseau has that in there..
+eez_rast <- mask(rast(eez_rast), vect(world_shp), inverse = TRUE) # mask out any land 
+eez_rast[is.na(eez_rast)] <- 999999 # save a value high seas, not if rousseau has that in there..
+
+
+writeRaster(eez_rast, here("raw/spatial/eez_id_rast.tif"), overwrite = TRUE)
+
+## get x, y lookup table so we can join to the raw mmsi data when saving and have the EEZ id already saved in the csv 
+
+eez_lookup <- eez_rast %>%
+  as.data.frame(xy = TRUE) %>%
+  rename(mrgid = layer) %>%
+  mutate(x = round(x, 1), y = round(y, 1))
+
+write.csv(eez_lookup, here("raw/spatial/eez_rast_csv.csv"), row.names = FALSE)
+## ok i'm not sure this is right... but oh well. 
+
+
+```
+
+
 Let's prep the data we downloaded directly from GFW, rather than using the API
 
 
 ```{r}
 
-for(year in 2013:2020){
+for(year in 2012:2020){
 # year = 2012
 this_year_files <- list.files(glue("/home/ubuntu/data_storage/raw_data/global_fishing_watch/raw_mmsi_data/mmsi-daily-csvs-10-v2-{year}"), full.names = TRUE)
 
 
 this_year_df <- lapply(this_year_files, read.csv) %>% 
-  bind_rows()
+  bind_rows() 
+#%>%
+ # left_join(eez_lookup, by = c("cell_ll_lon" = "x", "cell_ll_lat" = "y"))
 
 this_year_df_prep <- this_year_df %>%
   mutate(year = year) %>%
@@ -408,26 +485,53 @@ this_year_df_prep <- this_year_df %>%
   summarise(hours = sum(hours, na.rm = TRUE),
             fishing_hours = sum(fishing_hours, na.rm = TRUE)) %>%
   ungroup() %>%
-  left_join(vessel_info, by = "mmsi")
+  left_join(vessel_info, by = "mmsi") 
+
+# test <- this_year_df_prep %>% 
+#   filter(is.na(mrgid))
+# 
+# test <- this_year_df_prep %>%
+#   group_by(cell_ll_lon, cell_ll_lat) %>%
+#   summarise(fishing_hours = sum(fishing_hours, na.rm = TRUE)) %>%
+#   ungroup() %>%
+#   rast(., type = "xyz") %>%
+#   extend(., raster_empty)
+# %>%
+#   as.data.frame(., xy = TRUE)
+
+# 
+# %>%
+#   left_join(eez_lookup, by = c("cell_ll_lon" = "x", "cell_ll_lat" = "y")) %>%
+#   distinct()
+
+# test <- this_year_df_prep %>% 
+#   filter(is.na(mrgid)) ## WTF??
+# test <- this_year_df_prep %>% 
+#   filter(mrgid == 999999) ## ok oof.. a lot on land. I wonder if it would just be wise to use the data from the api since it already has the EEZ id attached, right? 
 
 fwrite(this_year_df_prep, file.path(rdsi_raw_dir, glue("global_fishing_watch/raw_mmsi_data/prepped_data/all_effort_{year}.csv")), row.names = FALSE)
 
 }
 
 
-test <- this_year_df_prep %>%
+duplicates <- duplicated(test)
+
+duplicate_rows <- test[duplicates, ]
+
+testing <- test %>% distinct()
+
+
+
+gfw_2020 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/raw_mmsi_data/prepped_data/all_effort_2020.csv"))
+
+test <- gfw_2020 %>%
   filter(flag_gfw == "USA") # ok there actually isn't any data in IDN until 2014... so this is a technology adoption problem probably 
 
-sum(test$fishing_hours) # 475357
-test %>% distinct(mmsi, fishing_hours_2012) %>% pull(fishing_hours_2012) %>% sum() # 475356.9 - cool - matches almost perfectly
+sum(test$fishing_hours) # 2183481
+test %>% distinct(mmsi, fishing_hours_2020) %>% pull(fishing_hours_2020) %>% sum() # 2183481 - cool - matches perfectly
 
-test2 <- this_year_df_prep %>% 
-  group_by(flag_gfw, vessel_class_gfw) %>% 
-  summarise(fishing_hours = sum(fishing_hours, na.rm = TRUE)) %>%
-  ungroup()
 
-test3 <- this_year_df_prep %>%
-  filter(is.na(flag_gfw)) # might need to assume that this fishing flag country is just whatever eez it is occuring in 
+
 
 ```
 
