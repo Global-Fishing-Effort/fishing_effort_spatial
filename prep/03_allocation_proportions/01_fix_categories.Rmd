@@ -1,5 +1,5 @@
 ---
-title: "Extract fishing effort data for case studies"
+title: "Match gear and length types between effort data"
 output: html_document
 date: "2024-07-02"
 ---
@@ -66,29 +66,72 @@ rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c
 
 
 Now we need to reconcile the gfw data categories to those of the Rousseau categories. 
- - Some of the gears have different names
+ - Some of the gears have different names.
+    - Because of this, we need to split the "trawlers" category from GFW based on proportion of bottom vs midwater trawls reported in Rousseau et al. 
+    - fixed gear should be lumped into an "Other" category
+    - I think we will just need to group the Rouuseau and GFW data into a general "Other" category
  - GFW reports length as a numeric but Rousseau is category
 
+Get country level trawling proportions from Rousseau et al:
 
 ```{r}
 
-gfw_2020 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/raw_mmsi_data/prepped_data/all_effort_2020.csv"))
+## filter rousseau data for trawlers 
+
+unique(rousseau_eff$gear)
+
+trawling_eff <- rousseau_eff %>% 
+  filter(gear %in% c("Trawl_Bottom", "Trawl_Midwater_or_Unsp")) %>%
+  pivot_wider(names_from = "gear", values_from = "nv") %>%
+  group_by(saup, year) %>%
+  summarise(Trawl_Bottom = sum(Trawl_Bottom, na.rm = TRUE), 
+            Trawl_Midwater_or_Unsp = sum(Trawl_Midwater_or_Unsp, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(prop_bottom_trawls = Trawl_Bottom/(Trawl_Bottom+Trawl_Midwater_or_Unsp),
+         prop_mid_trawls = Trawl_Midwater_or_Unsp/(Trawl_Bottom+Trawl_Midwater_or_Unsp)) %>% 
+  dplyr::select(saup, year, prop_bottom_trawls, prop_mid_trawls)
+
+qs::qsave(trawling_eff, here("int/prop_trawling_year_country.qs")) # save 
+
+```
+
+
+Group gfw data by cell, year, flag, gear (after resolving gear issues i.e., grouping into other, don't worry about trawling yet), length category 
+   - sum of engine power, gt, hours, and fishing hours
+
+```{r}
+
+# gfw_2020 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/raw_mmsi_data/prepped_data/all_effort_2020.csv"))
 
 vessel_info <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/fishing-vessels-v2.csv"))
+
+## fix rousseau gear categories. 
+## "Falling_Gear", "Lift_Nets", "Lines_Unspecified", "Others_Multiple_Gears", "Others_Others", "Others_Support", "Others_Unknown" ~ "Other"
+
+rousseau_gear_fix <- rousseau_eff %>%
+  mutate(gear_new = ifelse(gear %in% c("Falling_Gear", "Lift_Nets", "Lines_Unspecified", "Others_Multiple_Gears", "Others_Others", "Others_Support", "Others_Unknown"), "Other", gear)) %>%
+  group_by(saup, year, sector, gear_new, length_category, country) %>% 
+  summarise(nom_active = sum(nom_active, na.rm = TRUE),
+            eff_active = sum(eff_active, na.rm = TRUE),
+            nv = sum(nv, na.rm = TRUE), 
+            p = sum(p, na.rm = TRUE), 
+            gt = sum(gt, na.rm = TRUE), 
+            nom_active_hours = sum(nom_active_hours, na.rm = TRUE), 
+            eff_active_hours = sum(eff_active_hours, na.rm = TRUE)) %>%
+  ungroup()
+
+qsave(rousseau_gear_fix, here("int/rousseau_gear_fix.qs"))
 
 ## start with length, that is easy
 
 
-unique(rousseau_eff$length_category)
-sort(unique(rousseau_eff$gear)) # chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/https://openknowledge.fao.org/server/api/core/bitstreams/830259c5-cbba-49f8-ae0d-819cd54356d3/content
+sort(unique(rousseau_gear_fix$gear_new))
 
- # "Falling_Gear"      "Lift_Nets"        "Others_Multiple_Gears"    "Others_Others"             "Others_Support"             "Trawl_Bottom"              "Trawl_Midwater_or_Unsp"
-
-sort(unique(vessel_info$vessel_class_gfw))
-#  "fixed_gear"     "squid_jigger"       "trawlers"     
+#  [1] "Dredges"                   "Gillnets"                  "Lines_Handlines_and_poles" "Lines_Longlines"           "Other"                     "Pots_and_Traps"           
+#  [7] "Seine_Danish_and_Other"    "Seine_Purse_Seine"         "Trawl_Bottom"              "Trawl_Midwater_or_Unsp"   
 
 
-# Geartypes:
+# GFW Geartypes:
 # - fishing: a combination of vessels of unknown fishing gear
 #  - drifting_longlines: drifting longlines
 #  - seiners: vessels using seine nets, including potential purse seine vessels
@@ -107,14 +150,13 @@ sort(unique(vessel_info$vessel_class_gfw))
 #        seafloor. These lines have shorter hooked, typically baited, lines hanging
 #        from them
 #      - set_gillnets: vessel that fishes by setting gillnets anchored to the seafloor.
-#  - dredge_fishing: vessel that tows a dredge the scrapes up edible bottom
+#  - dredge_fishing: vessel that tows a dredge the scrapes up edible bottom. Fall under "Hooks and Lines" per ISSCFG
 #    dwellers such as scallops or oysters.
 #  - squid_jigger: squid jiggers, mostly large industrial pelagic operating vessels
 
 ## ok so based on the gear types, we're going to have to do some combining... both for GFW and IMAS data
 
-
-## use vessel_class_gfw and length_m_gfw as these are the most filled in 
+sort(unique(vessel_info$vessel_class_gfw))
 
 gfw_fix <- vessel_info %>%
   mutate(length_category = case_when(
@@ -127,30 +169,43 @@ gfw_fix <- vessel_info %>%
   )) %>%
   mutate(gear = case_when(
     vessel_class_gfw %in% c("dredge_fishing") ~ "Dredges",
-    vessel_class_gfw %in% c("") ~ "Falling_Gear",
     vessel_class_gfw %in% c("set_gillnets") ~ "Gillnets",
-    vessel_class_gfw %in% c("") ~ "Lift_Nets",
-    vessel_class_gfw %in% c("pole_and_line") ~ "Lines_Handlines_and_poles",
+    vessel_class_gfw %in% c("pole_and_line", "squid_jigger", "trollers") ~ "Lines_Handlines_and_poles",
     vessel_class_gfw %in% c("drifting_longlines", "set_longlines") ~ "Lines_Longlines",
-    vessel_class_gfw %in% c("trollers") ~ "Lines_Unspecified",
-    vessel_class_gfw %in% c("") ~ "Others_Multiple_Gears",
-    vessel_class_gfw %in% c("") ~ "Others_Others",
-    vessel_class_gfw %in% c("") ~ "Others_Support", 
-    vessel_class_gfw %in% c("fishing") ~ "Others_Unknown",
+    vessel_class_gfw %in% c("fishing", "fixed_gear") ~ "Other",
     vessel_class_gfw %in% c("pots_and_traps") ~ "Pots_and_Traps",
-    vessel_class_gfw %in% c("other_seines", "seiners") ~ "Seine_Danish_and_Other",
-    vessel_class_gfw %in% c("other_purse_seines", "purse_seines", "tuna_purse_seines") ~ "Seine_Purse_Seine",
-    vessel_class_gfw %in% c("") ~ "Trawl_Bottom",
-    vessel_class_gfw %in% c("") ~ "Trawl_Midwater_or_Unsp"
+    vessel_class_gfw %in% c("other_seines") ~ "Seine_Danish_and_Other",
+    vessel_class_gfw %in% c("other_purse_seines", "purse_seines", "tuna_purse_seines", "seiners") ~ "Seine_Purse_Seine",
+    TRUE ~ vessel_class_gfw
    ))
-
-test <- gfw_fix %>%
-  filter(is.na(length_category)) ## there are some NAs here... we'll just have to make an assumption of some sort. It is probably a vessel >12m as it is likely to be industrial
 
 unique(gfw_fix$length_category) # [1] "24-50m"       "Over 50m"     "12-24m"       "6-12m"        NA             "Less than 6m"
 ## weird there are small scale boats here... What is Yannicks definition of "industrial"? We might need to adopt that definition here. 
 
+## lets fix the na lengths by filling them in with the most common length in that country
+test_lengths <- gfw_fix %>%
+  group_by(flag_gfw, length_category) %>%
+  summarise(count = n()) %>%
+    group_by(flag_gfw) %>%
+  filter(count == max(count)) %>%
+  ungroup() %>%
+  dplyr::select(flag_gfw, most_common_length = length_category)
 
+
+missing_lengths <- gfw_fix %>%
+  filter(is.na(length_category)) %>%
+  left_join(test_lengths) %>%
+  mutate(length_category = ifelse(is.na(length_category), most_common_length, length_category)) %>%
+  dplyr::select(-most_common_length)
+
+
+gfw_fix_fin <- gfw_fix %>%
+  filter(!is.na(length_category)) %>%
+  rbind(missing_lengths)
+  
+  
+qs::qsave(gfw_fix_fin, here("int/gfw_vessel_registry_fix.qs")) # now save this file so we can read back in later and join to gfw data
+  
 ```
 
 

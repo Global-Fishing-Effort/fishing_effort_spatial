@@ -1,0 +1,143 @@
+---
+title: "Re-save global fishing watch data with new gear types"
+output: html_document
+date: "2024-07-02"
+---
+
+# Setup
+
+Load packages and directories
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(gfwr)
+library(terra)
+library(tidyverse)
+library(here)
+library(glue)
+library(data.table)
+library(janitor)
+library(sf)
+library(countrycode)
+library(raster)
+library(qs)
+
+source(here("R/dir.R"))
+
+
+```
+
+# Summary
+
+We take GFW data and calculate for each gear type, vessel length, functional group (?), flag country (?), and EEZ, the proportion of catch occuring in that cell out of the total for those categories. 
+
+Then we have total amounts of those categories from Rousseau et al. and we can multiply the total amounts by the proportions to allocate catch in each cell.
+
+Here we calculate the proportion rasters. 
+
+
+# Data Sources 
+
+## Global Fishing Watch
+
+**Reference**:
+
+**Downloaded**: 
+
+
+# Methods 
+
+Load GFW vessel data with new gear types
+
+```{r}
+
+gfw_vessel_registry <- qread(here("int/gfw_vessel_registry_fix.qs")) %>%
+  dplyr::select(mmsi, flag_gfw, vessel_class_gfw, length_m_gfw, length_category, gear)
+
+
+```
+
+Re-save global fishing watch yearly data without vessel MMSI identifiers
+
+Group gfw data by cell, year, flag, gear (after resolving gear issues i.e., grouping into other, don't worry about trawling yet), length category 
+   - sum of engine power, gt, hours, and fishing hours
+
+```{r}
+list.files(file.path(rdsi_raw_dir, "global_fishing_watch/raw_mmsi_data/prepped_data/"))
+
+test_lengths <- gfw_vessel_registry %>%
+  group_by(flag_gfw, length_category) %>%
+  summarise(count = n()) %>%
+    group_by(flag_gfw) %>%
+  filter(count == max(count)) %>%
+  ungroup() %>%
+  dplyr::select(flag_gfw, most_common_length = length_category)
+
+for(y in 2012:2020){
+
+ #  y = 2012
+gfw_year <- read.csv(file.path(rdsi_raw_dir, glue("global_fishing_watch/raw_mmsi_data/prepped_data/all_effort_{y}.csv")))
+
+
+gfw_year_new_gears <-  gfw_year %>% 
+  mutate(length_category = case_when(
+    length_m_gfw < 6  ~ "Less than 6m",
+    length_m_gfw >= 6 & length_m_gfw < 12 ~ "6-12m",
+    length_m_gfw >= 12 & length_m_gfw < 24 ~ "12-24m",
+    length_m_gfw >= 24 & length_m_gfw <= 50 ~ "24-50m",
+    length_m_gfw > 50 ~ "Over 50m",
+    TRUE ~ NA
+  )) %>%
+  mutate(gear = case_when(
+    vessel_class_gfw %in% c("dredge_fishing") ~ "Dredges",
+    vessel_class_gfw %in% c("set_gillnets") ~ "Gillnets",
+    vessel_class_gfw %in% c("pole_and_line", "squid_jigger", "trollers") ~ "Lines_Handlines_and_poles",
+    vessel_class_gfw %in% c("drifting_longlines", "set_longlines") ~ "Lines_Longlines",
+    vessel_class_gfw %in% c("fishing", "fixed_gear") ~ "Other",
+    vessel_class_gfw %in% c("pots_and_traps") ~ "Pots_and_Traps",
+    vessel_class_gfw %in% c("other_seines") ~ "Seine_Danish_and_Other",
+    vessel_class_gfw %in% c("other_purse_seines", "purse_seines", "tuna_purse_seines", "seiners") ~ "Seine_Purse_Seine",
+    TRUE ~ vessel_class_gfw
+   ))
+
+
+  ## lets fix the NA lengths by filling them in with the most common length in that country
+
+
+missing_lengths <- gfw_2012_new_gears %>%
+  filter(is.na(length_category)) %>%
+  left_join(test_lengths) %>%
+  mutate(length_category = ifelse(is.na(length_category), most_common_length, length_category)) %>%
+  dplyr::select(-most_common_length)
+
+## now join back together and group by new gear and length categories (after making sure there are no NAs)
+gfw_fix_fin <- gfw_year_new_gears %>%
+  filter(!is.na(length_category)) %>%
+  rbind(missing_lengths) %>%
+  group_by(cell_ll_lat, cell_ll_lon, year, flag_gfw, gear, length_category) %>%
+  summarise(hours = sum(hours, na.rm = TRUE), 
+            fishing_hours = sum(fishing_hours, na.rm = TRUE), 
+            engine_power_kw_gfw = sum(engine_power_kw_gfw, na.rm = TRUE),
+            tonnage_gt_gfw = sum(tonnage_gt_gfw)) %>% ## just sum all of these categories for now
+  ungroup() %>%
+  group_by(year, flag_gfw, gear, length_category) %>%
+  mutate(hours_global = sum(hours, na.rm = TRUE), 
+            fishing_hours_global = sum(fishing_hours, na.rm = TRUE), 
+            engine_power_kw_gfw_global = sum(engine_power_kw_gfw, na.rm = TRUE),
+            tonnage_gt_gfw_global = sum(tonnage_gt_gfw)) %>%
+  ungroup() %>%
+  mutate(prop_hours_cell = hours/hours_global,
+         prop_fishing_hours_cell = fishing_hours/fishing_hours_global,
+         prop_engine_power_kw_cell = engine_power_kw_gfw/engine_power_kw_gfw_global,
+         prop_tonnage_gt_cell = tonnage_gt_gfw/tonnage_gt_gfw_global)
+      
+## ok there are some missing flags... maybe just assume it is the country where it is being fished (the eez)?
+
+qs::qsave(gfw_fix_fin, file.path(rdsi_dir, glue("prep/prorate_allocation/gfw_effort/all_effort_gear_length_props_{y}.csv")))
+}
+
+
+```
+
+

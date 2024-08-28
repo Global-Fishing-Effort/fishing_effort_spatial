@@ -73,5 +73,5 @@ eez_lookup <- eez_rast %>%
   rename(mrgid = layer) %>%
   mutate(x = round(x, 1), y = round(y, 1))
 
-qs::qsave(eez_lookup, here("raw/spatial/eez_rast_csv.qs"), row.names = FALSE)
+qs::qsave(eez_lookup, here("raw/spatial/eez_rast_csv.qs"))
 ## ok i'm not sure this is right... but oh well. 
