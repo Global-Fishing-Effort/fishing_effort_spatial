@@ -48,13 +48,22 @@ Here we calculate the proportion rasters.
 
 # Methods 
 
-Load GFW vessel data with new gear types
+Load GFW vessel data with new gear types and load Rousseau trawling proportions
 
 ```{r}
 
 gfw_vessel_registry <- qread(here("int/gfw_vessel_registry_fix.qs")) %>%
   dplyr::select(mmsi, flag_gfw, vessel_class_gfw, length_m_gfw, length_category, gear)
 
+saup_table <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv") %>% clean_names()
+
+rousseau_trawl_props <- qs::qread(here("int/prop_trawling_year_country.qs")) %>%
+  left_join(saup_table) %>%
+  dplyr::select(-x, -saup, -region)
+
+rousseau_gear_fix <- qs::qread(here("int/rousseau_gear_fix.qs"))
+
+eez_rgns <- read.csv(here("int/eez_raster_df.csv"))
 
 ```
 
@@ -74,7 +83,7 @@ test_lengths <- gfw_vessel_registry %>%
   ungroup() %>%
   dplyr::select(flag_gfw, most_common_length = length_category)
 
-for(y in 2012:2020){
+for(y in 2013:2020){
 
  #  y = 2012
 gfw_year <- read.csv(file.path(rdsi_raw_dir, glue("global_fishing_watch/raw_mmsi_data/prepped_data/all_effort_{y}.csv")))
@@ -105,39 +114,91 @@ gfw_year_new_gears <-  gfw_year %>%
   ## lets fix the NA lengths by filling them in with the most common length in that country
 
 
-missing_lengths <- gfw_2012_new_gears %>%
+missing_lengths <- gfw_year_new_gears %>%
   filter(is.na(length_category)) %>%
   left_join(test_lengths) %>%
   mutate(length_category = ifelse(is.na(length_category), most_common_length, length_category)) %>%
   dplyr::select(-most_common_length)
 
 ## now join back together and group by new gear and length categories (after making sure there are no NAs)
-gfw_fix_fin <- gfw_year_new_gears %>%
+gfw_fix <- gfw_year_new_gears %>%
   filter(!is.na(length_category)) %>%
   rbind(missing_lengths) %>%
+  filter(gear != "trawlers") %>%
   group_by(cell_ll_lat, cell_ll_lon, year, flag_gfw, gear, length_category) %>%
   summarise(hours = sum(hours, na.rm = TRUE), 
             fishing_hours = sum(fishing_hours, na.rm = TRUE), 
             engine_power_kw_gfw = sum(engine_power_kw_gfw, na.rm = TRUE),
-            tonnage_gt_gfw = sum(tonnage_gt_gfw)) %>% ## just sum all of these categories for now
+            tonnage_gt_gfw = sum(tonnage_gt_gfw),
+            nv = n_distinct(mmsi)) %>% ## just sum all of these categories for now
+  ungroup() 
+
+      
+## ok there are some missing flags... maybe just assume it is the country where it is being fished (the eez)?
+
+
+gfw_fix_trawl <- gfw_year_new_gears %>% 
+  filter(gear == "trawlers") %>% 
+  filter(!is.na(length_category)) %>%
+  rbind(missing_lengths %>% filter(gear == "trawlers")) %>%
+    group_by(cell_ll_lat, cell_ll_lon, year, flag_gfw, gear, length_category) %>%
+  summarise(hours = sum(hours, na.rm = TRUE), 
+            fishing_hours = sum(fishing_hours, na.rm = TRUE), 
+            engine_power_kw_gfw = sum(engine_power_kw_gfw, na.rm = TRUE),
+            tonnage_gt_gfw = sum(tonnage_gt_gfw),
+            nv = n_distinct(mmsi)) %>% ## just sum all of these categories for now
   ungroup() %>%
+  left_join(rousseau_trawl_props, by = c("year" = "year", "flag_gfw" = "country")) %>%
+  mutate(bt_hours = hours*prop_bottom_trawls,
+         bt_fishing_hours = fishing_hours*prop_bottom_trawls,
+         bt_engine_power = engine_power_kw_gfw*prop_bottom_trawls,
+         bt_tonnage_gt = tonnage_gt_gfw*prop_bottom_trawls,
+         bt_nv = nv*prop_bottom_trawls,
+         mt_hours = hours*prop_mid_trawls,
+         mt_fishing_hours = fishing_hours*prop_mid_trawls,
+         mt_engine_power = engine_power_kw_gfw*prop_mid_trawls,
+         mt_tonnage_gt = tonnage_gt_gfw*prop_mid_trawls,
+         mt_nv = nv*prop_mid_trawls)
+  
+bottom_trawl_fix <- gfw_fix_trawl %>%
+  dplyr::select(cell_ll_lat, cell_ll_lon, year, flag_gfw, length_category, hours = bt_hours, fishing_hours = bt_fishing_hours, engine_power_kw_gfw = bt_engine_power, tonnage_gt_gfw = bt_tonnage_gt, nv = bt_nv) %>%
+  mutate(gear = "Trawl_Bottom")
+
+mid_trawl_fix <- gfw_fix_trawl %>%
+  dplyr::select(cell_ll_lat, cell_ll_lon, year, flag_gfw, length_category, hours = mt_hours, fishing_hours = mt_fishing_hours, engine_power_kw_gfw = mt_engine_power, tonnage_gt_gfw = mt_tonnage_gt, nv = mt_nv) %>%
+  mutate(gear = "Trawl_Midwater_or_Unsp")
+
+
+gfw_fix_props <- gfw_fix %>%
+  rbind(., bottom_trawl_fix) %>%
+  rbind(., mid_trawl_fix) %>%
   group_by(year, flag_gfw, gear, length_category) %>%
   mutate(hours_global = sum(hours, na.rm = TRUE), 
             fishing_hours_global = sum(fishing_hours, na.rm = TRUE), 
             engine_power_kw_gfw_global = sum(engine_power_kw_gfw, na.rm = TRUE),
-            tonnage_gt_gfw_global = sum(tonnage_gt_gfw)) %>%
+            tonnage_gt_gfw_global = sum(tonnage_gt_gfw),
+            nv_global = sum(nv)) %>%
   ungroup() %>%
   mutate(prop_hours_cell = hours/hours_global,
          prop_fishing_hours_cell = fishing_hours/fishing_hours_global,
          prop_engine_power_kw_cell = engine_power_kw_gfw/engine_power_kw_gfw_global,
-         prop_tonnage_gt_cell = tonnage_gt_gfw/tonnage_gt_gfw_global)
-      
-## ok there are some missing flags... maybe just assume it is the country where it is being fished (the eez)?
+         prop_tonnage_gt_cell = tonnage_gt_gfw/tonnage_gt_gfw_global,
+         prop_nv_cell = nv/nv_global) %>%
+  filter(!is.na(prop_hours_cell)) %>% # filter out any NA because there is no effort in those cells (these are the ones where there was either no bottom or mid trawls based on props)
+  left_join(eez_rgns, by = c("cell_ll_lon" = "x", "cell_ll_lat" = "y")) %>%
+  mutate(flag_gfw = ifelse(flag_gfw == "", rgn_key, flag_gfw)) %>%
+  rename(eez_iso3c = rgn_key, eez_name = rgn_nam) %>%
+  dplyr::select(-rgn_id) %>%
+  mutate(flag_gfw_name = countrycode(sourcevar = flag_gfw, origin = "iso3c", destination = "country.name")) %>%
+  mutate(flag_gfw = ifelse(flag_gfw == "UNK", "CHN", flag_gfw),
+         flag_gfw_name = ifelse(flag_gfw == "UNK", "China", flag_gfw_name)) # all of the UNK vessels appear to be chinese vessels, so fix this
 
-qs::qsave(gfw_fix_fin, file.path(rdsi_dir, glue("prep/prorate_allocation/gfw_effort/all_effort_gear_length_props_{y}.csv")))
+qs::qsave(gfw_fix_fin, file.path(rdsi_dir, glue("prep/prorate_allocation/gfw_effort/all_effort_gear_length_props_{y}.qs")))
+
 }
 
-
+## need to split trawling category
+list.files(file.path(rdsi_dir, "prep/prorate_allocation/gfw_effort/"))
 ```
 
 
