@@ -63,7 +63,11 @@ rousseau_trawl_props <- qs::qread(here("int/prop_trawling_year_country.qs")) %>%
 
 rousseau_gear_fix <- qs::qread(here("int/rousseau_gear_fix.qs"))
 
-eez_rgns <- read.csv(here("int/eez_raster_df.csv"))
+# eez_rgns_old <- read.csv(here("int/eez_raster_df.csv"))
+
+eez_rgns <- qread(here("raw/spatial/eez_rast_csv.qs"))
+eez_lookup <- read.csv(here("raw/spatial/eez_lookup.csv")) %>%
+  clean_names()
 
 ```
 
@@ -136,6 +140,7 @@ gfw_fix <- gfw_year_new_gears %>%
       
 ## ok there are some missing flags... maybe just assume it is the country where it is being fished (the eez)?
 
+# we are using the flag country proportions of bottom trawls vs mid trawls in their fleets, calculated in 01_fix_categories.Rmd
 
 gfw_fix_trawl <- gfw_year_new_gears %>% 
   filter(gear == "trawlers") %>% 
@@ -160,10 +165,12 @@ gfw_fix_trawl <- gfw_year_new_gears %>%
          mt_tonnage_gt = tonnage_gt_gfw*prop_mid_trawls,
          mt_nv = nv*prop_mid_trawls)
   
+## filter for bottom trawl
 bottom_trawl_fix <- gfw_fix_trawl %>%
   dplyr::select(cell_ll_lat, cell_ll_lon, year, flag_gfw, length_category, hours = bt_hours, fishing_hours = bt_fishing_hours, engine_power_kw_gfw = bt_engine_power, tonnage_gt_gfw = bt_tonnage_gt, nv = bt_nv) %>%
   mutate(gear = "Trawl_Bottom")
 
+# filter for midwater trawl
 mid_trawl_fix <- gfw_fix_trawl %>%
   dplyr::select(cell_ll_lat, cell_ll_lon, year, flag_gfw, length_category, hours = mt_hours, fishing_hours = mt_fishing_hours, engine_power_kw_gfw = mt_engine_power, tonnage_gt_gfw = mt_tonnage_gt, nv = mt_nv) %>%
   mutate(gear = "Trawl_Midwater_or_Unsp")
@@ -186,19 +193,37 @@ gfw_fix_props <- gfw_fix %>%
          prop_nv_cell = nv/nv_global) %>%
   filter(!is.na(prop_hours_cell)) %>% # filter out any NA because there is no effort in those cells (these are the ones where there was either no bottom or mid trawls based on props)
   left_join(eez_rgns, by = c("cell_ll_lon" = "x", "cell_ll_lat" = "y")) %>%
-  mutate(flag_gfw = ifelse(flag_gfw == "", rgn_key, flag_gfw)) %>%
-  rename(eez_iso3c = rgn_key, eez_name = rgn_nam) %>%
-  dplyr::select(-rgn_id) %>%
+  left_join(eez_lookup) %>%
+    mutate(flag_gfw = ifelse(flag_gfw == ""|flag_gfw == "UNK", iso_sov1, flag_gfw)) %>%
   mutate(flag_gfw_name = countrycode(sourcevar = flag_gfw, origin = "iso3c", destination = "country.name")) %>%
-  mutate(flag_gfw = ifelse(flag_gfw == "UNK", "CHN", flag_gfw),
-         flag_gfw_name = ifelse(flag_gfw == "UNK", "China", flag_gfw_name)) # all of the UNK vessels appear to be chinese vessels, so fix this
+  mutate(flag_gfw = ifelse(flag_gfw %in% c("HSX", "LND"), "UNK", flag_gfw),
+         flag_gfw_name = ifelse(flag_gfw %in% c("UNK"), "Unknown", flag_gfw_name)) %>% # %>% # ok these cells are all either on land or in the high seas and don't report the flag country... so we just assume they are unknown unfortunately. 
+  # filter(fishing_hours > 0) # if you filter out 0 fishing hours, there are no NAs. I'll keep 0's in for now
+  dplyr::select(-mrgid_sov1, -iso_ter1, -geoname, -hours_global, -fishing_hours_global, -nv_global, -engine_power_kw_gfw_global, -tonnage_gt_gfw_global) %>%
+  dplyr::select(cell_ll_lon, cell_ll_lat, everything())
 
-qs::qsave(gfw_fix_fin, file.path(rdsi_dir, glue("prep/prorate_allocation/gfw_effort/all_effort_gear_length_props_{y}.qs")))
+# test_na <- gfw_fix_props %>%
+#     filter(is.na(flag_gfw_name)) # these are all 0 for 2012
+# 
+# test_0 <- gfw_fix_props %>%
+#   filter(fishing_hours == 0)
+# 
+# test_na <- gfw_fix_props %>%
+#     filter(is.na(mrgid) & is.na(flag_gfw_name))
+
+qs::qsave(gfw_fix_props, file.path(rdsi_dir, glue("prep/prorate_allocation/gfw_effort/all_effort_gear_length_props_{y}.qs")))
 
 }
 
 ## need to split trawling category
 list.files(file.path(rdsi_dir, "prep/prorate_allocation/gfw_effort/"))
+
+
+test <- qs::qread(file.path(rdsi_dir, "prep/prorate_allocation/gfw_effort/all_effort_gear_length_props_2012.qs"))
+sum(test$fishing_hours)
+test_na <- test %>%
+  filter(is.na(flag_gfw))
+
 ```
 
 
