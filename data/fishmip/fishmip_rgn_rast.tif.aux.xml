@@ -1,0 +1,263 @@
+<PAMDataset>
+  <PAMRasterBand band="1">
+    <Description>region</Description>
+    <CategoryNames>
+      <Category>Baltic Sea EwE</Category>
+      <Category>Baltic Sea Mizer</Category>
+      <Category>Brazil NE</Category>
+      <Category>Central North Pacific</Category>
+      <Category>Central South Pacific</Category>
+      <Category>Chatham Rise</Category>
+      <Category>Cook Strait</Category>
+      <Category>East Antarctica Atlantis</Category>
+      <Category>East Antarctica EwE</Category>
+      <Category>East Bass Strait</Category>
+      <Category>East Bering Sea Mizer</Category>
+      <Category>East Bering Sea Rpath</Category>
+      <Category>East Scotian Shelf</Category>
+      <Category>Gulf Alaska</Category>
+      <Category>Gulf of Guinea</Category>
+      <Category>Hawai'i based Longline</Category>
+      <Category>Kerguelen EwE</Category>
+      <Category>Kerguelen Mizer</Category>
+      <Category>Main Hawaiian Islands</Category>
+      <Category>Mediterranean Sea EwE</Category>
+      <Category>Mediterranean Sea OSMOSE</Category>
+      <Category>Nordic and Barents Seas</Category>
+      <Category>North Humboldt</Category>
+      <Category>North Sea EwE Mizer</Category>
+      <Category>North Sea OSMOSE</Category>
+      <Category>NorthWestern Mediterranean Sea</Category>
+      <Category>Northern California Current</Category>
+      <Category>Northern Gulf of Alaska</Category>
+      <Category>Prydz Bay</Category>
+      <Category>Puget Sound Atlantis</Category>
+      <Category>Ross Sea MBTM</Category>
+      <Category>SE Australia Atlantis</Category>
+      <Category>SE Australia Mizer</Category>
+      <Category>Southern Benguela</Category>
+      <Category>Southern Ocean</Category>
+      <Category>Tasman and Golden Bays</Category>
+      <Category>Western Mediterranean Sea</Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+      <Category></Category>
+    </CategoryNames>
+  </PAMRasterBand>
+</PAMDataset>

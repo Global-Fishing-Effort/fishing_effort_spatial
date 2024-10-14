@@ -1,0 +1,200 @@
+---
+title: "Allocate country level data to GFW cells using proportions"
+output: html_document
+date: "2024-09-24"
+---
+
+# Setup
+
+Load packages and directories
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(gfwr)
+library(terra)
+library(tidyverse)
+library(here)
+library(glue)
+library(data.table)
+library(janitor)
+library(sf)
+library(countrycode)
+library(raster)
+library(qs)
+
+source(here("R/dir.R"))
+
+
+```
+
+# Summary
+
+We take GFW data and calculate for each gear type, vessel length, functional group (?), flag country (?), and EEZ, the proportion of catch occurring in that cell out of the total for those categories. 
+
+Then we have total amounts of those categories from Rousseau et al. and we can multiply the total amounts by the proportions to allocate catch in each cell.
+
+Here we calculate the proportion rasters. 
+
+
+# Data Sources 
+
+## Global Fishing Watch
+
+**Reference**:
+
+**Downloaded**: 
+
+
+# Methods 
+
+
+```{r}
+
+rousseau_gear_fix <- qs::qread(here("data/int/rousseau_gear_fix.qs"))
+
+```
+
+Allocate national fishing effort to cells by joining by geer type, vessel length, and flag country. We will start with Industrial only, since that is technically what GFW includes. 
+
+ - Join by gear, vessel length, flag country
+ - multiply cell level nv_prop, hours_prop, gt_prop by the total amounts contained in the Rousseau data
+ - save 
+
+
+```{r}
+list.files(file.path(rdsi_dir, "prep/prorate_allocation/gfw_effort/"))
+
+for(s in c("APW", "UP")){
+  for(y in 2012){
+
+
+  # y = 2012
+  # s =  "I"
+  
+    
+    # if(y %in% c(2012:2017)){
+    total_effort <- rousseau_gear_fix %>%
+      filter(year == y,
+             sector == s) %>%
+            rename(p_imas = p, gt_imas = gt, nv_imas = nv)
+    
+    # }else{
+    #       total_effort <- rousseau_gear_fix %>%
+    #   filter(year == 2017, ## just assume 2017 spatialisation for anything past that since imas only goes to 2017
+    #          sector == s) %>%
+    #         rename(p_imas = p, gt_imas = gt, nv_imas = nv)
+    #   
+    # }
+
+    
+    cell_effort_props <- qs::qread(glue(file.path(rdsi_dir, "prep/prorate_allocation/gfw_effort/all_effort_gear_length_props_{y}.qs")))
+    
+    ## now join total effort and cell props by gear, vesssel length, and flag country
+    
+    joined_effort <- cell_effort_props %>%
+      dplyr::select(-year) %>%
+      right_join(total_effort, by = c("length_category", "gear" = "gear_new", "flag_fin" = "country")) %>%
+      rename(gfw_nv = nv) %>%
+      mutate(
+        # nom_regular_hours = prop_hours_cell*nom_active_hours,
+        #      eff_regular_hours = prop_hours_cell*eff_active_hours,
+             nom_fishing_hours = prop_fishing_hours_cell*nom_active_hours,
+             eff_fishing_hours = prop_fishing_hours_cell*eff_active_hours,
+             p = p_imas*prop_engine_power_kw_cell,
+             gt = prop_tonnage_gt_cell*gt_imas, 
+             nv = prop_nv_cell*nv_imas
+             ) 
+    
+    
+    sum(joined_effort$eff_fishing_hours, na.rm = TRUE)/sum(total_effort$eff_active_hours) # 0.4984574 missing ~50% of hours still... so  A LOT doesn't match for 2012. But 2012 is the worst year of coverage for GFW. We'll do some data checking after running everything to see how later years fare. 
+  
+    
+    allocated_effort_save <- joined_effort %>%
+      dplyr::select(x, y, flag_fin, flag_country_name = flag_name, gear, length_category, eez_id = iso_sov1, nom_fishing_hours, eff_fishing_hours, p, gt, nv, gfw_fishing_hours = fishing_hours, gfw_p = engine_power_kw_gfw, gfw_gt = tonnage_gt_gfw, gfw_nv, nom_active_hours_imas = nom_active_hours, eff_active_hours_imas = eff_active_hours, p_imas, gt_imas, nv_imas)
+    
+    
+    # test <- allocated_effort_save %>%
+    #   filter(is.na(cell_ll_lon)) 
+    
+    ## ok so this all looks ok to me
+    
+qs::qsave(allocated_effort_save, glue(file.path(rdsi_dir, "prep/prorate_allocation/prorate_effort_{s}_{y}.qs")))
+    
+    
+  }
+}
+
+
+```
+
+Data checking
+
+```{r}
+
+## lets check Industrial for all years
+
+
+for(s in c("APW", "UP")){
+  for(y in 2012){
+
+
+  # y = 2012
+  # s =  "I"
+  
+    
+    # if(y %in% c(2012:2017)){
+    total_effort <- rousseau_gear_fix %>%
+      filter(year == y,
+             sector == s) %>%
+            rename(p_imas = p, gt_imas = gt, nv_imas = nv)
+    
+    # }else{
+    #       total_effort <- rousseau_gear_fix %>%
+    #   filter(year == 2017, ## just assume 2017 spatialisation for anything past that since imas only goes to 2017
+    #          sector == s) %>%
+    #         rename(p_imas = p, gt_imas = gt, nv_imas = nv)
+    #   
+    # }
+
+    
+
+allocated_effort <- qs::qread(glue(file.path(rdsi_dir, "prep/prorate_allocation/prorate_effort_{s}_{y}.qs")))
+    
+    print(sum(allocated_effort$eff_fishing_hours, na.rm = TRUE)/sum(total_effort$eff_active_hours)) # this is how much effort is included in prorate
+
+    
+  }
+}
+
+## Industrial 
+# [1] 0.4984574, 2012
+# [1] 0.59654, 2013
+# [1] 0.6026659, 2014
+# [1] 0.6180964, 2015
+# [1] 0.645804, 2016
+# [1] 0.9500397, 2017
+
+## ok so 2017 is the best coverage (expected). AIS didn't really have great uptake until 2016, so GFW recommends not putting too much stock into 2012-2015
+
+## Artisanal powered
+# [1] 0.0218172, 2012
+# [1] 0.1358585, 2013
+# [1] 0.1055112, 2014
+# [1] 0.07240682, 2015
+# [1] 0.1103558, 2016
+# [1] 0.1822191, 2017
+
+## Unpowered
+# [1] 0.0002325565, 2012
+# [1] 0.003034169, 2013
+# [1] 0.002224677, 2014
+# [1] 0.003099035, 2015
+# [1] 0.007503027, 2016
+# [1] 0.007939641, 2017
+
+## the artisanal and unpowered are obviously horrible because of no AIS coverage
+
+
+```
+

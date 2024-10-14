@@ -1,0 +1,55 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-10-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(sf)
+library(here)
+library(terra)
+library(mapview)
+library(tidyverse)
+```
+
+
+Look at fishmip regions 
+
+```{r}
+# fishmip_rgn <- st_read(here("data/fishmip/FishMIP_regional_models"))
+# 
+# library(mapview)
+# mapview(head(fishmip_rgn, 2))
+# 
+# test <- fishmip_rgn %>% 
+#   st_drop_geometry()
+
+fishmip_rgn <- vect(here("data/fishmip/FishMIP_regional_models"))
+
+names(fishmip_rgn) # [1] "region"  "models"  "nmbr_md"
+head(unique(fishmip_rgn$region), 4) # [1] "Baltic Sea EwE"        "Baltic Sea Mizer"      "Brazil NE"             "Central North Pacific"
+
+# ok so i think i need to create a 0.5 by 0.5 raster that has lon, lat, region; maybe have a region id for each region, might be easier to work with. 
+
+base_raster <- rast(res = 0.5)
+
+head(fishmip_rgn)
+
+test <- subset(fishmip_rgn, fishmip_rgn$region == "Baltic Sea EwE")
+
+fishmip_rgn_rast <- rasterize(fishmip_rgn, base_raster, field = "region")
+
+plot(fishmip_rgn_rast)
+
+fishmip_rgn_csv <- fishmip_rgn_rast %>%
+  as.data.frame(xy = TRUE)
+
+writeRaster(fishmip_rgn_rast, here("data/fishmip/fishmip_rgn_rast.tif"), overwrite = TRUE)
+
+
+```
+
+
+
