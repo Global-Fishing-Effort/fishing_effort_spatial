@@ -374,79 +374,6 @@ fishing_hours <- do.call(rbind, fishing_hours_list) %>%
 
 ```
 
-
-
-Compare GFW MMSI and fleet data and Rousseau et al. data
-
-```{r}
-
-test_fleet <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours/CAN_8493_2015_annual_effort_grid_highres.csv"))
-
-test_mmsi_v2 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v2/CAN_8493_2015_annual_effort_grid_highres.csv"))
-
-test_mmsi_v3 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v3/CAN_8493_2015_annual_effort_grid_highres.csv"))
-
-sum(test_fleet$apparent_fishing_hours) # 258414.9
-
-sum(test_mmsi_v2$apparent_fishing_hours) # 256931
-
-sum(test_mmsi_v3$apparent_fishing_hours) # 219563.2
-
-## they are pretty close, v3 is off by ~40k hours for some reason... maybe re-pull for this region and double check? 
-
-test_fleet <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours/BGR_5672_2015_annual_effort_grid_highres.csv"))
-
-test_mmsi_v2 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v2/BGR_5672_2015_annual_effort_grid_highres.csv"))
-
-test_mmsi_v3 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v3/BGR_5672_2015_annual_effort_grid_highres.csv"))
-
-sum(test_fleet$apparent_fishing_hours) # 18062.71
-
-sum(test_mmsi_v2$apparent_fishing_hours) # 17871.92
-
-sum(test_mmsi_v3$apparent_fishing_hours) # 24254.94
-
-## weird 
-
-
-test_fleet <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours/IDN_8492_2015_annual_effort_grid_highres.csv"))
-
-test_mmsi_v2 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v2/IDN_8492_2015_annual_effort_grid_highres.csv"))
-
-test_mmsi_v3 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v3/IDN_8492_2015_annual_effort_grid_highres.csv"))
-
-sum(test_fleet$apparent_fishing_hours) # 2421.68
-
-sum(test_mmsi_v2$apparent_fishing_hours) # 2389.98
-
-sum(test_mmsi_v3$apparent_fishing_hours) # 2234.25
-
-## OK they're almost all the same, but obviously this is only industrial... Indonesia has WAY MORE fishing hours than that with small scale fisheries... probably the most in the world
-
-## compare to actual effort from Rousseau: 
-
-imas_effort <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/CapacityCountryLevel_Detailed.csv")
-colnames(imas_effort)
-unique(imas_effort$Sector)
-unique(imas_effort$Country)
-
-imas_idn <- imas_effort %>% 
-  filter(Sector == "I",
-         Country == "IDN", # is this flag country though? README says "fishing country" so I think it is flag country? That's ok... i think we could still get the info we need from the spatialized version? I.e. hours of effort per EEZ and flag country?
-         Year == 2015) 
-
-## compare imas to GFW effort hours
-sum(imas_idn$EffActive) # 20608149271
-
-sum(imas_idn$NVActive) # 43705.35
-length(unique(test_mmsi$vessel_id)) # 40
-
-## does not match well at all for Indonesia! Even for industrial fishing sector
-
-
-
-```
-
 Let's combine all of the data into one file with just x, y, year, mmsi, flag
 
 ```{r}
@@ -473,56 +400,33 @@ qs::qsave(all_effort_combined_y, file.path(rdsi_raw_dir, glue("global_fishing_wa
 ```
 
 
-ARCHIVE: 
-
 Let's prep the data we downloaded directly from GFW, rather than using the API
 
 
 ```{r}
 
 for(year in 2012:2020){
-# year = 2012
-this_year_files <- list.files(glue("/home/ubuntu/data_storage/raw_data/global_fishing_watch/raw_mmsi_data/mmsi-daily-csvs-10-v2-{year}"), full.names = TRUE)
-
-
-this_year_df <- lapply(this_year_files, read.csv) %>% 
-  bind_rows() 
-#%>%
- # left_join(eez_lookup, by = c("cell_ll_lon" = "x", "cell_ll_lat" = "y"))
-
-this_year_df_prep <- this_year_df %>%
-  mutate(year = year) %>%
-  dplyr::select(-date) %>%
-  group_by(cell_ll_lat, cell_ll_lon, year, mmsi) %>%
-  summarise(hours = sum(hours, na.rm = TRUE),
-            fishing_hours = sum(fishing_hours, na.rm = TRUE)) %>%
-  ungroup() %>%
-  left_join(vessel_info, by = "mmsi") 
-
-# test <- this_year_df_prep %>% 
-#   filter(is.na(mrgid))
-# 
-# test <- this_year_df_prep %>%
-#   group_by(cell_ll_lon, cell_ll_lat) %>%
-#   summarise(fishing_hours = sum(fishing_hours, na.rm = TRUE)) %>%
-#   ungroup() %>%
-#   rast(., type = "xyz") %>%
-#   extend(., raster_empty)
-# %>%
-#   as.data.frame(., xy = TRUE)
-
-# 
-# %>%
-#   left_join(eez_lookup, by = c("cell_ll_lon" = "x", "cell_ll_lat" = "y")) %>%
-#   distinct()
-
-# test <- this_year_df_prep %>% 
-#   filter(is.na(mrgid)) ## WTF??
-# test <- this_year_df_prep %>% 
-#   filter(mrgid == 999999) ## ok oof.. a lot on land. I wonder if it would just be wise to use the data from the api since it already has the EEZ id attached, right? 
-
-fwrite(this_year_df_prep, file.path(rdsi_raw_dir, glue("global_fishing_watch/raw_mmsi_data/prepped_data/all_effort_{year}.csv")), row.names = FALSE)
-
+  # year = 2012
+  this_year_files <- list.files(glue("/home/ubuntu/data_storage/raw_data/global_fishing_watch/apparent_fishing_hours_mmsi/v2/mmsi-daily-csvs-10-v2-{year}"), full.names = TRUE)
+  
+  
+  this_year_df <- lapply(this_year_files, fread) %>% 
+    bind_rows() 
+  #%>%
+  # left_join(eez_lookup, by = c("cell_ll_lon" = "x", "cell_ll_lat" = "y"))
+  
+  this_year_df_prep <- this_year_df %>%
+    mutate(year = year) %>%
+    dplyr::select(-date) %>%
+    group_by(cell_ll_lat, cell_ll_lon, year, mmsi) %>%
+    summarise(hours = sum(hours, na.rm = TRUE),
+              fishing_hours = sum(fishing_hours, na.rm = TRUE)) %>%
+    ungroup() %>%
+    left_join(vessel_info, by = "mmsi") 
+  
+  
+  qs::qsave(this_year_df_prep, file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent_fishing_hours_mmsi/v2_aggregated/all_effort_{year}.qs")))
+  
 }
 
 
@@ -534,7 +438,7 @@ testing <- test %>% distinct()
 
 
 
-gfw_2020 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/raw_mmsi_data/prepped_data/all_effort_2020.csv"))
+gfw_2020 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v2_aggregated/all_effort_2020.csv"))
 
 test <- gfw_2020 %>%
   filter(flag_gfw == "USA") # ok there actually isn't any data in IDN until 2014... so this is a technology adoption problem probably 
@@ -546,4 +450,61 @@ test %>% distinct(mmsi, fishing_hours_2020) %>% pull(fishing_hours_2020) %>% sum
 
 
 ```
+Compare GFW MMSI and fleet data and Rousseau et al. data
 
+```{r}
+
+test_fleet <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours/CAN_8493_2015_annual_effort_grid_highres.csv"))
+
+test_mmsi_v3 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v3/CAN_8493_2015_annual_effort_grid_highres.csv"))
+
+sum(test_fleet$apparent_fishing_hours) # 258414.9
+
+
+sum(test_mmsi_v3$apparent_fishing_hours) # 219563.2
+
+
+test_fleet <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours/BGR_5672_2015_annual_effort_grid_highres.csv"))
+
+
+test_mmsi_v3 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v3/BGR_5672_2015_annual_effort_grid_highres.csv"))
+
+sum(test_fleet$apparent_fishing_hours) # 18062.71
+
+
+sum(test_mmsi_v3$apparent_fishing_hours) # 24254.94
+
+## weird 
+
+
+test_fleet <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours/IDN_8492_2015_annual_effort_grid_highres.csv"))
+
+test_mmsi_v3 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v3/IDN_8492_2015_annual_effort_grid_highres.csv"))
+
+sum(test_fleet$apparent_fishing_hours) # 2421.68
+
+sum(test_mmsi_v3$apparent_fishing_hours) # 2234.25
+
+## OK they're almost all the same, but obviously this is only industrial... Indonesia has WAY MORE fishing hours than that with small scale fisheries... probably the most in the world
+
+## compare to actual effort from Rousseau: 
+
+imas_effort <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/CapacityCountryLevel_Detailed.csv")
+colnames(imas_effort)
+unique(imas_effort$Sector)
+unique(imas_effort$Country)
+
+imas_idn <- imas_effort %>% 
+  filter(Sector == "I",
+         Country == "IDN", # is this flag country though? README says "fishing country" so I think it is flag country? That's ok... i think we could still get the info we need from the spatialized version? I.e. hours of effort per EEZ and flag country?
+         Year == 2015) 
+
+## compare imas to GFW effort hours
+sum(imas_idn$EffActive) # 20608149271
+
+sum(imas_idn$NVActive) # 43705.35
+length(unique(test_mmsi$vessel_id)) # 40
+
+## does not match well at all for Indonesia! Even for industrial fishing sector
+
+```

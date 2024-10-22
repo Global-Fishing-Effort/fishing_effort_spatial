@@ -63,32 +63,23 @@ Allocate national fishing effort to cells by joining by geer type, vessel length
 
 
 ```{r}
-list.files(file.path(rdsi_dir, "prep/prorate_allocation/gfw_effort/"))
 
-for(s in c("APW", "UP")){
-  for(y in 2012){
+for(res in c("lowres", "highres")){
+for(s in c("I", "APW", "UP")){
+  for(y in 2012:2017){
 
-
+  #   res = "lowres"
   # y = 2012
   # s =  "I"
   
     
-    # if(y %in% c(2012:2017)){
     total_effort <- rousseau_gear_fix %>%
       filter(year == y,
              sector == s) %>%
             rename(p_imas = p, gt_imas = gt, nv_imas = nv)
+  
     
-    # }else{
-    #       total_effort <- rousseau_gear_fix %>%
-    #   filter(year == 2017, ## just assume 2017 spatialisation for anything past that since imas only goes to 2017
-    #          sector == s) %>%
-    #         rename(p_imas = p, gt_imas = gt, nv_imas = nv)
-    #   
-    # }
-
-    
-    cell_effort_props <- qs::qread(glue(file.path(rdsi_dir, "prep/prorate_allocation/gfw_effort/all_effort_gear_length_props_{y}.qs")))
+    cell_effort_props <- qs::qread(glue(file.path(rdsi_dir, "prep/prorate_allocation/{res}/gfw_effort/all_effort_gear_length_props_{y}.qs")))
     
     ## now join total effort and cell props by gear, vesssel length, and flag country
     
@@ -119,9 +110,10 @@ for(s in c("APW", "UP")){
     
     ## ok so this all looks ok to me
     
-qs::qsave(allocated_effort_save, glue(file.path(rdsi_dir, "prep/prorate_allocation/prorate_effort_{s}_{y}.qs")))
+qs::qsave(allocated_effort_save, glue(file.path(rdsi_dir, "prep/prorate_allocation/{res}/prorate_effort_{s}_{y}.qs")))
     
     
+    }
   }
 }
 
@@ -135,31 +127,22 @@ Data checking
 ## lets check Industrial for all years
 
 
-for(s in c("APW", "UP")){
-  for(y in 2012){
+for(s in c("I", "APW", "UP")){
+  for(y in 2012:2017){
 
 
   # y = 2012
   # s =  "I"
   
-    
-    # if(y %in% c(2012:2017)){
     total_effort <- rousseau_gear_fix %>%
       filter(year == y,
              sector == s) %>%
             rename(p_imas = p, gt_imas = gt, nv_imas = nv)
-    
-    # }else{
-    #       total_effort <- rousseau_gear_fix %>%
-    #   filter(year == 2017, ## just assume 2017 spatialisation for anything past that since imas only goes to 2017
-    #          sector == s) %>%
-    #         rename(p_imas = p, gt_imas = gt, nv_imas = nv)
-    #   
-    # }
+
 
     
 
-allocated_effort <- qs::qread(glue(file.path(rdsi_dir, "prep/prorate_allocation/prorate_effort_{s}_{y}.qs")))
+allocated_effort <- qs::qread(glue(file.path(rdsi_dir, "prep/prorate_allocation/lowres/prorate_effort_{s}_{y}.qs")))
     
     print(sum(allocated_effort$eff_fishing_hours, na.rm = TRUE)/sum(total_effort$eff_active_hours)) # this is how much effort is included in prorate
 
@@ -194,6 +177,142 @@ allocated_effort <- qs::qread(glue(file.path(rdsi_dir, "prep/prorate_allocation/
 # [1] 0.007939641, 2017
 
 ## the artisanal and unpowered are obviously horrible because of no AIS coverage
+
+
+```
+
+Let's make some plots to explore what this actually looks like. 
+
+```{r}
+## 2017
+## Plot industrial by gear type and vessel length 
+
+
+# eez_rgns <- qread(here("data/raw/spatial/eez_rast_csv_0.01.qs"))
+# eez_lookup <- read.csv(here("data/raw/spatial/eez_lookup.csv")) %>%
+#   clean_names() # made in /R/spatial_files.R
+
+allocated_effort_files <- list.files(file.path(rdsi_dir, "prep/prorate_allocation/lowres/"), pattern = "2017", full.names = TRUE)
+
+allocated_effort_all <- lapply(allocated_effort_files, function(file) {
+  # Read the data
+  data <- qs::qread(file)
+  
+  # Extract sector from the filename (assuming the sector is before "_2017" in the filename)
+  sector <- gsub(".*prorate_effort_(.*)_2017.*", "\\1", file)
+  
+  # Add the sector column
+  data$sector <- sector
+  
+  return(data)
+}) %>%
+  bind_rows()
+
+
+test <- allocated_effort_all %>%
+  group_by(x, y) %>%
+  summarise(nom_fishing_hours = sum(nom_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() 
+
+
+test_prorate <- test %>%
+  filter(!is.na(x)|!is.na(y)) %>%
+  rast(., type = "xyz")
+
+plot(log(test_prorate+1))
+
+
+
+
+raw_gfw_2 <- qread(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_v2/v3_aggregated/all_effort_2017.qs"))
+
+test_gfw_2 <- raw_gfw_2 %>%
+  group_by(cell_ll_lon, cell_ll_lat) %>%
+  summarise(fishing_hours = sum(fishing_hours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  rast(., type = "xyz")
+
+plot(log(test_gfw_2+1))
+
+
+
+
+
+effort_by_length <- allocated_effort_all %>% 
+  filter(!is.na(x) | !is.na(y)) %>%
+  group_by(x, y, length_category) %>%
+  summarise(nom_fishing_hours = sum(nom_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(nom_fishing_hours > 0)
+  
+
+p <- ggplot(effort_by_length, aes(x = x, y = y, fill = log(nom_fishing_hours +1))) +
+  geom_tile() +
+  scale_fill_gradientn(colors = rev(terrain.colors(10)), name = "Fishing Hours (logged)") +
+  facet_wrap(~ length_category, nrow = 3) +
+  coord_fixed() +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_minimal()
+
+ggsave(plot = p, here("prep/02_allocation_proportions/figs/prorate_by_length.png"), height = 12, width = 12, dpi = 300, bg = "white")
+
+effort_by_gear <- allocated_effort_all %>% 
+  filter(!is.na(x) | !is.na(y)) %>%
+  group_by(x, y, gear) %>%
+  summarise(nom_fishing_hours = sum(nom_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() %>%
+    filter(nom_fishing_hours > 0)
+
+  
+
+p <- ggplot(effort_by_gear, aes(x = x, y = y, fill = log(nom_fishing_hours+1))) +
+  geom_tile() +
+  scale_fill_gradientn(colors = rev(terrain.colors(10)), name = "Fishing Hours (logged)") +
+  facet_wrap(~ gear, nrow = 5) +
+  coord_fixed() +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_minimal()
+
+ggsave(plot = p, here("prep/02_allocation_proportions/figs/prorate_by_gear.png"), height = 12, width = 12, dpi = 300, bg = "white")
+
+effort_by_sector <- allocated_effort_all %>% 
+  filter(!is.na(x) | !is.na(y)) %>%
+  group_by(x, y, sector) %>%
+  summarise(nom_fishing_hours = sum(nom_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() %>%
+    filter(nom_fishing_hours > 0)
+
+  
+
+p <- ggplot(effort_by_sector, aes(x = x, y = y, fill = log(nom_fishing_hours+1))) +
+  geom_tile() +
+  scale_fill_gradientn(colors = rev(terrain.colors(10)), name = "Fishing Hours (logged)") +
+  facet_wrap(~ sector, nrow = 5) +
+  coord_fixed() +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_minimal()
+
+ggsave(plot = p, here("prep/02_allocation_proportions/figs/prorate_by_sector.png"), height = 12, width = 12, dpi = 300, bg = "white")
+
+
+## look at higher res GFW data 
+
+raw_gfw_files <- list.files(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v3/"), full.names = TRUE, pattern = "2017")
+  
+
+raw_gfw_df <- lapply(raw_gfw_files, data.table::fread) %>%
+  bind_rows()
+
+sum(raw_gfw_df$apparent_fishing_hours, na.rm = TRUE) # 30210310
+sum(raw_gfw_2$fishing_hours, na.rm = TRUE) # 45165727
+
+test_gfw_2 <- raw_gfw_df %>%
+  group_by(x, y) %>%
+  summarise(fishing_hours = sum(apparent_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  rast(., type = "xyz")
+
+plot(log(test_gfw_2+1)) ## ok, so plotting the 0.01 resolution looks so much different. I think I will just go with the 0.1 degree resolution, because it will be SO MUCH easier computationally. It will take higher start up to get all of the variables we need, for every year. 
 
 
 ```

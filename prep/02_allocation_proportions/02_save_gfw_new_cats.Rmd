@@ -43,11 +43,11 @@ Here we calculate the proportion rasters.
 
 ## Global Fishing Watch
 
-**Reference**: Global Datasets of AIS-based Fishing Effort and Vessel Presence. Version 3.0. 
+**Reference**: Global Datasets of AIS-based Fishing Effort and Vessel Presence. Version 2.0 and 3.0. 
 
 **Downloaded**: October 10, 2024
 
-**Native resolution**: 0.01 degree 
+**Native resolution**: 0.01 and 0.1 degree 
 
 ## IMAS effort data
 
@@ -73,7 +73,6 @@ rousseau_trawl_props <- qs::qread(here("data/int/prop_trawling_year_country.qs")
 
 rousseau_gear_fix <- qs::qread(here("data/int/rousseau_gear_fix.qs"))
 
-eez_rgns <- qread(here("data/raw/spatial/eez_rast_csv_0.01.qs"))
 eez_lookup <- read.csv(here("data/raw/spatial/eez_lookup.csv")) %>%
   clean_names() # made in /R/spatial_files.R
 
@@ -94,12 +93,32 @@ test_lengths <- gfw_vessel_registry %>%
   ungroup() %>%
   dplyr::select(flag_gfw, most_common_length = length_category)
 
-for(y in 2013:2017){
+for(res in c("lowres", "highres")){
+  
+#   res = "lowres"
+  
+for(y in 2012:2017){
 
  #  y = 2012
+  
+    if(res == "lowres"){
+    
+eez_rgns <- qread(here("data/raw/spatial/eez_rast_csv_0.1.qs"))
+
+gfw_year <- read.csv(file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent_fishing_hours_mmsi/v2_aggregated/all_effort_{y}.csv"))) %>%
+  rename(flag = flag_gfw) %>%
+    rename(x = cell_ll_lon, y = cell_ll_lat) %>%
+  left_join(gfw_vessel_registry) %>%
+  mutate(flag_fin = ifelse(is.na(flag), flag_gfw, flag)) # fix missing flags... use API flag, and if there is no API flag, use flag from vessel registry... if it is still missing, we'll fix it later on based on where the fishing is actually happening
+    
+  }else{
+    eez_rgns <- qread(here("data/raw/spatial/eez_rast_csv_0.01.qs"))
 gfw_year <- qs::qread(file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent_fishing_hours_mmsi/v3_aggregated/all_effort_{y}.qs"))) %>%
   left_join(gfw_vessel_registry) %>%
   mutate(flag_fin = ifelse(is.na(flag), flag_gfw, flag)) # fix missing flags... use API flag, and if there is no API flag, use flag from vessel registry... if it is still missing, we'll fix it later on based on where the fishing is actually happening
+    
+  }
+
 
 # test <- gfw_year %>%
 #   filter(is.na(flag_fin))
@@ -272,18 +291,32 @@ gfw_fix_props <- gfw_fix %>%
 # test_na <- gfw_fix_props %>%
 #     filter(is.na(mrgid) & is.na(flag_name)) # none
 
-qs::qsave(gfw_fix_props, file.path(rdsi_dir, glue("prep/prorate_allocation/gfw_effort/all_effort_gear_length_props_{y}.qs")))
+qs::qsave(gfw_fix_props, file.path(rdsi_dir, glue("prep/prorate_allocation/{res}/gfw_effort/all_effort_gear_length_props_{y}.qs")))
 
+  }
 }
 
 ## need to split trawling category
-list.files(file.path(rdsi_dir, "prep/prorate_allocation/gfw_effort/"))
 
 
-test <- qs::qread(file.path(rdsi_dir, "prep/prorate_allocation/gfw_effort/all_effort_gear_length_props_2012.qs"))
+test <- qs::qread(file.path(rdsi_dir, "prep/prorate_allocation/lowres/gfw_effort/all_effort_gear_length_props_2012.qs"))
 sum(test$fishing_hours)
 test_na <- test %>%
   filter(is.na(flag_gfw))
+
+test2 <- test %>%
+  filter(fishing_hours > 0) %>%
+  distinct(x, y) %>%
+  mutate(new = 1) %>%
+  rast(., type = "xyz")
+
+test3 <- gfw_year %>%
+  filter(fishing_hours > 0) %>%
+  distinct(x,y) %>%
+    mutate(new = 1) %>%
+  rast(., type = "xyz")
+
+plot(test3)
 
 ```
 
