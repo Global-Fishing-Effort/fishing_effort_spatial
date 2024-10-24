@@ -164,11 +164,12 @@ spatially_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180"
 
 ```{r eval = params$aggregate_data}
 # Spatially aggregate SST and SST anomaly data
+
 temporally_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
                                          temporal_aggregation = "year",
-                                         run_parallel = TRUE)%>%
-    # Write aggregated data to clean data folder
-    data.table::fwrite(here::here("data/model_features/errdap_sst.csv"))
+                                         run_parallel = TRUE,
+                                         years_per_chunk = 5)
+
 ```
 
 \pagebreak
@@ -180,12 +181,16 @@ We get monthly chlorophyll data from [Chlorophyll-a, Aqua MODIS, NPP, L3SMI, Glo
 
 ```{r eval = params$download_data}
 # Download all global  chlorp data
+
+missing_dates_2 <- c()
+
 download_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
                              variables = c("chlorophyll"),
                              temporal_resolution = "month",
-                             date_start = "2012-01-01",
-                             date_end = "2021-12-31",
+                             date_start = "2003-01-16",
+                             date_end = "2022-05-16",
                              data_grid = data_grid,
+                             missing_dates = missing_dates_2,
                              run_parallel = TRUE)
 ```
 
@@ -193,8 +198,11 @@ download_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
 # Are there missing dates from our downloads?
 missing_dates <- determine_missing_dates(dataset_name = "erdMH1chlamday",
                                          temporal_resolution = "month",
-                                         date_start = "2012-01-01",
-                                         date_end = "2021-12-31")
+                                         date_start = "2003-01-16",
+                                         date_end = "2022-05-16")
+
+missing_dates_2 <- missing_dates[[1]]$date
+
 ```
 
 ```{r eval = params$aggregate_data}
@@ -210,9 +218,10 @@ spatially_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
 
 ```{r eval = params$aggregate_data}
 # Spatially aggregate SST and SST anomaly data
+
+
 temporally_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
                                          temporal_aggregation = "year",
-                                         run_parallel = TRUE)%>%
-    # Write aggregated data to clean data folder
-    data.table::fwrite(here::here("data/model_features/errdap_chl.csv"))
+                                         run_parallel = TRUE,
+                                         years_per_chunk = 5)
 ```

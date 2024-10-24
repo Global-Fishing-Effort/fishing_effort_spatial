@@ -66,7 +66,7 @@ download_errdap_data <- function(dataset_name,
                                  missing_dates = NULL,
                                  run_parallel = TRUE){
   
-  # dataset_name = "ncdcOisst21Agg_LonPM180"
+  # dataset_name = "erdMH1chlamday"
   
   tmp_data_directory <- glue::glue("{data_directory}/erddap/{dataset_name}")
   
@@ -76,9 +76,9 @@ download_errdap_data <- function(dataset_name,
   # Get spatial boundary for pulling data, based on the max extent of the data and our data_grid
   dataset_spatial_range <- get_spatial_boundaries(dataset_name, data_grid)
   
-  # date_start = "2023-01-01"
-  # date_end = "2023-12-31"
-  # temporal_resolution = "day"
+  # date_start = "2022-01-01"
+  # date_end = "2022-05-16"
+  # temporal_resolution = "month"
   # missing_dates = missing_dates_2$date
 
   # Determine the date range based on missing dates or full range
@@ -92,11 +92,13 @@ download_errdap_data <- function(dataset_name,
   if(run_parallel) plan(multisession) else plan(sequential)
   
   # date_tmp <- "1981-09-02"
-  # variables = c("sst","anom")
+  # variables = c("chlorophyll")
   
   # Map over all dates
   date_range %>%
     future_map(function(date_tmp){
+      
+      # date_tmp <- date_range[[1]]
       tmp_file_name <- glue::glue("{tmp_data_directory}/{dataset_name}_{date_tmp}.csv")
       
       # Only re-download data if you need to
@@ -116,7 +118,8 @@ download_errdap_data <- function(dataset_name,
         # Don't save time column; this will make downloaded data more compact
         dplyr::select(-time) %>%
         # Use data.table::fwrite since it's faster
-        data.table::fwrite(tmp_file_name)
+         data.table::fwrite(tmp_file_name)
+       # qs::qsave(tmp_file_name) # use qsave since its way
     }, .options = furrr_options(globals = c("data_directory", "dataset_name", "variables", 
                                             "dataset_spatial_range"),
                                 seed = 101), .progress = TRUE)
@@ -212,48 +215,137 @@ spatially_aggregate_errdap_data_wrapper <- function(dataset_name,
                                 seed = 101),.progress=TRUE)
 }
 
-# Read in spatially aggregated data and temporally aggregate 
-temporally_aggregate_errdap_data_wrapper <- function(dataset_name,
-                                                     temporal_aggregation = "month",
-                                                     run_parallel = TRUE){
+# # Read in spatially aggregated data and temporally aggregate 
+# temporally_aggregate_errdap_data_wrapper <- function(dataset_name,
+#                                                      temporal_aggregation = "month",
+#                                                      run_parallel = TRUE){
+# 
+#   # Read in spatially aggregated data
+#   # dataset_name = "ncdcOisst21Agg_LonPM180"
+#   tmp_data_directory <- glue::glue("{data_directory}/erddap/clean/{dataset_name}/spatially_aggregated_{pixel_size}_degree")
+#   if(run_parallel) plan(multisession(workers = 8)) else plan(sequential)
+#   result<-   list.files(tmp_data_directory)  %>% 
+#     future_map_dfr(function(file_temp){
+# 
+#      # file_temp <- "1984-05-23.csv"
+#      # temporal_aggregation = "year"
+#       
+#      test<- data.table::fread(glue::glue("{tmp_data_directory}/{file_temp}"))%>%
+#         collapse::ftransform(date = lubridate::floor_date(date,temporal_aggregation))%>%
+#         # Remove mean suffix from spatial aggregation, since we will do another aggregation below
+#         dplyr::rename_with(~ gsub('mean.', '', .x)) %>% 
+#         # give sst better name
+#         dplyr::rename_with(~ gsub('sst', 'sst_c', .x))%>% 
+#         # give surface current speed better name
+#         dplyr::rename_with(~ gsub('vgos', 'surface_current_v_m_s', .x))%>% 
+#         # give surface current speed  better name
+#         dplyr::rename_with(~ gsub('ugos', 'surface_current_u_m_s', .x))%>% 
+#         # give sst anomaly better name
+#         dplyr::rename_with(~ gsub('anom', 'anom_sst_c', .x))%>% 
+#         # give sea level height better name
+#         dplyr::rename_with(~ gsub('nesdisSSH1day', 'slh_m', .x)) %>%
+#         dplyr::rename_with(~ gsub('erdMH1chlamday', 'chl_mg_per_m3', .x)) %>%
+#        dplyr::rename_with(~ gsub('.ncdcOisst_c21Agg_LonPM180', '', .x)) %>%
+#         # Remove zlev column from SST - don't need this
+#         dplyr::select(-one_of("zlev"))
+#     }, .options = furrr_options(globals=c("data_directory","dataset_name"),
+#                                 seed = 101),.progress=TRUE)  
+#   result <- result %>%
+#     # Aggregate temporally over the aggregated date
+#     # Do both mean and SD
+#     # Use collapse functions - much faster than regular
+#     collapse::fgroup_by(pixel_id,date) %>% {
+#       collapse::add_vars(collapse::add_stub(collapse::fmean(., keep.group_vars = TRUE),"_mean",pre=FALSE,cols=-c(1,2)),
+#                          collapse::add_stub(collapse::fsd(., keep.group_vars = FALSE), "_sd",pre=FALSE)) }
+#   # If aggregating by year, add year column and remove date column
+#   if(temporal_aggregation == "year") result <- result %>%
+#     collapse::ftransform(year = lubridate::year(date))%>%
+#     dplyr::select(-date)
+# }
 
+# Modified function to process data in chunks and write intermediate files
+temporally_aggregate_errdap_data_wrapper <- function(dataset_name,
+                                                     temporal_aggregation = "year",
+                                                     run_parallel = TRUE,
+                                                     years_per_chunk = 5){
+  
+  # dataset_name = "ncdcOisst21Agg_LonPM180"
+  # years_per_chunk = 1 
+  
   # Read in spatially aggregated data
   tmp_data_directory <- glue::glue("{data_directory}/erddap/clean/{dataset_name}/spatially_aggregated_{pixel_size}_degree")
-  if(run_parallel) plan(multisession) else plan(sequential)
-  result<-   list.files(tmp_data_directory)  %>% 
-    future_map_dfr(function(file_temp){
-
-      data.table::fread(glue::glue("{tmp_data_directory}/{file_temp}"))%>%
-        collapse::ftransform(date = lubridate::floor_date(date,temporal_aggregation))%>%
-        # Remove mean suffix from spatial aggregation, since we will do another aggregation below
-        dplyr::rename_with(~ gsub('mean.', '', .x)) %>% 
-        # give sst better name
-        dplyr::rename_with(~ gsub('sst', 'sst_c', .x))%>% 
-        # give surface current speed better name
-        dplyr::rename_with(~ gsub('vgos', 'surface_current_v_m_s', .x))%>% 
-        # give surface current speed  better name
-        dplyr::rename_with(~ gsub('ugos', 'surface_current_u_m_s', .x))%>% 
-        # give sst anomaly better name
-        dplyr::rename_with(~ gsub('anom', 'anom_sst_c', .x))%>% 
-        # give sea level height better name
+  files <- list.files(tmp_data_directory, full.names = TRUE)
+  
+  # Extract years from file names
+  years <- unique(lubridate::year(basename(files)))
+  
+  # Process data in 5-year chunks
+  for (i in seq(min(years), max(years), by = years_per_chunk)) {
+    # i = 1981
+    chunk_start <- i
+    chunk_end <- min(i + years_per_chunk - 1, max(years))
+    message(glue::glue("Processing chunk: {chunk_start}-{chunk_end}"))
+    
+    chunk_files <- files[lubridate::year(basename(files)) %in% chunk_start:chunk_end]
+    
+    # run_parallel = TRUE
+    # temporal_aggregation = "year"
+    if(run_parallel) plan(multisession) else plan(sequential)
+    
+    result <- future_map_dfr(chunk_files, function(file_temp){
+      data.table::fread(file_temp) %>%
+        collapse::ftransform(date = lubridate::floor_date(date, temporal_aggregation)) %>%
+        dplyr::rename_with(~ gsub('mean.', '', .x)) %>%
+        dplyr::rename_with(~ gsub('sst', 'sst_c', .x)) %>%
+        dplyr::rename_with(~ gsub('vgos', 'surface_current_v_m_s', .x)) %>%
+        dplyr::rename_with(~ gsub('ugos', 'surface_current_u_m_s', .x)) %>%
+        dplyr::rename_with(~ gsub('anom', 'anom_sst_c', .x)) %>%
         dplyr::rename_with(~ gsub('nesdisSSH1day', 'slh_m', .x)) %>%
         dplyr::rename_with(~ gsub('erdMH1chlamday', 'chl_mg_per_m3', .x)) %>%
-        # Remove zlev column from SST - don't need this
+        dplyr::rename_with(~ gsub('.ncdcOisst_c21Agg_LonPM180', '', .x)) %>%
         dplyr::select(-one_of("zlev"))
-    }, .options = furrr_options(globals=c("data_directory","dataset_name"),
-                                seed = 101),.progress=TRUE)  
-  result <- result %>%
+    }, .options = furrr_options(globals = c("data_directory", "dataset_name"), seed = 101), .progress = TRUE)
+    
     # Aggregate temporally over the aggregated date
-    # Do both mean and SD
-    # Use collapse functions - much faster than regualr
-    collapse::fgroup_by(pixel_id,date) %>% {
-      collapse::add_vars(collapse::add_stub(collapse::fmean(., keep.group_vars = TRUE),"_mean",pre=FALSE,cols=-c(1,2)),
-                         collapse::add_stub(collapse::fsd(., keep.group_vars = FALSE), "_sd",pre=FALSE)) }
-  # If aggregating by year, add year column and remove date column
-  if(temporal_aggregation == "year") result <- result %>%
-    collapse::ftransform(year = lubridate::year(date))%>%
-    dplyr::select(-date)
+    # result <- result %>%
+    #   collapse::fgroup_by(pixel_id, date) %>%
+    #   collapse::add_vars(
+    #     collapse::add_stub(collapse::fmean(., keep.group_vars = TRUE), "_mean", pre = FALSE, cols = -c(1, 2)),
+    #     collapse::add_stub(collapse::fsd(., keep.group_vars = FALSE), "_sd", pre = FALSE)
+    #   )
+    
+    # Aggregate the mean and standard deviation separately and then merge
+    mean_result <- result %>%
+      collapse::fgroup_by(pixel_id, date) %>%
+      collapse::fmean(keep.group_vars = TRUE)
+    
+    sd_result <- result %>%
+      collapse::fgroup_by(pixel_id, date) %>%
+      collapse::fsd(keep.group_vars = TRUE)
+    
+    # Join the mean and sd results by the grouping variables
+    result <- dplyr::left_join(mean_result, sd_result, by = c("pixel_id", "date"), suffix = c("_mean", "_sd"))
+    
+    
+      
+    # If aggregating by year, add year column and remove date column
+    if (temporal_aggregation == "year") result <- result %>%
+      collapse::ftransform(year = lubridate::year(date)) %>%
+      dplyr::select(-date)
+    
+    tmp_filepath <- here::here(glue::glue("data/model_features/{dataset_name}/"))
+    
+    if(!dir.exists(tmp_filepath)) dir.create(tmp_filepath)
+    
+    # Write intermediate result to disk
+    data.table::fwrite(result, here::here(glue::glue("data/model_features/{dataset_name}/errdap_{chunk_start}_{chunk_end}.csv")))
+    
+    # Clear memory after each chunk
+    rm(result)
+    gc()
+  }
 }
+
 
 determine_missing_dates <- function(dataset_name,
                                     temporal_resolution = "day",
