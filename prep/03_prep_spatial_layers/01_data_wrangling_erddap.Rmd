@@ -1,5 +1,5 @@
 ---
-title: "FAO fishing effort project - Data wrangling"
+title: "FAO fishing effort project - Data wrangling - errdap"
 author: "Gage Clawson (IMAS)"
 date: '`r format(Sys.time(), "%m/%d/%Y")`'
 output: 

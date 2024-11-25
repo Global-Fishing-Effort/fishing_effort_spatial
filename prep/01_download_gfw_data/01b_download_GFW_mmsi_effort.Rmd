@@ -266,7 +266,7 @@ for(i in rgn_list) {
 
 ```
 
-To download the China data, we need to split into more than 3 data pulls. Let's try with 5 different time periods so we can alleviate pressure on the API
+To download the China data, we need to split into more than 3 data pulls. Let's try with 5 different time periods so we can alleviate pressure on the API. The files data pull is just so large! 
 
 ```{r}
 
@@ -400,7 +400,7 @@ qs::qsave(all_effort_combined_y, file.path(rdsi_raw_dir, glue("global_fishing_wa
 ```
 
 
-Let's prep the data we downloaded directly from GFW, rather than using the API
+Let's prep the v2 data we downloaded directly from GFW, rather than using the API. We probably won't use this data, since v3 is available through the API.
 
 
 ```{r}

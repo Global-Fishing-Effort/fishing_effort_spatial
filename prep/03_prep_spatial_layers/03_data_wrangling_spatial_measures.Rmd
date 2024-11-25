@@ -1,0 +1,193 @@
+---
+title: "FAO fishing effort project - Data wrangling - Spatial measures"
+author: "Gage Clawson (IMAS)"
+date: '`r format(Sys.time(), "%m/%d/%Y")`'
+output: 
+  pdf_document: 
+    number_sections: yes
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r echo = FALSE}
+# This chunk sets up default settings for all chunks below
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,fig.width = 7.5,fig.height = 5,dev = 'png',dpi=300)
+```
+
+```{r include=FALSE}
+# Load all necessary packages
+library(tidyverse)
+library(sf)
+library(glue)
+library(rnaturalearth)
+library(furrr)
+library(countrycode)
+library(terra)
+library(data.table)
+library(googlesheets4)
+library(tictoc)
+library(here)
+library(furrr)
+library(here)
+
+setDTthreads(parallelly::availableCores())
+
+options(scipen = 20)
+# How many cores should we leave free on the system when we start running things in parallel?
+free_cores <- 0
+n_cores <- parallelly::availableCores() - free_cores
+
+source(here("R/dir.R"))
+
+data_directory <- rdsi_raw_dir
+
+
+# Set ggplot theme for all plots
+theme_set(theme_minimal() +
+            theme(axis.title.y = element_text(angle = 0,vjust=0.5),
+                  strip.background = element_blank(),
+                  strip.text.y = element_text(angle=0),
+                  strip.text.y.right = element_text(angle=0),
+                  strip.text.y.left = element_text(angle=0),
+                  panel.grid = element_blank(),
+                  panel.background = element_blank(),
+                  panel.grid.minor = element_blank(),
+                  panel.grid.major = element_blank()))
+
+# Create global land sf object for mapping
+world_plotting <- ne_countries(scale = "small", returnclass = "sf")  %>%
+  dplyr::select(geometry)
+
+```
+
+# Defining our global grid
+
+```{r}
+pixel_size <- 0.5
+
+mollweide_projection <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+
+# Read in data_grid, generated in data_wrangling.Rmd
+# We will do spatial joining in Mollweide, for proper calculations
+# Note that data grid still retains lat and lon columns, for joining with non-spatial tibbles
+# For Mollweide, always wrap around dateline, then transform, then calculate areas at end
+data_grid <- data.table::fread(here("data/model_features/global_grid.csv"))%>%
+  st_as_sf(wkt = "geometry_wkt",
+           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")%>% 
+  st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% 
+  st_transform(mollweide_projection) %>%
+  mutate(pixel_area_m2 = st_area(geometry_wkt)%>%
+           units::drop_units()) 
+```
+
+# Bathymetry, distance from shore, and distance to port (static)
+
+GFW has spatial static measures at 0.01x0.01 degree resolution for bathymetry, distance from shore, and distance to port, all in meters (m). Distance to port is the distance to the closest port as defined by [GFW's port database and algorithm](https://globalfishingwatch.org/datasets-and-code-anchorages/). For each of our `r pixel_size`x`r pixel_size` degree pixels, we will take the average value for these static measures.
+
+```{r}
+
+bathymetry_data <- rast(file.path(data_directory, "global_fishing_watch/bathymetry/bathymetry.tif")) 
+
+bathymetry_rast <- aggregate(bathymetry_data, fact = 60, fun = "mean")
+
+bathymetry <- bathymetry_rast %>%
+  as.data.frame(., xy = TRUE) %>% 
+  rename(lon = x, lat = y, elevation_m = bathymetry) %>%
+  mutate(
+    lat = floor(lat / pixel_size) * pixel_size,
+    lon = floor(lon / pixel_size) * pixel_size
+  ) %>%
+  filter(elevation_m <= 0) %>%
+   group_by(lon, lat) %>%
+  summarize(elevation_m = mean(elevation_m, na.rm = TRUE), .groups = "drop")
+
+# test <- bathymetry %>%
+#   rast(., type = "xyz")
+  
+write.csv(bathymetry, file.path(data_directory, "global_fishing_watch/bathymetry/bathymetry_0.5.csv"), row.names = FALSE)
+
+distance_from_port_data <- rast(file.path(data_directory, "global_fishing_watch/distance_from_port/distance-from-port-v1.tiff")) 
+
+distance_from_port <- aggregate(distance_from_port_data, fact = 50, fun = "mean") %>%
+  as.data.frame(., xy=TRUE) %>%
+  rename(lon = x, lat = y, distance_from_port_m = `distance-from-port-v1`) %>%
+    mutate(
+    lat = floor(lat / pixel_size) * pixel_size,
+    lon = floor(lon / pixel_size) * pixel_size
+  ) %>%
+   group_by(lon, lat) %>%
+  summarize(distance_from_port_m = mean(distance_from_port_m, na.rm = TRUE), .groups = "drop")
+  
+write.csv(distance_from_port, file.path(data_directory, "global_fishing_watch/distance_from_port/distance_from_port_0.5.csv"), row.names = FALSE)
+
+distance_from_shore_data <- rast(file.path(data_directory, "global_fishing_watch/distance_from_shore/distance-from-shore.tif")) 
+
+distance_from_shore <- aggregate(distance_from_shore_data, fact = 50, fun = "mean") %>%
+  as.data.frame(.,  xy = TRUE) %>%
+    rename(lon = x, lat = y, distance_from_shore_m = `distance-from-shore`) %>%
+      mutate(
+    lat = floor(lat / pixel_size) * pixel_size,
+    lon = floor(lon / pixel_size) * pixel_size
+  ) %>%
+   group_by(lon, lat) %>%
+  summarize(distance_from_shore_m = mean(distance_from_shore_m, na.rm = TRUE), .groups = "drop")
+
+  write.csv(distance_from_shore, file.path(data_directory, "global_fishing_watch/distance_from_shore/distance_from_shore_0.5.csv"), row.names = FALSE)
+
+
+  # Read in cached spatial measures data, add data_grid info and make into sf
+static_spatial_measures <- bathymetry %>%
+  full_join(distance_from_port, by = c("lat", "lon")) %>%
+  full_join(distance_from_shore, by = c("lat", "lon")) %>% 
+  inner_join(data_grid, by = c("lat", "lon")) %>% 
+    # For some nearshore areas, replace NA depth with 0
+  mutate(elevation_m = ifelse(is.na(elevation_m),
+                              0,
+                              elevation_m))
+
+# test <- static_spatial_measures %>%
+#   dplyr::select(lon, lat, distance_from_port_m) %>%
+#   rast(., type = "xyz")
+# plot(test)
+  
+
+static_spatial_measures %>%
+  dplyr::select(-geometry_wkt) %>%
+  data.table::fwrite(here::here("data/model_features/gfw_static_spatial_measures.csv"))
+
+```
+
+# Determine ocean for each pixel (static)
+
+Use Marine Region's [Global oceans and seas v01](https://www.marineregions.org/downloads.php)
+
+NOTE: This isn't working. So I will probably scrap this for now. I don't think we need it anyway. 
+
+```{r eval = params$process_data}
+oceans <- st_read(glue("{data_directory}/GOaS_v1_20211214/goas_v01.shp")) %>%
+  dplyr::select(ocean = name) %>% 
+  st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% 
+  st_transform(mollweide_projection) %>%
+  st_make_valid() 
+
+# Chunk data grid apart number of cores, then do st_join for each chunk in parallel
+plan(multisession, workers = n_cores)
+
+# Split data frame up
+# https://stackoverflow.com/a/60320559
+data_grid_oceans <- data_grid %>% 
+  group_by((row_number()-1) %/% (n()/n_cores)) %>%
+  nest() %>% 
+  pull(data)%>%
+  future_map_dfr(~st_join(.,oceans,largest=TRUE)) %>%
+  st_set_geometry(NULL) %>%
+  dplyr::select(pixel_id,ocean)
+
+data_grid_oceans %>%
+  data.table::fwrite(here::here("data/model_features/oceans.csv"))
+
+```
+
+
