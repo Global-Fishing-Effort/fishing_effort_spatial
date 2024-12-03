@@ -26,11 +26,12 @@ library(furrr)
 library(countrycode)
 library(terra)
 library(data.table)
-library(googlesheets4)
 library(tictoc)
 library(here)
 library(furrr)
 library(here)
+library(mapview)
+library(janitor)
 
 setDTthreads(parallelly::availableCores())
 
@@ -159,34 +160,188 @@ static_spatial_measures %>%
 
 ```
 
-# Determine ocean for each pixel (static)
+# Determine if cell is mesopelagic zone or not 
 
-Use Marine Region's [Global oceans and seas v01](https://www.marineregions.org/downloads.php)
+Use Marine Region's [Mesopelagic ecoregions of the world's oceans](https://www.sciencedirect.com/science/article/pii/S0967063717301437?via%3Dihub#ack0005)
 
-NOTE: This isn't working. So I will probably scrap this for now. I don't think we need it anyway. 
+```{r}
 
-```{r eval = params$process_data}
-oceans <- st_read(glue("{data_directory}/GOaS_v1_20211214/goas_v01.shp")) %>%
-  dplyr::select(ocean = name) %>% 
-  st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% 
-  st_transform(mollweide_projection) %>%
+meso <- st_read(glue("{data_directory}/marine_regions/test/"))
+
+meso_ids <- meso %>%
+  st_drop_geometry() %>%
+  dplyr::select(ProvId, meso_region = ProvName)
+
+write.csv(meso_ids, here("data/model_features/mesopelagic_zones_ids.csv"), row.names = FALSE)
+
+# test2 <- st_drop_geometry(meso)
+
+st_is_valid(meso) # need to fix these? 
+st_bbox(meso)
+
+meso_fix <- meso %>%
+  st_wrap_dateline(., options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% # ok looks fine here
+ st_transform("+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs") %>% 
   st_make_valid() 
 
-# Chunk data grid apart number of cores, then do st_join for each chunk in parallel
-plan(multisession, workers = n_cores)
+plot(st_geometry(meso_fix), main = "Meso in Mollweide Projection") # this looks great!
+# mapview(meso_fix) # mapview makes it look like arctic is inverted due to the projection
+st_is_valid(meso_fix) # good
+st_bbox(meso_fix) # good
+colnames(meso_fix) # cool
 
-# Split data frame up
-# https://stackoverflow.com/a/60320559
-data_grid_oceans <- data_grid %>% 
-  group_by((row_number()-1) %/% (n()/n_cores)) %>%
-  nest() %>% 
-  pull(data)%>%
-  future_map_dfr(~st_join(.,oceans,largest=TRUE)) %>%
-  st_set_geometry(NULL) %>%
-  dplyr::select(pixel_id,ocean)
 
-data_grid_oceans %>%
-  data.table::fwrite(here::here("data/model_features/oceans.csv"))
+
+  data_grid_sf <- data_grid %>%
+    st_as_sf(wkt = "geometry_wkt", crs = "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs")
+
+meso_fix_aligned <- st_transform(meso_fix, st_crs(data_grid_sf))
+
+
+meso_fix_aligned <- st_make_valid(meso_fix_aligned)
+data_grid_sf <- st_make_valid(data_grid_sf)
+
+library(future)
+library(future.apply)
+
+plan(multisession, workers = 30)
+
+# Split the data into chunks
+chunk_size <- ceiling(nrow(data_grid_sf) / 30)  # Split into 30 chunks for 30 cores
+chunks <- split(1:nrow(data_grid_sf), ceiling(seq_along(1:nrow(data_grid_sf))/chunk_size))
+
+# Define the processing function
+process_chunk <- function(idx, data_grid_sf, meso_fix_aligned) {
+  chunk <- data_grid_sf[idx,] %>%
+    st_join(meso_fix_aligned, join = st_intersects) %>%
+    dplyr::select(pixel_id, lon, lat, ProvId)
+  
+  return(chunk)
+}
+
+# Process chunks in parallel
+cat("Starting parallel processing...\n")
+grid_with_meso <- future_lapply(chunks, function(idx) {
+  process_chunk(idx, data_grid_sf, meso_fix_aligned)
+}, future.seed = TRUE)
+
+# Combine results
+cat("Combining results...\n")
+grid_with_meso_combined <- do.call(rbind, grid_with_meso)
+
+
+meso_grid_df <- grid_with_meso_combined %>%
+  st_drop_geometry() %>%
+  # Ensure no duplicate grid cells
+  distinct(pixel_id, lon, lat, ProvId) %>%
+  left_join(meso_ids) %>%
+  dplyr::select(pixel_id, meso_region)
+
+meso_grid_df %>%
+  data.table::fwrite(here::here("data/model_features/mesopelagic_zones.csv"))
+
+test <- meso_grid_df %>%
+  left_join(data_grid) %>%
+  st_drop_geometry() %>%
+  left_join(meso_ids) %>%
+  dplyr::select(lon, lat, ProvId) %>%
+  rast(., type = "xyz") # cool. 
+
+```
+
+
+# Determine EEZ of each cell 
+
+Use Marine Region's [Maritime Boundaries Geodatabase: Maritime Boundaries and Exclusive Economic Zones (200NM), version 12]
+
+```{r}
+global_grid <- read.csv(here("data/model_features/global_grid.csv"))
+eezs <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"), layer = 'eez_v12')
+world_shp <- sf::st_as_sf(maps::map("world", plot = FALSE, fill = TRUE))
+
+grid <- data_grid %>%
+  st_drop_geometry() %>%
+  dplyr::select(lon, lat, pixel_id) %>% 
+  rast(., type = "xyz") 
+
+eez_rast <- rast(fasterize::fasterize(eezs, raster(grid), field = "MRGID"))
+eez_rast
+
+eez_rast[is.na(eez_rast)] <- 99999 # save a value high seas, not if sure necessary
+eez_rast <- mask(eez_rast, vect(world_shp), inverse = TRUE) # mask out any land 
+eez_rast[is.na(eez_rast)] <- 999999 # save a value for land, not sure if necessary
+
+
+writeRaster(eez_rast, here("data/model_features/eez/eez_id_rast_0.5.tif"), overwrite = TRUE)
+
+## get x, y lookup table so we can join to the raw mmsi data when saving and have the EEZ id already saved in the csv 
+
+
+eez_lookup <- eez_rast %>%
+  as.data.frame(xy = TRUE)
+
+eez_check <- eez_lookup %>%
+  mutate(x_int = floor(x), y_int = floor(y)) %>%  # extract integer part of x and y
+  group_by(x_int, y_int) %>%
+  summarise(x_unique_decimals = n_distinct(x),
+            y_unique_decimals = n_distinct(y)) %>%
+  ungroup()
+
+eez_lookup_fin <- eez_lookup %>%
+  dplyr::select(lon = x, lat = y, eez_id = layer) %>%
+  left_join(global_grid) %>% 
+  dplyr::select(pixel_id, eez_id)
+  
+
+write.csv(eez_lookup_fin, here("data/model_features/eez/eez.csv"), row.names = FALSE)
+
+```
+
+
+# Determine FAO region of each cell 
+https://data.apps.fao.org/map/catalog/srv/eng/catalog.search#/metadata/ac02a460-da52-11dc-9d70-0017f293bd28d
+
+```{r}
+
+fao <- st_read(file.path(rdsi_raw_dir, "fao/FAO_AREAS_CWP")) %>%
+  filter(F_LEVEL == "MAJOR") %>%
+  mutate(F_AREA = as.numeric(F_AREA))
+test <- fao %>% 
+  st_drop_geometry()
+world_shp <- sf::st_as_sf(maps::map("world", plot = FALSE, fill = TRUE))
+
+fao_major_ids <- fao %>% 
+  st_drop_geometry() %>%
+  distinct(fao_id = F_AREA, NAME_EN, OCEAN) %>%
+  clean_names()
+
+write.csv(fao_major_ids, here("data/model_features/fao/fao_major_ids.csv"), row.names = FALSE)
+
+grid <- data_grid %>%
+  st_drop_geometry() %>%
+  dplyr::select(lon, lat, pixel_id) %>% 
+  rast(., type = "xyz") 
+
+fao_rast <- rast(fasterize::fasterize(fao, raster(grid), field = "F_AREA"))
+fao_rast
+
+
+writeRaster(fao_rast, here("data/model_features/fao/fao_id_rast_0.5.tif"), overwrite = TRUE)
+
+## get x, y lookup table so we can join to the raw mmsi data when saving and have the EEZ id already saved in the csv 
+
+
+fao_lookup <- fao_rast %>%
+  as.data.frame(xy = TRUE)
+
+
+fao_lookup_fin <- fao_lookup %>%
+  dplyr::select(lon = x, lat = y, fao_id = layer) %>%
+  left_join(global_grid) %>% 
+  dplyr::select(pixel_id, fao_id)
+  
+
+write.csv(fao_lookup_fin, here("data/model_features/fao/fao.csv"), row.names = FALSE)
 
 ```
 
