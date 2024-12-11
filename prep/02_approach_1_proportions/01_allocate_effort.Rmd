@@ -30,7 +30,7 @@ source(here("R/dir.R"))
 
 # Summary
 
-We take GFW data and calculate for each gear type, vessel length, functional group (?), flag country (?), and EEZ, the proportion of catch occurring in that cell out of the total for those categories. 
+We take GFW data and calculate for each gear type, vessel length, flag countryf, and EEZ, the proportion of catch occurring in that cell out of the total for those categories. 
 
 Then we have total amounts of those categories from Rousseau et al. and we can multiply the total amounts by the proportions to allocate catch in each cell.
 

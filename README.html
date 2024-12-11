@@ -352,16 +352,17 @@ display: none;
 </div>
 
 
-<div id="summary" class="section level2">
-<h2>Summary</h2>
-<p>Repository for spatializing country-level fishing effort data from <a href="https://metadata.imas.utas.edu.au/geonetwork/srv/eng/catalog.search#/metadata/1241a51d-c8c2-4432-aa68-3d2bae142794">Rousseau
+<div id="summary" class="section level1">
+<h1>Summary</h1>
+<p>Repository for spatialising country-level fishing effort data from <a href="https://metadata.imas.utas.edu.au/geonetwork/srv/eng/catalog.search#/metadata/1241a51d-c8c2-4432-aa68-3d2bae142794">Rousseau
 et al., 2024</a> to grid cells, based on <a href="https://globalfishingwatch.org/data-download/datasets/public-fishing-effort">observed
 Global Fishing Watch data</a> (a top-down approach).</p>
 <p>In this repository we spatialise country-level fishing effort data to
 grid cells, based on real data from Global Fishing Watch. To do this, we
-will adopt two approahces:</p>
-<div id="approach-one" class="section level3">
-<h3>Approach one</h3>
+will explore two approaches, and <strong>ultimately choose the
+methodology of approach 2</strong>:</p>
+<div id="approach-one" class="section level2">
+<h2>Approach one</h2>
 <p>Allocate country-level fishing effort to cells based on proportion of
 fishing effort represented in each cell in global fishing watch data. -
 We have IMAS country data with effort for year (1950-2017), flag
@@ -378,31 +379,195 @@ effort data. There are some country, gear, and vessel length categories
 that are represented in the IMAS data that are not in the GFW data, and
 this method really only works “well” for the industrial sector, as the
 GFW data mostly has coverage from AIS reporting vessels, which are
-predominately industrial vessels. Given this, we will need to apply an
-additional gap-filling step.</p>
-<p>We could use the model developed in <a href="https://www.pnas.org/doi/10.1073/pnas.2400592121">McDonald et al.,
-2024</a> to fill in any missing effort AFTER applying the proportional
-allocation methodology. We will have to adjust the model to be split by
-gear and vessel length.</p>
+predominately industrial vessels.</p>
 </div>
-<div id="approach-two" class="section level3">
-<h3>Approach two</h3>
-<p>Instead of first applying the proportional allocation approach, we
-just simply apply the model from McDonald et al., 2024 from the start to
-spatilise the country-level effort.</p>
+<div id="approach-two" class="section level2">
+<h2>Approach two</h2>
+<p>This model predicts the spatial distribution of fishing effort
+globally, using environmental, spatial, and fleet-specific predictors to
+distribute country-level fishing effort data across a global grid, using
+a beta regression model (this is the model which is most appropriate for
+predicting proportions).</p>
+<div id="model-structure" class="section level3">
+<h3>Model Structure</h3>
+<p>The model predicts the <strong>proportion of fishing effort</strong>
+in each grid cell based on:</p>
+<div id="categorical-predictors" class="section level4">
+<h4>Categorical Predictors</h4>
+<ul>
+<li>Flag state (flag_fin)</li>
+<li>Gear type (gear)</li>
+<li>Sector</li>
+<li>Vessel length category (length_category)</li>
+<li>Mesopelagic zone (33 distinct regions) (<a href="https://www.sciencedirect.com/science/article/pii/S0967063717301437">Sutton
+et al 2017</a>)</li>
+<li>Exclusive Economic Zone (EEZ)</li>
+<li>FAO major fishing area</li>
+</ul>
 </div>
-<div id="data" class="section level3">
-<h3>Data</h3>
-<p>McDonald et al., 2024: Global expansion of marine protected areas and
-the redistribution of fishing effort <a href="https://www.pnas.org/doi/10.1073/pnas.2400592121#data-availability" class="uri">https://www.pnas.org/doi/10.1073/pnas.2400592121#data-availability</a>
-<a href="https://zenodo.org/records/11625791" class="uri">https://zenodo.org/records/11625791</a> <a href="https://github.com/emlab-ucsb/mpa-fishing-effort-redistribution/tree/v1.0" class="uri">https://github.com/emlab-ucsb/mpa-fishing-effort-redistribution/tree/v1.0</a></p>
+<div id="continuous-predictors" class="section level4">
+<h4>Continuous Predictors</h4>
+<ul>
+<li>Total fishing hours (log-transformed?) for each
+flag/gear/sector/length combination</li>
+<li>Location (longitude, latitude)</li>
+<li>Distance measures:
+<ul>
+<li>Distance from port (m)</li>
+<li>Distance from shore (m)</li>
+</ul></li>
+<li>Environmental variables:
+<ul>
+<li>Chlorophyll-A concentration (mean, sd) in mg/m³</li>
+<li>Sea surface temperature (mean, sd) in °C</li>
+<li>Wind speed (mean, sd) in m/s</li>
+</ul></li>
+<li>Bathymetry (depth in m)</li>
+<li>Year (ideally 1950-2017, however GFW data is only reliable from
+2015-2017, so we will train the model on that)</li>
+</ul>
+<p>We estimate the amount of fishing effort in each cell by multplying
+the total amount (per flag, gear, sector, and vessel length) by the
+proportion in each cell (per those same categories).</p>
+</div>
+</div>
+<div id="historical-predictions" class="section level3">
+<h3><strong>Historical Predictions</strong></h3>
+<p><br />
+The model can be used to predict historical fishing effort distributions
+under the following assumptions:</p>
+<div id="key-assumptions" class="section level4">
+<h4>Key Assumptions:</h4>
+<ol style="list-style-type: decimal">
+<li><p>The relationships between environmental conditions and fishing
+effort distribution are relatively stable over time</p></li>
+<li><p>The influence of total fishing effort on spatial distribution
+patterns remains consistent</p></li>
+<li><p>The basic responses of fish and fishers to environmental
+conditions are similar across decades</p></li>
+</ol>
+</div>
+<div id="implementation-details" class="section level4">
+<h4><strong>Implementation Details</strong></h4>
+<ul>
+<li><p>Model is trained on 2015-2017 data (period of most reliable GFW
+data)</p></li>
+<li><p>For historical predictions:</p>
+<ul>
+<li><p>Uses environmental data from the target year</p></li>
+<li><p>Uses IMAS total fishing effort from the target year</p></li>
+<li><p>Maintains the learned relationships between predictors and effort
+distribution</p></li>
+</ul></li>
+<li><p>The total amount of fishing effort in each flag country is
+allocated to the proportional contribution as modeled. I.e., we estimate
+the amount of fishing effort in each cell by multiplying the total
+amount by the proportion value in each cell.</p></li>
+</ul>
+</div>
+<div id="limitations" class="section level4">
+<h4><strong>Limitations</strong></h4>
+<p>Users should be aware that historical predictions may not
+capture:</p>
+<ul>
+<li><p>Technological changes in fishing capabilities</p></li>
+<li><p>Evolution of fishing strategies and practices</p></li>
+<li><p>Changes in management regulations</p></li>
+<li><p>Shifts in target species or fishing grounds due to socio-economic
+factors</p></li>
+</ul>
+</div>
+</div>
+</div>
+<div id="file-structure" class="section level2">
+<h2>File structure</h2>
+<div id="prep-folder" class="section level3">
+<h3>‘prep’ folder</h3>
+<p>The prep folder contains all code necessary to run the models and
+generate the spatialised fishing effort data.</p>
+<p>All scripts are numbered by the order in which they should be run.
+Within the prep folder, there are multiple folders, which have their own
+descriptions. Note: you can skip <code>02_approach_1_proportions</code>
+if you don’t want to run approach 1.</p>
+</div>
+<div id="r-folder" class="section level3">
+<h3>‘R’ folder</h3>
+<p>Contains reference scripts ‘dir.R’, ‘api_keys.R’, and
+‘spatial_files.R’, which hold regularly used directory file paths and
+functions. These are sourced within markdown scripts when needed.
+<code>spatial_files.R</code> mostly creates reference spatial files that
+are used throughout the analysis.</p>
+</div>
+<div id="data-folder" class="section level3">
+<h3>‘data’ folder</h3>
+<p>The data folder is divided into a number of subfolders, each with
+their own sub directories. The main sub directories within the data
+folder are listed below.</p>
+<table>
+<colgroup>
+<col width="43%" />
+<col width="56%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">Folder</th>
+<th align="left">Description</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">raw_data</td>
+<td align="left">This folder contains a number of sources of raw data
+needed for the analysis. This often not the raw product per se, it may
+be tidied, but it is not a data product</td>
+</tr>
+<tr class="even">
+<td align="left">int</td>
+<td align="left">This folder contains a number of intermediate data
+products that are used in the markdown files, and are necessary for
+reproduction</td>
+</tr>
+<tr class="odd">
+<td align="left">model_features</td>
+<td align="left">Processed versions of raw data sets we will use for the
+model. All data stored here are processed to 0.5 by 0.5 degree cell
+sizes.</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div id="data-sources" class="section level2">
+<h2>Data sources</h2>
+<p><strong>Reference</strong> <a href="https://www.pnas.org/doi/10.1073/pnas.2400592121#data-availability">McDonald
+et al., 2024: Global expansion of marine protected areas and the
+redistribution of fishing effort</a> - <a href="https://zenodo.org/records/11625791" class="uri">https://zenodo.org/records/11625791</a> - <a href="https://github.com/emlab-ucsb/mpa-fishing-effort-redistribution/tree/v1.0" class="uri">https://github.com/emlab-ucsb/mpa-fishing-effort-redistribution/tree/v1.0</a></p>
+<p><strong>Downloaded</strong>: October 1, 2024</p>
+<p><strong>Description</strong>: All code and data necessary to
+reproduce the study linked above.</p>
 <ul>
 <li>They provide all of the necessary R code AND pre-processed spatial
 files for the model! This means we don’t necessarily need to download
-and rerun all of the model features they include.</li>
+and rerun all of the model features they include. The github repository
+linked has an extensive README describing how to use their data for
+reproduction.</li>
 <li>We can use all of this information to run the same (or a similar)
 model to predict fishing effort.</li>
 </ul>
+<div id="global-fishing-watch" class="section level3">
+<h3>Global Fishing Watch</h3>
+<p><strong>Reference</strong>: 1. Global Fishing Watch. [2024].
+www.globalfishingwatch.org<br />
+2. <a href="https://github.com/GlobalFishingWatch/gfwr"><code>gfwr</code>
+API</a></p>
+<p><strong>Downloaded</strong>: October 1, 2024</p>
+<p><strong>Description</strong>: API to extract apparent fishing effort
+within global EEZ’s. We extract by vessel ID so that we can get the
+vessel characteristics gear type and length.</p>
+<p><strong>Native data resolution</strong>: 0.01 degree</p>
+<p><strong>Time range</strong>: 2012 - 2023</p>
+<p><strong>Format</strong>: API version 3</p>
+</div>
 </div>
 </div>
 
