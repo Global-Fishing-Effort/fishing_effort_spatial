@@ -1,10 +1,6 @@
----
-editor_options: 
-  markdown: 
-    wrap: 72
----
 
-# Summary
+
+# README
 
 Repository for spatialising country-level fishing effort data from
 [Rousseau et al.,
@@ -13,10 +9,13 @@ to grid cells, based on [observed Global Fishing Watch
 data](https://globalfishingwatch.org/data-download/datasets/public-fishing-effort)
 (a top-down approach).
 
+
 In this repository we spatialise country-level fishing effort data to
 grid cells, based on real data from Global Fishing Watch. To do this, we
 will explore two approaches, and **ultimately choose the methodology of
-approach 2**:
+approach 2**.
+
+Please read this file before trying to reproduce the output from this research project. Below you will find information on the publication associated with this repository, contact information for the lead author, and a description of the repository structure with each section explained.
 
 ## Approach one
 
@@ -162,6 +161,18 @@ listed below.
 | raw_data       | This folder contains a number of sources of raw data needed for the analysis. This often not the raw product per se, it may be tidied, but it is not a data product |
 | int            | This folder contains a number of intermediate data products that are used in the markdown files, and are necessary for reproduction                                 |
 | model_features | Processed versions of raw data sets we will use for the model. All data stored here are processed to 0.5 by 0.5 degree cell sizes.                                  |
+
+
+## Contact
+
+Please direct any correspondence to Gage Clawson at `gage.clawson@utas.edu.au`
+
+## Reproducibility
+
+We strongly advocate for open and reproducible science. The code in this repository enables a use to recreate the results outlined in the above publication. There are a few important points to know/adhere to for the code to run smoothly:
+
+ - The code must be run as an R project (unless you would like to recreate it in another language) - the code within relies on relative file paths from the project home folder. 
+ - There is large data required throughout, that we do not include in this repository due to GitHub's large file size limits. Please follow any instructions to download this data that is contained in the scripts within the `prep` folder. All data used is freely accessible online. 
 
 ## Data sources
 
