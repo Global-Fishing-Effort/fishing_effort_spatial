@@ -53,7 +53,7 @@ Here we calculate the proportion rasters.
 
 **Reference**: Rousseau, Y., Blanchard, J.L., Novaglio, C. et al. A database of mapped global fishing activity 1950–2017. Sci Data 11, 48 (2024). https://doi.org/10.1038/s41597-023-02824-6
 
-**Native resolution**: 0.05 degrees, country level 
+**Native resolution**: 0.5 degrees, country level 
 
 
 # Methods 
@@ -93,7 +93,7 @@ test_lengths <- gfw_vessel_registry %>%
   ungroup() %>%
   dplyr::select(flag_gfw, most_common_length = length_category)
 
-for(res in c("lowres", "highres")){
+for(res in c("deg_10", "deg_100")){
   
 #   res = "lowres"
   
@@ -101,9 +101,9 @@ for(y in 2012:2017){
 
  #  y = 2012
   
-    if(res == "lowres"){
+    if(res == "deg_10"){
     
-eez_rgns <- qread(here("data/raw/spatial/eez_rast_csv_0.1.qs"))
+eez_rgns <- qread(here("data/raw/spatial/eez_rast_csv_0.1.qs")) # made in spatial.R script
 
 gfw_year <- read.csv(file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent_fishing_hours_mmsi/v2_aggregated/all_effort_{y}.csv"))) %>%
   rename(flag = flag_gfw) %>%
@@ -112,6 +112,7 @@ gfw_year <- read.csv(file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent
   mutate(flag_fin = ifelse(is.na(flag), flag_gfw, flag)) # fix missing flags... use API flag, and if there is no API flag, use flag from vessel registry... if it is still missing, we'll fix it later on based on where the fishing is actually happening
     
   }else{
+    
     eez_rgns <- qread(here("data/raw/spatial/eez_rast_csv_0.01.qs"))
 gfw_year <- qs::qread(file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent_fishing_hours_mmsi/v3_aggregated/all_effort_{y}.qs"))) %>%
   left_join(gfw_vessel_registry) %>%
@@ -198,7 +199,7 @@ gfw_gear_fix <- gfw_length_fix %>%
   rbind(missing_gears) 
 
 
-gfw_fix <- gfw_gear_fix %>% ## ok still have ~400 observations missing gear for 2012 all HTI or BTN.
+gfw_fix <- gfw_gear_fix %>% ## ok still have ~400 observations missing gear for 2012 all HTI or BTN. Does Bhutan actaully have fishing vessels though...? Its landlocked and very mountainous... 
   dplyr::filter(gear != "trawlers" | is.na(gear)) %>%
     group_by(year, flag_fin) %>%
   mutate(tonnage_gt_mean = mean(tonnage_gt_gfw, na.rm = TRUE),
@@ -272,9 +273,9 @@ gfw_fix_props <- gfw_fix %>%
          prop_tonnage_gt_cell = tonnage_gt_gfw/tonnage_gt_gfw_global,
          prop_nv_cell = nv/nv_global) %>%
   filter(!is.na(prop_fishing_hours_cell)) %>% # filter out any NA because there is no effort in those cells (these are the ones where there was either no bottom or mid trawls based on props)
-  left_join(eez_rgns) %>% # this join really fucks speed up...
+  left_join(eez_rgns) %>% 
   left_join(eez_lookup) %>%
-    mutate(flag_fin = ifelse(flag_fin == ""|flag_fin == "UNK" | is.na(flag_fin), iso_sov1, flag_fin)) %>% # fill in flag with where the fishing occurs, if it is missing. 
+    mutate(flag_fin = ifelse(flag_fin == ""|flag_fin == "UNK" | is.na(flag_fin), iso_sov1, flag_fin)) %>% # fill in flag with where the fishing occurs, if it is unknown.  
   mutate(flag_name = countrycode(sourcevar = flag_fin, origin = "iso3c", destination = "country.name")) %>%
   mutate(flag_fin = ifelse(flag_fin %in% c("HSX", "LND"), "UNK", flag_fin),
          flag_name = ifelse(flag_fin %in% c("UNK"), "Unknown", flag_name)) %>% # %>% # ok these cells are all either on land or in the high seas and don't report the flag country... so we just assume they are unknown unfortunately. 
@@ -291,15 +292,15 @@ gfw_fix_props <- gfw_fix %>%
 # test_na <- gfw_fix_props %>%
 #     filter(is.na(mrgid) & is.na(flag_name)) # none
 
-qs::qsave(gfw_fix_props, file.path(rdsi_dir, glue("prep/prorate_allocation/{res}/gfw_effort/all_effort_gear_length_props_{y}.qs")))
+qs::qsave(gfw_fix_props, file.path(rdsi_dir, glue("prep/gfw_props/{res}/all_effort_gear_length_props_{y}.qs")))
 
   }
 }
 
-## need to split trawling category
 
+# quick data check
 
-test <- qs::qread(file.path(rdsi_dir, "prep/prorate_allocation/lowres/gfw_effort/all_effort_gear_length_props_2012.qs"))
+test <- qs::qread(file.path(rdsi_dir, "prep/gfw_props/deg_10/all_effort_gear_length_props_2012.qs"))
 sum(test$fishing_hours)
 test_na <- test %>%
   filter(is.na(flag_gfw))

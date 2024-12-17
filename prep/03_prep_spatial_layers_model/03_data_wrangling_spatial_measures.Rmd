@@ -11,6 +11,14 @@ editor_options:
   chunk_output_type: console
 ---
 
+# Summary
+
+Prep spatial measures we use to inform our model
+ - EEZ regions
+ - FAO regions
+ - distance to short, port
+ - bathymetry (depth)
+
 ```{r echo = FALSE}
 # This chunk sets up default settings for all chunks below
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,fig.width = 7.5,fig.height = 5,dev = 'png',dpi=300)

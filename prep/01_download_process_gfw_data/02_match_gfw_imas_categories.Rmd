@@ -29,7 +29,7 @@ source(here("R/dir.R"))
 
 # Summary
 
-In this script we match gear types (aside from trawling gears, which we do in 02 script) in the global fishing watch data and the Rousseau et al., 2024 data. 
+In this script we match gear types (aside from trawling gears, which we do in 03 script) in the global fishing watch data and the Rousseau et al., 2024 data. 
 
 # Data Sources 
 
@@ -39,13 +39,13 @@ In this script we match gear types (aside from trawling gears, which we do in 02
 
 **Downloaded**: October 10, 2024
 
-**Native resolution**: 0.01 degree 
+**Native resolution**: 0.01 and 0.1 degree 
 
 ## IMAS effort data
 
 **Reference**: Rousseau, Y., Blanchard, J.L., Novaglio, C. et al. A database of mapped global fishing activity 1950–2017. Sci Data 11, 48 (2024). https://doi.org/10.1038/s41597-023-02824-6
 
-**Native resolution**: 0.05 degrees, country level 
+**Native resolution**: 0.5 degrees, country level 
 
 # Methods 
 
@@ -53,9 +53,10 @@ Load GFW and Rousseau data
 
 ```{r}
 
-
+# codes used in rousseau et al
 country_codes <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv")
 
+# country level effort data
 rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FishingCountry_LengthBoat_Gear_Sector.csv") %>%
   filter(!is.na(Length_Category)) %>%
   dplyr::select(-X) %>%
@@ -66,14 +67,12 @@ rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c
 ```
 
 
-Now we need to reconcile the gfw data categories to those of the Rousseau categories. 
- - Some of the gears have different names.
-    - Because of this, we need to split the "trawlers" category from GFW based on proportion of bottom vs midwater trawls reported in Rousseau et al. 
-    - fixed gear should be lumped into an "Other" category
-    - I think we will just need to group the Rouuseau and GFW data into a general "Other" category
+We need to reconcile the gfw data categories to those of the Rousseau categories. 
+ - Some of the gears have different names, we will combine them as best we can. 
+ - We need to split the "trawlers" category from GFW based on proportion of bottom vs midwater trawls reported in Rousseau et al. 
  - GFW reports length as a numeric but Rousseau is category
 
-Get country level trawling proportions from Rousseau et al:
+Get country level trawling proportions from Rousseau et al. We want to know the proportion of a flag countries' operations which are bottom vs mid water trawling. We'll use this information later on the allocate the GFW "trawlers" category to bottom vs midwater. 
 
 ```{r}
 
@@ -98,14 +97,14 @@ qs::qsave(trawling_eff, here("data/int/prop_trawling_year_country.qs")) # save
 
 
 Group gfw data by cell, year, flag, gear (after resolving gear issues i.e., grouping into other, don't worry about trawling yet), length category 
-   - sum of engine power, gt, hours, and fishing hours
+   - sum of engine power?, gt?, hours, and fishing hours
 
 ```{r}
 
 
 vessel_info <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/fishing-vessels-v2.csv")) # unfortunately have to use v2 vessel info right now, as I can't find v3 on the API
 
-## fix rousseau gear categories. 
+## fix rousseau gear categories. Put ones that don't match into an "Other" category 
 ## "Falling_Gear", "Lift_Nets", "Lines_Unspecified", "Others_Multiple_Gears", "Others_Others", "Others_Support", "Others_Unknown" ~ "Other"
 
 rousseau_gear_fix <- rousseau_eff %>%
@@ -122,10 +121,7 @@ rousseau_gear_fix <- rousseau_eff %>%
 
 qsave(rousseau_gear_fix, here("data/int/rousseau_gear_fix.qs"))
 
-## start with length, that is easy
-
-
-sort(unique(rousseau_gear_fix$gear_new))
+sort(unique(rousseau_gear_fix$gear_new)) # look at gears in rousseau
 
 #  [1] "Dredges"                   "Gillnets"                  "Lines_Handlines_and_poles" "Lines_Longlines"           "Other"                     "Pots_and_Traps"           
 #  [7] "Seine_Danish_and_Other"    "Seine_Purse_Seine"         "Trawl_Bottom"              "Trawl_Midwater_or_Unsp"   
@@ -176,11 +172,11 @@ gfw_fix <- vessel_info %>%
     vessel_class_gfw %in% c("pots_and_traps") ~ "Pots_and_Traps",
     vessel_class_gfw %in% c("other_seines") ~ "Seine_Danish_and_Other",
     vessel_class_gfw %in% c("other_purse_seines", "purse_seines", "tuna_purse_seines", "seiners") ~ "Seine_Purse_Seine",
-    TRUE ~ vessel_class_gfw
+    TRUE ~ vessel_class_gfw 
    ))
 
 unique(gfw_fix$length_category) # [1] "24-50m"       "Over 50m"     "12-24m"       "6-12m"        NA             "Less than 6m"
-## weird there are small scale boats here... What is Yannicks definition of "industrial"? We might need to adopt that definition here. 
+
 
 ## lets fix the na lengths by filling them in with the most common length in that country
 test_lengths <- gfw_fix %>%

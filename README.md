@@ -1,5 +1,3 @@
-
-
 # README
 
 Repository for spatialising country-level fishing effort data from
@@ -33,10 +31,8 @@ shows the effort from IMAS allocated to GFW cells, proportionally.
 
 However, this methodology does not comprehensively map the IMAS effort
 data. There are some country, gear, and vessel length categories that
-are represented in the IMAS data that are not in the GFW data, and this
-method really only works "well" for the industrial sector, as the GFW
-data mostly has coverage from AIS reporting vessels, which are
-predominately industrial vessels.
+are represented in the IMAS data that are not in the GFW data, so these aren't 
+represented in this allocation. 
 
 ## Approach two
 

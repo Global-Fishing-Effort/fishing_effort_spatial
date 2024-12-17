@@ -30,11 +30,10 @@ source(here("R/dir.R"))
 
 # Summary
 
-We take GFW data and calculate for each gear type, vessel length, flag countryf, and EEZ, the proportion of catch occurring in that cell out of the total for those categories. 
+We take GFW data and calculate for each gear type, vessel length, flag country, and EEZ, the proportion of catch occurring in that cell out of the total for those categories. 
 
 Then we have total amounts of those categories from Rousseau et al. and we can multiply the total amounts by the proportions to allocate catch in each cell.
 
-Here we calculate the proportion rasters. 
 
 
 # Data Sources 
@@ -292,7 +291,7 @@ p <- ggplot(effort_by_sector, aes(x = x, y = y, fill = log(nom_fishing_hours+1))
   labs(x = "Longitude", y = "Latitude") +
   theme_minimal()
 
-ggsave(plot = p, here("prep/02_allocation_proportions/figs/prorate_by_sector.png"), height = 12, width = 12, dpi = 300, bg = "white")
+ggsave(plot = p, here("prep/02_allocation_proportions/figs/prorate_by_sector.png"), height = 12, width = 12, dpi = 300, bg = "white") # wow. these all look horrible! 
 
 
 ## look at higher res GFW data 
@@ -312,7 +311,7 @@ test_gfw_2 <- raw_gfw_df %>%
   ungroup() %>%
   rast(., type = "xyz")
 
-plot(log(test_gfw_2+1)) ## ok, so plotting the 0.01 resolution looks so much different. I think I will just go with the 0.1 degree resolution, because it will be SO MUCH easier computationally. It will take higher start up to get all of the variables we need, for every year. 
+plot(log(test_gfw_2+1)) 
 
 
 ```

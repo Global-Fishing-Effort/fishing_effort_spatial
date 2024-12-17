@@ -40,7 +40,7 @@ key <- gfw_auth()
 
 # Summary
 
-In this script we download spatialized apparent fishing effort from global fishing watch for all years (2012 - 2017): https://globalfishingwatch.org/data-download/datasets/public-fishing-effort
+In this script we download spatialized apparent fishing effort from global fishing watch for all years (2012 - 2017), with vessel identifiers (MMSI) using their API: https://globalfishingwatch.org/data-download/datasets/public-fishing-effort
 
 
 # Data Sources 
@@ -55,11 +55,11 @@ In this script we download spatialized apparent fishing effort from global fishi
 
 **Description**: API to extract apparent fishing effort per MMSI (vessel id)
 
-**Native data resolution**: 0.01 degree 
+**Native data resolution**: 0.01 and 0.1 degree 
 
 **Time range**: 2012 - 2023
 
-**Format**: API version 3
+**Format**: API version 2 and 3
 
 **Notes**: This data actually ends in 2023, however, we are only extracting to 2017 (as of now), since the effort data only contains data until 2017. 
 
@@ -85,7 +85,7 @@ rgn_list <- vessel_info %>%
   distinct(flag_gfw) %>%
   filter(!is.na(flag_gfw)) %>%
   filter(flag_gfw != "") %>%
- # filter(flag_gfw != "CHN") %>% # we will pull china separately bc the data is so large
+  filter(flag_gfw != "CHN") %>% # we will pull china separately bc the data is so large
   pull() %>%
   unique() # 166 flag countries
 
@@ -101,12 +101,10 @@ We download data by vessel id for each EEZ and year. We download it for the whol
 
 ```{r}
 
-# CAN_8493_2015_annual_effort_grid_highres.csv
 
 years <- c(2012:2017) # gfw is updated to 2023 now.. we will only pull until 2017 though 
 
-## need to figure out China
-# iterate through all EEZ codes for all regions to extract apparent fishing hours:
+# iterate through all EEZ codes for all regions (except CHN, which we split up below) to extract apparent fishing hours:
 for(i in rgn_list) {
   
    # i <- "CAN"
@@ -229,15 +227,6 @@ for(i in rgn_list) {
          group_by(year, x, y, eez_admin_rgn, geartype, vessel_id, sub_rgn_label, gfw_eez_id, flag, mmsi) %>%
          summarise(apparent_fishing_hours = sum(apparent_fishing_hours, na.rm = TRUE)) %>%
          ungroup() ## need to split into three separate pulls because sometimes the api will timeout for certain areas.. this puts less stress on the API
-   
-## run a test to see if data matches - it does!! So MMSI will be what we want, and I think it is still at 0.01 resolution?      
-#  test <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours/IDN_8492_2016_annual_effort_grid_highres.csv"))
-# sum(test$apparent_fishing_hours)
-# [1] 1626.35
-# sum(fishing_hours$apparent_fishing_hours)
-# [1] 1057.57 
-       
-       ## its a bit off for IDN?? I reran it though and everything seems fine. Maybe they just changed their methods with v3? 
       
     
     # specify column types before saving the csv so we can correctly concatenate the rows later
@@ -262,11 +251,9 @@ for(i in rgn_list) {
   }
 }
 
-## Next we will need to match to the vessel id lookup table, classify into length categories, and save a file for each eez, gear type, and length category? 
-
 ```
 
-To download the China data, we need to split into more than 3 data pulls. Let's try with 5 different time periods so we can alleviate pressure on the API. The files data pull is just so large! 
+To download the China data, we need to split into more than 3 data pulls. We split the data by pulling 2 times for each month (24 data pulls for each year) and then aggregate to the year level. The data pull is just too large to do all at once for the API. 
 
 ```{r}
 
@@ -378,7 +365,7 @@ Let's combine all of the data into one file with just x, y, year, mmsi, flag
 
 ```{r}
 
-years <- c(2013:2017)
+years <- c(2012:2017)
 
 for(year in years){
 
@@ -400,7 +387,7 @@ qs::qsave(all_effort_combined_y, file.path(rdsi_raw_dir, glue("global_fishing_wa
 ```
 
 
-Let's prep the v2 data we downloaded directly from GFW, rather than using the API. We probably won't use this data, since v3 is available through the API.
+Let's prep the v2 data we downloaded [directly from GFW](https://globalfishingwatch.org/data-download/datasets/public-fishing-effort), rather than using the API. We probably won't use this data, since v3 is available through the API.
 
 
 ```{r}
@@ -412,9 +399,7 @@ for(year in 2012:2020){
   
   this_year_df <- lapply(this_year_files, fread) %>% 
     bind_rows() 
-  #%>%
-  # left_join(eez_lookup, by = c("cell_ll_lon" = "x", "cell_ll_lat" = "y"))
-  
+
   this_year_df_prep <- this_year_df %>%
     mutate(year = year) %>%
     dplyr::select(-date) %>%
@@ -450,6 +435,7 @@ test %>% distinct(mmsi, fishing_hours_2020) %>% pull(fishing_hours_2020) %>% sum
 
 
 ```
+
 Compare GFW MMSI and fleet data and Rousseau et al. data
 
 ```{r}
@@ -496,7 +482,7 @@ unique(imas_effort$Country)
 
 imas_idn <- imas_effort %>% 
   filter(Sector == "I",
-         Country == "IDN", # is this flag country though? README says "fishing country" so I think it is flag country? That's ok... i think we could still get the info we need from the spatialized version? I.e. hours of effort per EEZ and flag country?
+         Country == "IDN", 
          Year == 2015) 
 
 ## compare imas to GFW effort hours
@@ -505,6 +491,6 @@ sum(imas_idn$EffActive) # 20608149271
 sum(imas_idn$NVActive) # 43705.35
 length(unique(test_mmsi$vessel_id)) # 40
 
-## does not match well at all for Indonesia! Even for industrial fishing sector
+## does not match well at all for Indonesia! Even for industrial fishing sector. This is expected, as GFW data IS NOT comprehensive. 
 
 ```
