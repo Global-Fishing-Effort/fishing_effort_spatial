@@ -5,6 +5,7 @@ date: "2024-12-11"
 ---
 
 # Summary
+
 Here we combine the data created in the previous folders (01 and 03) so that we can feed it into a prediction model. 
 
 ```{r setup, include=FALSE}
@@ -22,7 +23,7 @@ grid <- read.csv(here("data/model_features/global_grid.csv"))
 
 ```{r}
 
-## read in Rousseau effort 
+## read in Rousseau country level effort with gears that match to GFW data 
 rousseau_eff <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
     group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
     summarize(
@@ -40,7 +41,7 @@ process_env_data <- function(year) {
     dplyr::select(pixel_id, chl_mg_per_m3_mean, chl_mg_per_m3_sd)
   
   # Load SST data
-  if(year == 2015){
+  if(year == 2015){ 
   sst <- read.csv(here("data/model_features/ncdcOisst21Agg_LonPM180/errdap_sst_2011_2015.csv")) %>%
     filter(year == !!year) %>%
     dplyr::select(pixel_id, sst_c_mean, sst_c_sd)
@@ -70,15 +71,15 @@ spatial_data <- read.csv(here("data/model_features/gfw_static_spatial_measures.c
 
 # Load mesopelagic zone data
 meso_data <- read.csv(here("data/model_features/mesopelagic_zones.csv")) %>%
-  dplyr::select(pixel_id, meso_region)
+  dplyr::select(pixel_id, meso_region) # GC - this data is wrong... i need to rerun the extraction. 18/12/2024
 
-test <- meso_data %>% 
-  group_by(pixel_id) %>%
-  summarise(count = n_distinct(meso_region)) # ok, that's the problem. The meso regions have pixels which have been given multiple regions. We need to fix that. 
+# test <- meso_data %>% 
+#   group_by(pixel_id) %>%
+#   summarise(count = n_distinct(meso_region)) # ok, that's the problem. The meso regions have pixels which have been given multiple regions. We need to fix that I think
   # right_join(grid)
   
-  setdiff(unique(meso_data$pixel_id), unique(grid$pixel_id))
-  setdiff(unique(grid$pixel_id), unique(meso_data$pixel_id))
+  # setdiff(unique(meso_data$pixel_id), unique(grid$pixel_id))
+  # setdiff(unique(grid$pixel_id), unique(meso_data$pixel_id))
 
 # Load EEZ and FAO region data
 eez_data <- read.csv(here("data/model_features/eez/eez.csv")) %>%
@@ -111,8 +112,8 @@ for(yr in years) {
   year_data <- effort_props %>%
     mutate(sector = "I") %>% 
     # Add total effort for each combination
-    left_join(total_efforts, by = c("flag_fin", "year", "gear", "length_category")) %>% # there are gaps here.. e.g., CHN doesn't have any vessels >50m in the Rousseau data, but does in GFW data - I actually don't think this matters though since we are allocating within these grouping represented in the Rousseau data. 
-    left_join(spatial_data, by = c("x" = "lon", "y" = "lat")) %>% # why are there some NAs for the spatial data? Land values in GFW. Figure out how to deal with this. 
+    left_join(total_efforts, by = c("flag_fin", "year", "gear", "length_category")) %>% # there are gaps here.. e.g., CHN doesn't have any vessels >50m in the Rousseau data, but does in GFW data - I actually don't think this matters though since we are predicting within the grouping represented in the Rousseau data. 
+    left_join(spatial_data, by = c("x" = "lon", "y" = "lat")) %>% # why are there some NAs for the spatial data? Land values in GFW. Need to figure out how to deal with this. 
     left_join(env_data, by = "pixel_id") %>%
     # Add categorical spatial variables
    #  left_join(distinct(meso_data), by = "pixel_id") %>% # some duplicating happening here? Ignoring for now, because we need to fix this in the previous folder scripts. 

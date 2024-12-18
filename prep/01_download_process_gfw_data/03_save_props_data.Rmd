@@ -32,11 +32,7 @@ source(here("R/dir.R"))
 
 We take GFW data and calculate for each gear type, vessel length, flag country, the proportion of catch occurring in that cell out of the total for those categories. 
 
-We also proportionally allocate GFW trawling data into bottom and mid-water trawls. 
-
-Then we have total amounts of those categories from Rousseau et al. and we can multiply the total amounts by the proportions to allocate catch in each cell.
-
-Here we calculate the proportion rasters. 
+We also split the trawling category by proportionally allocating GFW trawling data into bottom and mid-water trawls. 
 
 
 # Data Sources 

@@ -6,7 +6,7 @@ date: "2024-12-11"
 
 # Summary
 
-We use the GAM model fit in the previous script to predict the proportion of fishing effort occuring in each cell per our categorical variables (gear, length, flag country). To do this, we create a dummy dataset where any flag country can theoretically fish in any cell, and predict for that. In theory, the model should predict values to each cell where fishing is most likely.. 
+We use the GAM model fit in the previous script to predict the proportion of fishing effort occurring in each cell per our categorical variables (gear, length, flag country). To do this, we create a dummy dataset where any flag country can theoretically fish in any cell, and predict for that. In theory, the model should predict proxy-intensity values to each cell where fishing is most likely.. 
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -137,16 +137,14 @@ flag_levels_in_model <- gsub("^flag_fin", "", grep("flag_fin", names(model$coeff
   
  for(flag in unique(imas_data$flag_fin)){
    
-   if(!(flag %in% flag_levels_in_model)){
-     
+   if(!(flag %in% flag_levels_in_model)){ # I think this might be problematic; there are flags in the IMAS data which are not in the GFW data. If we can't predict for those flags, what do we do for those? Use some sort of larger regional model instead? 
      next()
    }
     
   flag_data <- imas_data %>% 
     filter(year == yr, 
            flag_fin == flag) %>%
-    mutate(row_n = row_number())
-  # ok need to loop through these somehow? 
+    mutate(row_n = row_number()) # now we'll loop through each of the combinations of gear, flag, vessel length and year.
   
   for(i in 1:nrow(flag_data)){
   
@@ -189,7 +187,7 @@ flag_levels_in_model <- gsub("^flag_fin", "", grep("flag_fin", names(model$coeff
     chunk_end <- min(j * chunk_size, nrow(pred_df))
     chunk_indices <- chunk_start:chunk_end
     
-  predicted_props <- mgcv::predict.gam(model, newdata = pred_df[chunk_indices,], type = "response") # need to make sure at the end the predicted props add to one? 
+  predicted_props <- mgcv::predict.gam(model, newdata = pred_df[chunk_indices,], type = "response") # should the predicted proportions add to one for each category? 
   
   # Ensure predictions are valid proportions
   predicted_props <- pmax(0, pmin(1, predicted_props))
@@ -258,19 +256,17 @@ all_predictions_df <- all_predictions %>%
       filter(flag_fin == "HKG", year == 2017, gear == "Trawl_Midwater_or_Unsp", length_category == "Over 50m") %>%
       left_join(global_grid) %>%
       dplyr::select(lon, lat, predicted_proportion) %>%
-      rast(., type = "xyz") # LOL ok so this obviously didn't work. The predictions are horrible. 
+      rast(., type = "xyz") # LOL ok so this obviously didn't work. It is predicting across the whole globe. And looking at other countries/gears/vessel lengths they all look really similar. So maybe the non-gfw data is influencing the predictions more than the actual fishing data? Should we run individual models for each flag country/gear/vessel length? 
+    plot(test)
 
+    test <- normalized_predictions %>%
+      filter(flag_fin == "HKG", year == 2017, gear == "Trawl_Midwater_or_Unsp", length_category == "Over 50m") %>%
+    dplyr::select(pixel_id, fishing_hours) %>%
+      left_join(global_grid) %>%
+      dplyr::select(lon, lat, fishing_hours) %>%
+      rast(., type = "xyz")
+    plot(test)
     
-    # test <- normalized_predictions %>%
-    #  # filter(gear == "Gillnets", length_category == "24-50m") %>%
-    # dplyr::select(pixel_id, fishing_hours) %>%
-    #   left_join(global_grid) %>%
-    #   dplyr::select(lon, lat, fishing_hours) %>%
-    #   rast(., type = "xyz")
-    # plot(test)
-    
-    ## I tested with flag USA, dredges, 12-24m and this looks odd because there is very little data in GFW to learn from... I think
-    # ok nevermind, it seems like they all are predicting basically the same??? Tried with CHN, bottom trawling and it looks horrible. 
     ## lets look at raw GFW data 
     test_gfw <- qs::qread(file.path(rdsi_dir, "prep/gfw_props/deg_half/all_effort_gear_length_props_2017.qs")) %>%
       filter(flag_fin == "HKG", gear == "Trawl_Midwater_or_Unsp", length_category == "24-50m") %>% 
@@ -279,7 +275,7 @@ all_predictions_df <- all_predictions %>%
       dplyr::select(x, y, fishing_hours) %>%
       rast(., type = "xyz")
     
-    ## ok so we have a problem for when there is NO (or very little) GFW data for a category that is in IMAS data. In these cases, the predictions will likely be really bad, because there is no data to inform the model... how do we deal with this? 
+
     # 
     # test_gfw_raw <- qs::qread(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v2_aggregated/all_effort_2015.qs")) %>%
     #   filter(flag_gfw == "USA") %>%

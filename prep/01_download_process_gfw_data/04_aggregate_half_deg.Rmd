@@ -30,7 +30,7 @@ source(here("R/dir.R"))
 
 # Summary
 
-We aggregate the gfw data from 0.1 to 0.5 degree cells. To do this, we have to run really similar code to that of 03 script, because we aggregate first and then change the gear types. 
+We aggregate the GFW data from 0.1 to 0.5 degree cells. To do this, we have to run really similar code to that of 03 script, because we aggregate first and then change the gear types to match the IMAS data.
 
 # Data Sources 
 

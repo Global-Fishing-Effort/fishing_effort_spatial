@@ -172,9 +172,12 @@ static_spatial_measures %>%
 
 Use Marine Region's [Mesopelagic ecoregions of the world's oceans](https://www.sciencedirect.com/science/article/pii/S0967063717301437?via%3Dihub#ack0005)
 
+ - NOTE: 18/12/2024 - need to rerun this. Currently we are getting cells which have multiple meso regions in them for some reason. We only want 1 meso region per cell. 
+  - maybe there is a way to rasterize the same way we do with the EEZ and FAO (see code chunks below)
+
 ```{r}
 
-meso <- st_read(glue("{data_directory}/marine_regions/test/"))
+meso <- st_read(glue("{data_directory}/marine_regions/mesopelagiczones/"))
 
 meso_ids <- meso %>%
   st_drop_geometry() %>%
@@ -188,7 +191,7 @@ st_is_valid(meso) # need to fix these?
 st_bbox(meso)
 
 meso_fix <- meso %>%
-  st_wrap_dateline(., options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% # ok looks fine here
+  st_wrap_dateline(., options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% # not sure why we have to do this, but it was in the code from mcdonald et al. 
  st_transform("+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs") %>% 
   st_make_valid() 
 
