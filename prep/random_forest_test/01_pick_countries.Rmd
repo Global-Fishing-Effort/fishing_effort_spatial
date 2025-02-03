@@ -58,9 +58,12 @@ country_coverage <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/paolo
 colnames(country_coverage) # perc_dark_fishing is the variable which described the % of fishing in an EEZ which is NOT tracked by GFW. So we will want to choose countries with a low %
 
 good_coverage_iso <- country_coverage %>% 
-  dplyr::select(eez_iso3, perc_dark_fishing) %>%
-  filter(perc_dark_fishing < 50) %>% 
-  pull(eez_iso3)
+  dplyr::select(eez_iso3, perc_dark_fishing) 
+write.csv(country_coverage, here("data/int/gfw_country_coverage.csv"), row.names = FALSE)
+
+# %>%
+#   filter(perc_dark_fishing < 50) %>% 
+#   pull(eez_iso3)
 
 ## ISL, FRO, SGP, ARG, VUT, NOR, MUS, GGY, HRV, DNK, ESP, LVA, NLD, BEL, IRL, SJM, FRA, SWE, LTU, GBR, PRT, ASM, FLK, ITA, ZAF, URY, GUF, FJI, NCL, SVN, DEU all have perc_dark_fishing <50
 
