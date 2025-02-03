@@ -59,7 +59,7 @@ colnames(country_coverage) # perc_dark_fishing is the variable which described t
 
 good_coverage_iso <- country_coverage %>% 
   dplyr::select(eez_iso3, perc_dark_fishing) 
-write.csv(country_coverage, here("data/int/gfw_country_coverage.csv"), row.names = FALSE)
+write.csv(good_coverage_iso, here("data/int/gfw_country_coverage.csv"), row.names = FALSE)
 
 # %>%
 #   filter(perc_dark_fishing < 50) %>% 
