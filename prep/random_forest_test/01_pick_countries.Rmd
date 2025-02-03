@@ -58,7 +58,8 @@ country_coverage <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/paolo
 colnames(country_coverage) # perc_dark_fishing is the variable which described the % of fishing in an EEZ which is NOT tracked by GFW. So we will want to choose countries with a low %
 
 good_coverage_iso <- country_coverage %>% 
-  dplyr::select(eez_iso3, perc_dark_fishing) 
+  dplyr::select(eez_iso3, perc_dark_fishing) %>%
+  arrange(perc_dark_fishing)
 write.csv(good_coverage_iso, here("data/int/gfw_country_coverage.csv"), row.names = FALSE)
 
 # %>%
