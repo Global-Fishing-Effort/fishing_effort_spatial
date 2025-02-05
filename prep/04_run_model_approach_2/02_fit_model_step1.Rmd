@@ -207,7 +207,7 @@ for(row in 1:nrow(unique_combinations)){
  # length = "24-50m"
  # yr = 2017
   
-  if(file.exists(glue(here("data/output/logistic_regression_outputs/fitted_model_{flag}_{gear_type}_{length}_{yr}.rds")))){
+  if(file.exists(glue(file.path(rdsi_dir, "data_storage/prep/logistic_regression_outputs/fitted_model_{flag}_{gear_type}_{length}_{yr}.rds")))){
     cat("exists... next")
     next()
   }
@@ -266,7 +266,7 @@ model <- gam(
 toc() # took 2.5 minutes for USA, seine, over 50m, 2017; took 2.5 mins for ISL, midwater trawls, 24-50m, 2017
 
 # Save model
-saveRDS(model, glue(here("data/output/logistic_regression_outputs/fitted_model_{flag}_{gear_type}_{length}_{yr}.rds")))
+saveRDS(model, glue(file.path(rdsi_dir, "data_storage/prep/logistic_regression_models/fitted_model_{flag}_{gear_type}_{length}_{yr}.rds")))
 
 }
       
