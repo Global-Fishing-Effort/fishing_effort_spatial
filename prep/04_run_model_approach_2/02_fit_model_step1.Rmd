@@ -30,7 +30,7 @@ source(here("R/dir.R"))
 
 ```{r}
 
-
+# trial cami
 # Load prepared data
 model_data <- readRDS(here("data/model_features/prepared_data.rds")) %>%
   mutate(eez_id = as.factor(eez_id),
