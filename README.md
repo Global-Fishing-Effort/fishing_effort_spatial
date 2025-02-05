@@ -191,7 +191,7 @@ linked above.
 -   We can use all of this information to run the same (or a similar)
     model to predict fishing effort.
 
-### Global Fishing Watch
+### Global Fishing Watch data
 
 **Reference**: 1. Global Fishing Watch. [2024].
 www.globalfishingwatch.org\
