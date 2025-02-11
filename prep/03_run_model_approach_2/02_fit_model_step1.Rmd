@@ -190,12 +190,12 @@ model_formula <- formula(
     chl_mg_per_m3_sd +
     sst_c_mean + 
     sst_c_sd +
-    wind_speed_mean + 
-    wind_speed_sd +
-    enso_index_mean + 
+    wind_speed_ms_mean + 
+    wind_speed_ms_sd +
+    enso_index_mean + # el nino data 
     enso_index_sd + 
     # Year effect
-   s(year, k=2) # smooth term for year; maybe not necessary? Fishing effort isn't necessarily linear so keeping for now. 
+   s(year, k=2) # smooth term for year; maybe not necessary? Fishing effort isn't necessarily linear so keeping for now. Does this slow down modeling? 
 )
 
 elnino <- read.csv(here("data/model_features/enso_index.csv"))
@@ -218,42 +218,26 @@ if(pixel_size == 1){
   hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
     rbind(., get_historical_total_fishing_hours(2016)) %>%
     rbind(., get_historical_total_fishing_hours(2017)) %>%
-    mutate(log_total_fishing_hours = log1p(total_fishing_hours))
+    mutate(log_total_fishing_hours = log1p(total_fishing_hours)) %>%
+    filter(total_fishing_hours > 0)
   
-  flags <- unique(hist_fish_data$flag_fin)
+flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 167 of them
 
-  
-  
 unique_combinations <- hist_fish_data %>%
   distinct(year, flag_fin, gear, length_category) %>% # we only want to make models for these combinations since these are what is in the IMAS/FAO data 
   mutate(row_n = row_number())
 
-test_aus <- unique_combinations %>% filter(flag_fin == "AUS")
-  
+# test_aus <- unique_combinations %>% filter(flag_fin == "AUS") # ok, AUS for example has 128 different combinations that 1 model will be able to predict. 128*46229 = ~6 million rows being fed into the model. Will this work?? Let's try! 
+#   
+# 
+# setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
 
-# for(flag in flags){
-#   for(gear_type in gears){
-#     for(yr in years){
-#       for(length in lengths){
-        
-for(row in 1:nrow(unique_combinations)){
+for(flag in flags){
+       
+  # flag = "ISL"
   
-#  row = 1 
   
-  data <- unique_combinations %>%
-    filter(row_n == row)
-  
-  flag = pull(data, flag_fin)
-  gear_type = pull(data, gear)
-  length = pull(data, length_category)
-  yr = pull(data, year)
-  
- # flag = "ISL"
- # gear_type = "Trawl_Midwater_or_Unsp"
- # length = "24-50m"
- # yr = 2017
-  
-  if(file.exists(glue(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_{flag}_{gear_type}_{length}_{yr}.rds")))){
+  if(file.exists(glue(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_{flag}.rds")))){
     cat("exists... next")
     next()
   }
@@ -264,69 +248,58 @@ for(row in 1:nrow(unique_combinations)){
 message("Fitting logistic regression model...")
   
 
+env_grid <- env_data %>% 
+  dplyr::select(lon, lat) %>% distinct()
+
   model_data_flag <- model_data %>%
     dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
-    filter(flag_fin == flag,
-           gear == gear_type, 
-           length_category == length, 
-           year == yr) 
+    filter(flag_fin == flag)
+
+  # test <- model_data_flag %>%
+  #    distinct(year, flag_fin, gear, length_category) # oof... GFW Australia only has data for at least 44 out of 128 categories in rousseau...
+
+  distinct_cats <- model_data_flag %>%
+    distinct(year, flag_fin, gear, length_category) 
   
-  
-# OK we need to make sure that the data which we feel into the model has cells which have NO fishing effort in them. Hence the way we are expanding the grid below. This could cause problems computationally, given the sheer number of rows that will be produced by this, so I'm not sure this is the best way to go about this. I wonder if we should loop through each gear, length, and year combination instead? Trying to run the model with 0 fishing presence cells gives me this error: Error in qr.default(G$X) : too large a matrix for LINPACK
-
-
-env_grid <- env_data %>% filter (year == yr) %>%
-  dplyr::select(lon, lat, year) %>% distinct()
-
-full_grid <- crossing(env_grid, flag_fin = flag, gear = gear_type, length_category = length)
+full_grid <- crossing(env_grid, distinct_cats)
 
 # Join with environmental data (already included in full_grid)
 full_data <- full_grid %>%
-  left_join(env_data, by = c("lon", "lat", "year"))
+  left_join(env_data, by = c("lon", "lat", "year")) %>%
+  left_join(model_data_flag) %>%  # Join with fishing presence data
+    mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
+  dplyr::select(-pixel_id) %>%
+    left_join(hist_fish_data) %>%
+    mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
+         log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours)) # there are some combinations that are not in the IMAS data but in the GFW data, so we'll just put total fishing hours as 0 for these cases... This will just predict 0 for those (i think?), which is fine, since we technically don't have to predict anything for these anyways. 
 
-# Join with fishing presence data
-full_data <- full_data %>%
-  left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category"))
+# what about if they are in IMAS data but not in GFW? This could be problematic! 
 
-
-full_data <- full_data %>%
-  mutate(presence = ifelse(is.na(presence), 0, presence))
-
-full_data <- full_data %>%
-  left_join(hist_fish_data) %>%
-  mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
-         log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours)) # there are some combinations that are not in the IMAS data but in the GFW data, so we'll just put total fishing hours as 0 for these cases... This will just predict 0 for those, which is fine, since we technically don't have to predict anything for these anyways. 
-
-# what about if they are in IMAS data but not in GFW? 
-
-ctrl <- list(nthreads = 20) # specify cores; for some reason >=24 cores didn't work, maybe a memory issue
+ctrl <- list(nthreads = 24) # specify cores; for some reason >=24 cores didn't work, maybe a memory issue
 
 tic()
-model <- gam(
+model <- bam( # trying bam because it is supposed to be good for "very large datasets"
   model_formula,
   data = full_data,
   na.action = na.exclude,
-  control = ctrl, # I think this does parallelization? 
+ control = ctrl, # I think this does parallelization? 
   family = binomial(link = "logit")
 )
 toc() # took 2.5 minutes for USA, seine, over 50m, 2017; took 2.5 mins for ISL, midwater trawls, 24-50m, 2017
+## took ~4 mins for flag country Australia using 20 cores (i think using that many cores...?). 
 
 # Save model
-saveRDS(model, glue(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_{flag}_{gear_type}_{length}_{yr}.rds")))
+saveRDS(model, glue(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_{flag}.rds")))
 
 }
-      
-  #       }
-  #     }
-  #   }
-  # }
+
 
 # Print model summary
 summary(model)
 
 
 
-# randomForest() # random forest instead of logistic regression????
+# randomForest() # random forest instead of logistic regression???? Or maybe try a regular logistic regression using stats::glm without smoothing parameters. maybe those would be faster?
 
 ```
 

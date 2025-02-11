@@ -56,7 +56,8 @@ for(yr in years) {
     dplyr::select(
       # Response
       prop_fishing_hours_cell,
-      
+      lon = x, 
+      lat = y,
       # Categorical predictors
       flag_fin, gear, length_category,
       
