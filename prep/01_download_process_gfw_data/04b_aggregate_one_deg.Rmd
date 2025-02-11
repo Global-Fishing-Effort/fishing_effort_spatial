@@ -25,7 +25,6 @@ library(qs)
 
 source(here("R/dir.R"))
 
-
 ```
 
 # Summary
@@ -46,7 +45,7 @@ We aggregate the GFW data from 0.1 to 1 degree cells. To do this, we have to run
 
 **Reference**: Rousseau, Y., Blanchard, J.L., Novaglio, C. et al. A database of mapped global fishing activity 1950–2017. Sci Data 11, 48 (2024). https://doi.org/10.1038/s41597-023-02824-6
 
-**Native resolution**: 0.5 degrees, country level 
+**Native resolution**: Country level 
 
 
 # Methods 
@@ -87,13 +86,13 @@ test_lengths <- gfw_vessel_registry %>%
   dplyr::select(flag_gfw, most_common_length = length_category)
 
   
-for(y in 2012:2017){
+for(yr in 2013:2017){
 
- #  y = 2012
+ #  yr = 2012
     
 eez_rgns <- qread(here("data/raw/spatial/eez_rast_csv_0.1.qs"))
 
-gfw_year <- read.csv(file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent_fishing_hours_mmsi/v2_aggregated/all_effort_{y}.csv"))) %>%
+gfw_year <- read.csv(file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent_fishing_hours_mmsi/v2_aggregated/all_effort_{yr}.csv"))) %>%
   rename(flag = flag_gfw) %>%
     rename(x = cell_ll_lon, y = cell_ll_lat) %>%
   left_join(gfw_vessel_registry) %>%
@@ -106,20 +105,16 @@ gfw_year <- read.csv(file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent
             nv = n_distinct(mmsi)) %>% 
   ungroup()
 
-# Function to round to nearest 0.5
-round_to_half <- function(x) {
-  round(x * 2) / 2
-}
 
 # Aggregate from 0.1 to 0.5 degree cells
 gfw_year_aggregated <- gfw_year %>%
-  # Round coordinates to nearest 0.5 degree
-  mutate(
-    x_05 = round_to_half(x),
-    y_05 = round_to_half(y)
+  # Round coordinates to 1 degree
+    mutate(
+    x_1 = round(x),
+    y_1 = round(y)
   ) %>%
   # Group by rounded coordinates and existing grouping variables
-  group_by(x_05, y_05, flag_fin, vessel_class_gfw, length_m_gfw) %>%
+  group_by(x_1, y_1, flag_fin, vessel_class_gfw, length_m_gfw) %>%
   # Aggregate numeric columns
   summarise(
     fishing_hours = sum(fishing_hours, na.rm = TRUE),
@@ -130,14 +125,14 @@ gfw_year_aggregated <- gfw_year %>%
   ) %>%
   ungroup() %>%
   # Rename coordinates back to original names if needed
-  rename(x = x_05, y = y_05)
+  rename(x = x_1, y = y_1)
     
 
 # test <- gfw_year_aggregated %>%
 #   group_by(x, y) %>%
 #   summarise(fishing_hours = sum(fishing_hours, na.rm = TRUE)) %>%
 #   ungroup() %>%
-#   rast(., type ="xyz") # cool that worked! 
+#   rast(., type ="xyz") # cool that worked!
 
 gfw_year_new_gears <-  gfw_year_aggregated %>% 
   mutate(length_category = case_when(
@@ -239,7 +234,7 @@ gfw_fix_trawl <- gfw_gear_fix %>%
             tonnage_gt_gfw = sum(tonnage_gt_gfw, na.rm = TRUE),
             nv = sum(nv, na.rm = TRUE)) %>% ## just sum all of these categories for now
   ungroup() %>%
-  left_join(rousseau_trawl_props %>% filter(year == y), by = c("flag_fin" = "country")) %>%
+  left_join(rousseau_trawl_props %>% filter(year == yr), by = c("flag_fin" = "country")) %>%
   mutate(
     # bottom trawls
          bt_fishing_hours = fishing_hours*prop_bottom_trawls,
@@ -279,7 +274,7 @@ gfw_fix_props <- gfw_fix %>%
          prop_tonnage_gt_cell = tonnage_gt_gfw/tonnage_gt_gfw_global,
          prop_nv_cell = nv/nv_global) %>%
   filter(!is.na(prop_fishing_hours_cell)) %>% # filter out any NA because there is no effort in those cells (these are the ones where there was either no bottom or mid trawls based on props)
-  left_join(eez_rgns) %>% # this join really fucks speed up...
+  left_join(eez_rgns) %>% # this join really messes speed up...
   left_join(eez_lookup) %>%
     mutate(flag_fin = ifelse(flag_fin == ""|flag_fin == "UNK" | is.na(flag_fin), iso_sov1, flag_fin)) %>% # fill in flag with where the fishing occurs, if it is missing. 
   mutate(flag_name = countrycode(sourcevar = flag_fin, origin = "iso3c", destination = "country.name")) %>%
@@ -288,12 +283,12 @@ gfw_fix_props <- gfw_fix %>%
   # filter(fishing_hours > 0) # if you filter out 0 fishing hours, there are no NAs. I'll keep 0's in for now
   dplyr::select(-mrgid_sov1, -iso_ter1, -geoname, -fishing_hours_global, -nv_global, -engine_power_kw_gfw_global, -tonnage_gt_gfw_global) %>%
   dplyr::select(x, y, everything()) %>%
-  mutate(year = y)
+  mutate(year = yr)
 
-# sum(gfw_year$fishing_hours) - sum(gfw_fix_props$fishing_hours) # 2012 is off by ~80k hours??
+# sum(gfw_year$fishing_hours) - sum(gfw_fix_props$fishing_hours) # 2012 is off by ~86k hours??
 
 
-qs::qsave(gfw_fix_props, file.path(rdsi_dir, glue("prep/gfw_props/deg_half/all_effort_gear_length_props_{y}.qs")))
+qs::qsave(gfw_fix_props, file.path(rdsi_dir, glue("prep/gfw_props/deg_one/all_effort_gear_length_props_{yr}.qs")))
 
   }
 

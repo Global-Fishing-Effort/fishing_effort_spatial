@@ -322,3 +322,27 @@ test <- meso_lookup_id %>%
 write.csv(meso_lookup_id, here("data/model_features/mesopelagiczones/mesopelagiczones.csv"), row.names = FALSE)
 
 ```
+
+
+Prep el nino data
+
+```{r}
+elnino <-  read.table(url("https://psl.noaa.gov/data/correlation/oni.data"),skip=1,nrows=72) %>%
+    as_tibble() %>%
+    rename(year = V1) %>%
+    pivot_longer(-year) %>%
+    mutate(month = stringr::str_remove_all(name,"V") %>%
+             as.numeric() - 1,
+           date = lubridate::ymd(glue::glue("{year}-{month}-1")),
+           year = lubridate::year(date)) %>%
+    dplyr::select(year,enso_index = value) %>%
+    filter(year >= 2015,
+           year <= 2021)%>%
+    group_by(year) %>%
+    summarize(across(everything(),list(mean = ~mean(.,na.rm=TRUE),
+                                       sd = ~sd(.,na.rm=TRUE)))) %>%
+    ungroup()
+
+write.csv(elnino, here("data/model_features/enso_index.csv"), row.names = FALSE)
+```
+
