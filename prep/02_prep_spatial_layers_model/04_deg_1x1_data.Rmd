@@ -1,0 +1,522 @@
+---
+title: "Check data from paper"
+author: "Gage Clawson (IMAS)"
+date: '`r format(Sys.time(), "%m/%d/%Y")`'
+output: 
+  pdf_document: 
+    number_sections: yes
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: console
+---
+
+# Summary 
+
+Check 1x1 degree data downloaded from McDonald et al. 2024
+
+```{r}
+# Load all necessary packages
+library(tidyverse)
+library(sf)
+library(stars)
+library(rerddap)
+library(rnaturalearth)
+library(glue)
+library(scico)
+library(lubridate)
+library(furrr)
+library(here)
+library(terra)
+library(fasterize)
+library(raster)
+library(janitor)
+
+source(here::here("prep/02_prep_spatial_layers_model/_functions_data_wrangling_erddap.R"))
+source(here("R/dir.R"))
+
+# Set the data directory. This specifies the folder in our drive where the data can be found. 
+
+data_directory <- rdsi_raw_dir
+
+theme_set(theme_minimal() +
+            theme(axis.title.y = element_text(angle = 0,vjust=0.5),
+                  strip.background = element_blank(),
+                  strip.text.y = element_text(angle=0),
+                  strip.text.y.right = element_text(angle=0),
+                  strip.text.y.left = element_text(angle=0),
+                  panel.grid = element_blank(),
+                  panel.background = element_blank(),
+                  panel.grid.minor = element_blank(),
+                  panel.grid.major = element_blank()))
+
+# Set mapping projection
+map_projection <- "+proj=eqearth +datum=WGS84 +wktext"
+# Create global land sf object for mapping
+world_plotting <- ne_countries(scale = "small", returnclass = "sf")  %>%
+  dplyr::select(geometry)
+
+# Get high-res ocean data
+ocean <- ne_download(scale = 50, type = 'ocean', category = 'physical',returnclass = "sf") %>%
+  dplyr::select(geometry)
+
+```
+
+# Defining our global grid
+
+```{r}
+pixel_size <- 1
+
+# Create polygon rectangle of globe
+# This will serve as basis of grid
+global_polygon_sf <-
+  tibble(lon = c(-180,-180,180,180,-180),
+       lat = c(-90,90,90,-90,-90))%>%
+  as.matrix() %>%
+  list(.) %>%
+  st_polygon() %>%
+  st_sfc(crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
+  st_as_sf()
+
+# global_polygon_sf_small <- tibble(lon = c(-5,-5,5,5,-5),
+#                                   lat = c(-5,5,5,-5,-5))%>%
+#   as.matrix() %>%
+#   list(.) %>%
+#   st_polygon() %>%
+#   st_sfc(crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
+#   st_as_sf()
+
+# Start with global ocean
+starting_shape <- ocean
+#starting_shape <- global_polygon_sf_small
+
+data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
+  st_as_sf(wkt = "geometry_wkt",
+           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+
+```
+
+
+```{r}
+
+chl_df <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv"))
+unique(chl_df$year) # only have 2016-2021
+
+sst_df <- read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv"))
+unique(sst_df$year) # only have 2016-2021
+
+wind_df <- read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv"))
+unique(wind_df$year) # only have 2016-2021
+
+rec_df <- read.csv(here("data/model_features/deg_1_x_1/gfw_reception_quality.csv")) # static layer
+
+spatial_df <- read.csv(here("data/model_features/deg_1_x_1/gfw_static_spatial_measures.csv")) # static layers depth, distance to shore, distance to port. 
+
+grid_df <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv")) # 1 by 1 grid
+
+oceans_df <- read.csv(here("data/model_features/deg_1_x_1/oceans.csv")) 
+unique(oceans_df$ocean) # i guess this is just what ocean it is? Is this the mesopelagic data? 
+#  [1] "Southern Ocean"                           ""                                         "Arctic Ocean"                            
+#  [4] "South Pacific Ocean"                      "South Atlantic Ocean"                     "Indian Ocean"                            
+#  [7] "South China and Easter Archipelagic Seas" "North Atlantic Ocean"                     "North Pacific Ocean"                     
+# [10] "Mediterranean Region"                     "Baltic Sea"    
+
+
+
+```
+
+
+Need to grab 2015 data for non-static data (sst, wind, chl). 
+
+```{r}
+test_sst <- read.csv(file.path(data_directory, "erddap/ncdcOisst21Agg_LonPM180/ncdcOisst21Agg_LonPM180_2023-12-31.csv")) %>%
+  dplyr::select(longitude, latitude, sst) %>%
+  rast(., type = "xyz") # ok we downloaded it in 0.25 by 0.25 degrees
+
+
+test_chl <- read.csv(file.path(data_directory, "erddap/erdMH1chlamday/erdMH1chlamday_2013-06-16.csv")) %>%
+  dplyr::select(longitude, latitude, chlorophyll) %>%
+  rast(., type = "xyz") # not sure of download resolution, but it is smaller than 1 by 1 
+
+test_wind <- rast(file.path(data_directory, "remss/wind-ccmp/wind_2024-08-31.nc")) # downloaded it in like ~0.25 degrees
+
+```
+
+Prep 2015 SST, CHL, data and append to data in model features folder 
+
+```{r}
+## start with prepping 1 by 1 sst data for 2015 only. Then we will appead it onto the existing data downloaded from the paper
+# Spatially aggregate SST and SST anomaly data
+spatially_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
+                                        spatial_aggregation = data_grid,
+                                        years = 2014, # choose years you want to run
+                                        run_parallel = TRUE)
+
+
+# temporally aggregate SST and SST anomaly data
+
+temporally_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
+                                         temporal_aggregation = "year",
+                                         run_parallel = TRUE,
+                                         years_per_chunk = 5)
+
+old_sst <- read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv"))
+
+test <- old_sst %>% filter(year == 2016) # ok cool
+
+new_sst <- read.csv("data/model_features/deg_1_x_1/ncdcOisst21Agg_LonPM180/errdap_2015_2015.csv")
+
+rewrite_sst <- rbind(new_sst, old_sst)
+
+write.csv(rewrite_sst, here("data/model_features/deg_1_x_1/errdap_sst.csv"), row.names = FALSE)
+
+
+# Spatially aggregate chl data for 2015
+spatially_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
+                                        spatial_aggregation = data_grid,
+                                        years = 2015, # choose years you want to run
+                                        run_parallel = FALSE)
+
+temporally_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
+                                         temporal_aggregation = "year",
+                                         run_parallel = TRUE,
+                                         years_per_chunk = 5)
+
+old_chl <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv"))
+
+new_chl <- read.csv("data/model_features/deg_1_x_1/erdMH1chlamday/errdap_2015_2015.csv")
+
+test <- old_chl %>% filter(year == 2016) # ok cool
+
+
+rewrite_chl <- rbind(new_chl, old_chl)
+
+write.csv(rewrite_chl, here("data/model_features/deg_1_x_1/errdap_chl.csv"), row.names = FALSE)
+
+
+```
+
+Prep 2015 Wind data and append to data in model features folder 
+
+```{r}
+## now do wind for 2015
+
+# Process data; spatially aggregate
+# Do it in parallel?
+run_parallel <- TRUE
+
+
+tmp_data_directory <- glue::glue("{data_directory}/remss/clean/spatially_aggregated_{pixel_size}_degree")
+ if(!dir.exists(tmp_data_directory)) dir.create(tmp_data_directory)
+ if(run_parallel) plan(multisession) else plan(sequential)
+
+years = 2015
+
+ pattern <- paste(years, collapse = "|")
+ 
+list.files(glue("{data_directory}/remss/wind-ccmp"), pattern = pattern) %>%
+   future_map_dfr(function(tmp_file_name){
+         tryCatch({
+     
+     # tmp_file_name <- "wind_1993-03-07.nc"
+     date_tmp <- tmp_file_name %>%
+       # Extract date
+       stringr::str_replace(glue::glue("wind_"),"") %>% 
+       stringr::str_remove(".nc") %>%
+       lubridate::date()
+     
+     processed_file_name <- glue::glue("{tmp_data_directory}/{date_tmp}.csv")
+     
+          message(glue::glue("Processing file: {tmp_file_name}"))
+     
+     # If already processed, don't do it again
+     if(file.exists(processed_file_name)) {
+       message(glue::glue("File already processed: {processed_file_name}"))
+       return()
+     }
+     
+ glue::glue("{data_directory}/remss/wind-ccmp/{tmp_file_name}") %>%
+       stars::read_ncdf() %>%
+       # Calculate wind speed from u and v components, using pythagorean theorum
+       dplyr::mutate(wind_speed_m_s = sqrt(uwnd^2 + vwnd^2)) %>%
+       # Get rid of these
+       dplyr::select(-uwnd,-vwnd,-nobs) %>% 
+       # Data are for every 6 hours, so take mean for entire day
+       aggregate(FUN = mean, by = "1 day") %>% 
+       # Convert stars to raster, so we can use exactextractr::exact_extract
+       as("Raster") %>%
+       # Need to rotate from 0-360 to -180-180, since original NC is provided in 0-360
+       raster::rotate() %>%
+       # Let's spatially aggregate by taking the mean value for each of our pixels
+       exactextractr::exact_extract(data_grid,
+                                    # From the help: "mean - the mean cell value, weighted by the fraction of each cell that is covered by the polygon"
+                                    "mean",
+                                    # Include pixel_id column so we can match on it later
+                                    append_cols = "pixel_id",
+                                    progress = FALSE) %>% 
+       # Don't save data that are just NAs
+       dplyr::filter(!dplyr::if_all(-c(pixel_id),is.na)) %>%
+       dplyr::rename(wind_speed_ms_mean = mean) %>%
+       dplyr::mutate(date = date_tmp) %>%
+       data.table::fwrite(processed_file_name)
+     return(NULL)
+
+    }, error = function(e) {
+      # Log the error and skip the file
+      message(glue::glue("Error processing file {tmp_file_name}: {e$message}"))
+      return(NULL)
+    })
+   }, .options = furrr_options(globals=c("data_directory","data_grid","tmp_data_directory"),
+                               seed = 101),.progress=TRUE)
+
+
+# temporally aggregate data 
+
+run_parallel <- TRUE
+
+tmp_data_directory <- glue::glue("{data_directory}/remss/clean/spatially_aggregated_{pixel_size}_degree")
+
+if(run_parallel) plan(multisession) else plan(sequential)
+
+# Create sequence of start years for each 5-year chunk
+start_years <- seq(2015, 2015, by = 5)
+
+# Process each 5-year chunk
+for(start_year in start_years) {
+  # start_year = 1993
+  end_year <- min(start_year + 4, 2024)  # Ensure we don't go beyond 2024
+  years_to_process <- start_year:end_year
+  
+  # Get files for this 5-year chunk
+  chunk_files <- list.files(tmp_data_directory, pattern = paste0(years_to_process, collapse = "|"))
+  
+chunk_data <- chunk_files %>% 
+  future_map(function(file_temp) {
+    # Construct the full path
+    file_path <- glue::glue("{tmp_data_directory}/{file_temp}")
+    
+    # Read the file
+    data <- data.table::fread(file_path)
+    
+    # Check if the file has rows
+    if (nrow(data) == 0) {
+      return(NULL)  # Return NULL for files with no rows
+    }
+    
+    # Return the data if it has rows
+    data
+  }, .options = furrr_options(globals = c("tmp_data_directory"),
+                               seed = 101), 
+     .progress = TRUE) %>%
+  
+  # Remove NULL entries (from files with no rows)
+  purrr::compact() %>%
+
+  # Combine the data into one table
+  data.table::rbindlist() %>%
+
+  # Transform and process
+  collapse::ftransform(year = lubridate::year(date)) %>%
+  dplyr::select(-date) %>%
+  dplyr::rename_with(~ gsub('_mean', '', .x)) %>%
+  collapse::fgroup_by(pixel_id, year) %>% {
+    collapse::add_vars(
+      collapse::add_stub(collapse::fmean(., keep.group_vars = TRUE), "_mean", pre = FALSE, cols = -c(1, 2)),
+      collapse::add_stub(collapse::fsd(., keep.group_vars = FALSE), "_sd", pre = FALSE)
+    )
+  }
+  
+  data.table::fwrite(chunk_data, here::here(glue::glue("data/model_features/deg_1_x_1/remss_wind/wind_{start_year}_{end_year}.csv")))
+
+  
+  # Clear chunk data to free memory
+  rm(chunk_data)
+  gc()
+}
+
+
+old_wind <- read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv"))
+
+new_wind <- read.csv("data/model_features/deg_1_x_1/remss_wind/wind_2015_2019.csv") # this is actually only 2015
+
+test <- old_wind %>% filter(year == 2016) # ok cool
+
+rewrite_wind <- rbind(new_wind, old_wind)
+
+write.csv(rewrite_wind, here("data/model_features/deg_1_x_1/remss_wind.csv"), row.names = FALSE)
+
+```
+
+
+Need to prep 1 by 1 EEZ, FAO, and mesopelagic data 
+
+# Determine EEZ of each cell 
+
+Use Marine Region's [Maritime Boundaries Geodatabase: Maritime Boundaries and Exclusive Economic Zones (200NM), version 12]
+
+```{r}
+global_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv"))
+eezs <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"), layer = 'eez_v12')
+world_shp <- sf::st_as_sf(maps::map("world", plot = FALSE, fill = TRUE))
+
+grid <- data_grid %>%
+  st_drop_geometry() %>%
+  dplyr::select(lon, lat, pixel_id) %>% 
+  rast(., type = "xyz") 
+
+eez_rast <- rast(fasterize::fasterize(eezs, raster(grid), field = "MRGID_SOV1"))
+eez_rast
+
+eez_rast[is.na(eez_rast)] <- 99999 # save a value high seas, not if sure necessary
+eez_rast <- mask(eez_rast, vect(world_shp), inverse = TRUE) # mask out any land 
+eez_rast[is.na(eez_rast)] <- 999999 # save a value for land, not sure if necessary
+
+
+writeRaster(eez_rast, here("data/model_features/deg_1_x_1/eez/eez_id_rast_0.5.tif"), overwrite = TRUE)
+
+## get x, y lookup table so we can join to the raw mmsi data when saving and have the EEZ id already saved in the csv 
+
+
+eez_lookup <- eez_rast %>%
+  as.data.frame(xy = TRUE)
+
+eez_check <- eez_lookup %>%
+  mutate(x_int = floor(x), y_int = floor(y)) %>%  # extract integer part of x and y
+  group_by(x_int, y_int) %>%
+  summarise(x_unique_decimals = n_distinct(x),
+            y_unique_decimals = n_distinct(y)) %>%
+  ungroup()
+
+eez_lookup_fin <- eez_lookup %>%
+  dplyr::select(lon = x, lat = y, eez_id = layer) %>%
+  left_join(global_grid) %>% 
+  dplyr::select(pixel_id, eez_id)
+  
+
+write.csv(eez_lookup_fin, here("data/model_features/deg_1_x_1/eez/eez.csv"), row.names = FALSE)
+
+eez_lookup_ids <- eezs %>% 
+  st_drop_geometry() %>%
+  dplyr::distinct(ISO_SOV1, MRGID_SOV1) %>%
+  add_row(ISO_SOV1 = "Land", MRGID_SOV1 = 999999) %>%
+  add_row(ISO_SOV1 = "Hish seas", MRGID_SOV1 = 99999)
+
+write.csv(eez_lookup_ids, here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"), row.names = FALSE)
+
+```
+
+
+# Determine FAO region of each cell 
+https://data.apps.fao.org/map/catalog/srv/eng/catalog.search#/metadata/ac02a460-da52-11dc-9d70-0017f293bd28d
+
+```{r}
+
+fao <- st_read(file.path(rdsi_raw_dir, "fao/FAO_AREAS_CWP")) %>%
+  filter(F_LEVEL == "MAJOR") %>%
+  mutate(F_AREA = as.numeric(F_AREA))
+test <- fao %>% 
+  st_drop_geometry()
+world_shp <- sf::st_as_sf(maps::map("world", plot = FALSE, fill = TRUE))
+
+fao_major_ids <- fao %>% 
+  st_drop_geometry() %>%
+  distinct(fao_id = F_AREA, NAME_EN, OCEAN) %>%
+  clean_names()
+
+write.csv(fao_major_ids, here("data/model_features/deg_1_x_1/fao/fao_major_ids.csv"), row.names = FALSE)
+
+grid <- data_grid %>%
+  st_drop_geometry() %>%
+  dplyr::select(lon, lat, pixel_id) %>% 
+  rast(., type = "xyz") 
+
+fao_rast <- rast(fasterize::fasterize(fao, raster(grid), field = "F_AREA"))
+fao_rast
+
+
+writeRaster(fao_rast, here("data/model_features/deg_1_x_1/fao/fao_id_rast.tif"), overwrite = TRUE)
+
+## get x, y lookup table so we can join to the raw mmsi data when saving and have the EEZ id already saved in the csv 
+
+
+fao_lookup <- fao_rast %>%
+  as.data.frame(xy = TRUE)
+
+
+fao_lookup_fin <- fao_lookup %>%
+  dplyr::select(lon = x, lat = y, fao_id = layer) %>%
+  left_join(global_grid) %>% 
+  dplyr::select(pixel_id, fao_id)
+  
+
+write.csv(fao_lookup_fin, here("data/model_features/deg_1_x_1/fao/fao.csv"), row.names = FALSE)
+
+```
+
+
+# Determine if cell is mesopelagic zone or not 
+
+Use Marine Region's [Mesopelagic ecoregions of the world's oceans](https://www.sciencedirect.com/science/article/pii/S0967063717301437?via%3Dihub#ack0005)
+
+
+```{r}
+
+meso <- st_read(glue("{data_directory}/marine_regions/mesopelagiczones/")) %>%
+  clean_names()
+
+meso_ids <- meso %>%
+  st_drop_geometry() %>%
+  dplyr::select(provid, meso_region = provname)
+
+write.csv(meso_ids, here("data/model_features/deg_1_x_1/mesopelagiczones/mesopelagic_zones_ids.csv"), row.names = FALSE)
+
+# test2 <- st_drop_geometry(meso)
+
+  # mp_zones <- meso %>%
+  #   dplyr::select(mesopelagic_zone = provname) %>% 
+  #   st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% 
+  #  # st_transform("+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs") %>%
+  #   st_transform(crs(data_grid)) %>% 
+  #   st_make_valid() %>%
+  #   st_as_sf()
+  # 
+  # mp_zones_data_grid <- data_grid %>%
+  #   st_join(mp_zones,
+  #           largest = TRUE) %>%
+  #   st_set_geometry(NULL) %>%
+  #   dplyr::select(pixel_id, mesopelagic_zone) %>%
+    # as_tibble()
+  
+ grid <- data_grid %>%
+  st_drop_geometry() %>%
+  dplyr::select(lon, lat, pixel_id) %>% 
+  rast(., type = "xyz") 
+ 
+meso_rast <- rast(fasterize::fasterize(meso, raster(grid), field = "provid"))
+
+
+writeRaster(meso_rast, here("data/model_features/deg_1_x_1/mesopelagiczones/meso_id_rast.tif"), overwrite = TRUE)
+
+## get x, y lookup table so we can join to the raw mmsi data when saving and have the EEZ id already saved in the csv 
+
+
+meso_lookup <- meso_rast %>%
+  as.data.frame(xy = TRUE)
+
+
+meso_lookup_id <- meso_lookup %>%
+  dplyr::select(lon = x, lat = y, provid = layer) %>%
+  left_join(data_grid) %>% 
+  dplyr::select(pixel_id, provid)
+
+test <- meso_lookup_id %>%
+  group_by(pixel_id) %>%
+  summarise(n_distinct(provid)) # ok cool, seems to have worked?! 
+  
+
+write.csv(meso_lookup_id, here("data/model_features/deg_1_x_1/mesopelagiczones/mesopelagiczones.csv"), row.names = FALSE)
+
+```
+
+Need to prep 1 by 1 GFW data 
+

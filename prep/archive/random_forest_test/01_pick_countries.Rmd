@@ -1,0 +1,86 @@
+---
+title: "Extract fishing effort data for case studies"
+output: html_document
+date: "2024-07-02"
+---
+
+# Setup
+
+Load packages and directories
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# remotes::install_github("GlobalFishingWatch/gfwr") #install GFW api package
+
+library(gfwr)
+library(terra)
+library(tidyverse)
+library(here)
+library(glue)
+library(data.table)
+library(janitor)
+library(sf)
+library(rnaturalearth)
+library(countrycode)
+library(fasterize)
+library(raster)
+library(mapview)
+
+source(here("R/dir.R"))
+
+
+```
+
+# Summary
+
+In this script we choose 3 case study examples of country with high coverage in the global fishing watch data, based on information from Paolo et al., 2024: https://www.nature.com/articles/s41586-023-06825-8#data-availability
+
+
+# Data Sources 
+
+## Paolo et al. 2024
+
+**Reference**:
+Paolo et al. [2024]. https://www.nature.com/articles/s41586-023-06825-8#data-availability
+
+**Downloaded**: July 02, 2024
+
+
+# Methods 
+
+Identify countries with high coverage and choose a high, medium, and low income country to use for random forest analysis
+
+```{r}
+
+country_coverage <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/paolo_et_al/bar_chart_by_country.csv"))
+
+colnames(country_coverage) # perc_dark_fishing is the variable which described the % of fishing in an EEZ which is NOT tracked by GFW. So we will want to choose countries with a low %
+
+good_coverage_iso <- country_coverage %>% 
+  dplyr::select(eez_iso3, perc_dark_fishing) %>%
+  arrange(perc_dark_fishing)
+write.csv(good_coverage_iso, here("data/int/gfw_country_coverage.csv"), row.names = FALSE)
+
+# %>%
+#   filter(perc_dark_fishing < 50) %>% 
+#   pull(eez_iso3)
+
+## ISL, FRO, SGP, ARG, VUT, NOR, MUS, GGY, HRV, DNK, ESP, LVA, NLD, BEL, IRL, SJM, FRA, SWE, LTU, GBR, PRT, ASM, FLK, ITA, ZAF, URY, GUF, FJI, NCL, SVN, DEU all have perc_dark_fishing <50
+
+## lets start from the top and high, middle, and low income countries. Will need to match to some sort of data describing country classifications; World bank income groups: https://ourworldindata.org/grapher/world-bank-income-groups#:~:text=Lower%2Dmiddle%2Dincome%20countries%20are,%2413%2C846%20or%20more%20in%202022.
+
+income_groups <- read.csv(here("data/raw/world-bank-income-groups.csv")) %>%
+  clean_names() %>%
+  filter(year == 2020,
+         code %in% good_coverage_iso) %>% # filter for max year in gfw and countries with good coverage
+  left_join(., country_coverage %>% dplyr::select(code = eez_iso3, perc_dark_fishing)) %>%
+  arrange(perc_dark_fishing)
+
+## iceland, argentia, vanuatu? 
+
+
+```
+
+
+

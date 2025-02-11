@@ -1,0 +1,96 @@
+---
+title: "Fit prediction model for fishing effort"
+output: html_document
+date: "2024-12-11"
+---
+
+# Summary 
+
+We use the data compiled in the previous scripts to fit a GAM model with a beta distribution to predict the proportion of fishing effort occurring in every cell. 
+
+ - Currently, the code is written to produce this model in one step (i.e., one giant model with all of the data). I think the model will need to be split up into steps. Probably two a 2 stage model where we 1) predict the probable location of fishing, and 2) predict the intensity IN THOSE LOCATIONS. Furthermore, we might need to produce an individual model for each flag country. 
+ - Another thing to consider, is that there are some countries represented in the IMAS/FAO data that ARE NOT in the GFW data. So how will be produce predictions for those? Some sort of larger regional model assumptions? 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(betareg)
+library(foreach)
+library(doParallel)
+library(here)
+library(mgcv)
+library(tictoc)
+```
+
+```{r}
+
+
+# Load prepared data
+model_data <- readRDS(here("data/model_features/prepared_data.rds")) %>%
+  mutate(eez_id = as.factor(eez_id),
+         fao_id = as.factor(fao_id),
+         year = as.numeric(year)) %>%
+  dplyr::select(-fao_region, -eez) # this is data which contains all of the predictors necessary for the model. 
+
+# Function to transform proportions to avoid 0/1, since 0 and 1 wont work with beta regression
+transform_proportion <- function(p, epsilon = 1e-6) {
+  # Adjust values exactly 0 or 1
+  p[p == 0] <- epsilon
+  p[p == 1] <- 1 - epsilon
+  return(p)
+}
+
+# Prepare model formula
+model_formula <- formula(
+  prop_fishing_hours_cell ~ 
+    # Categorical/factor predictors
+    flag_fin + gear  + length_category +
+    # meso_region + 
+    factor(eez_id) + factor(fao_id) +  # Spatial categorical variables
+    # Total effort predictor (log-transformed)
+    log_total_fishing_hours + # honestly not sure if this is necessary. It was a suggestion from Julia to include. Basically a sort of fishing capacity variable. 
+    # Continuous predictors
+    lon + lat + 
+    elevation_m + # depth
+    distance_from_port_m + 
+    distance_from_shore_m +
+    chl_mg_per_m3_mean + 
+    chl_mg_per_m3_sd +
+    sst_c_mean + 
+    sst_c_sd +
+    wind_speed_mean + 
+    wind_speed_sd +
+    # Year effect
+    s(year, k=2) # smooth term for year; maybe not necessary? Fishing effort isn't necessarily linear so keeping for now. 
+)
+
+# Transform response variable
+model_data$prop_fishing_hours_cell <- transform_proportion(model_data$prop_fishing_hours_cell) # we need to rescale any 0's or 1's because those won't work with beta regression
+
+# Fit beta regression model
+message("Fitting beta regression model...")
+
+## ok so here, we might want to run this in chunks per flag country? Or something like that... currently it takes forever to run (~28 hours). Can we leverage parallelization more effectively? 
+
+ctrl <- list(nthreads = 20) # specify cores; for some reason >=24 cores didn't work, maybe a memory issue
+
+tic()
+model <- gam(
+  model_formula,
+  data = model_data,
+  na.action = na.exclude,
+  control = ctrl,
+  family = betar(link = "logit")
+)
+toc() # 102672.099 = ~28 hours using 20 cores... can we speed this up??? All the categorical variables are the problem. Also, are we sure a beta regression is what we want? Maybe we need to do like a prediction (0 or 1) model first to see where fishing is most likely, and then a beta regression? Similar to the two-step approach from McDonald et al 2024 PNAS
+
+# Save model
+saveRDS(model, here("data/output/fitted_model.rds"))
+
+
+# Print model summary
+summary(model)
+
+```
+
