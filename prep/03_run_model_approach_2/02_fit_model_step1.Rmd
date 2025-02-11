@@ -221,9 +221,7 @@ if(pixel_size == 1){
     mutate(log_total_fishing_hours = log1p(total_fishing_hours))
   
   flags <- unique(hist_fish_data$flag_fin)
-  gears <- unique(hist_fish_data$gear)
-  years <- 2015:2017
-  lengths <- unique(hist_fish_data$length_category)
+
   
   
 unique_combinations <- hist_fish_data %>%
