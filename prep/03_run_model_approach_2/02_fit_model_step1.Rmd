@@ -2,6 +2,8 @@
 title: "Fit prediction model for fishing effort"
 output: html_document
 date: "2024-12-11"
+editor_options: 
+  chunk_output_type: console
 ---
 
 # Summary 
@@ -11,7 +13,15 @@ We use the data compiled in the previous scripts to fit a logistic regression mo
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
+rm(list = ls())
+
 library(tidyverse)
+# install.packages("betareg")
+# install.packages("foreach")
+# install.packages("doParallel")
+# install.packages("tictoc")
+# install.packages("terra")
+# install.packages("arrow")
 library(betareg)
 library(foreach)
 library(doParallel)
@@ -152,6 +162,12 @@ get_historical_total_fishing_hours <- function(yr) {
   # This function would load and process the IMAS data for the given year
   # Note: Implement based on your IMAS data structure
   imas_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
+    
+    ## CN remove artisanal
+    filter(sector == "I") %>% 
+    
+    
+    
     group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
     summarize(
       total_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
@@ -215,8 +231,11 @@ if(pixel_size == 1){
     left_join(elnino)
   
 }
-  
-  hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
+
+# install.packages("qs")
+library("qs")
+
+hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
     rbind(., get_historical_total_fishing_hours(2016)) %>%
     rbind(., get_historical_total_fishing_hours(2017)) %>%
     mutate(log_total_fishing_hours = log1p(total_fishing_hours)) %>%
@@ -312,13 +331,103 @@ Run in parallel
 
 library(foreach)
 library(doParallel)
+# install.packages("strex")
 library(strex)
 
 flags <- setdiff(flags,  str_before_last(str_after_last(list.files("/home/ubuntu/data_storage/prep/logistic_regression_models/"), "_"), "\\."))
 
 missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
+length(missing_flags)
 
-flags <- setdiff(flags, missing_flags)
+
+
+
+
+
+
+#### CN checks ----
+
+## how much of the total effort do these missing flags account for? 
+length(unique(hist_fish_data$flag_fin)) # 147 when artisanal is not considered. 
+trial<-hist_fish_data %>% 
+  mutate(missing_flag = ifelse(flag_fin %in% missing_flags, flag_fin, "not_missing")) %>% 
+  group_by(missing_flag) %>% 
+  reframe(tot_effort = sum(total_fishing_hours)) %>% 
+  mutate(perc_effort = (tot_effort/sum(tot_effort))*100) %>% 
+  arrange(-perc_effort)
+
+## with artisanal: missing flags account for 21% of effort in Yannick's data - United Arab Emirates alone accounts for 15%. 
+# without artisanal - see function in line ~160: missing flags account for 5% of effort.
+unique(hist_fish_data$length_category) # length cat does not mean "artisanal"
+unique(model_data$length_category) # same cat here. 
+
+## missing gear combinations
+combo_rousseau<-hist_fish_data %>% 
+  select(flag_fin, gear, length_category, total_fishing_hours) %>% 
+  group_by(flag_fin, gear, length_category) %>%  # remove year from table? 
+  reframe(total_fishing_hours = sum(total_fishing_hours)) %>% 
+  distinct() %>% 
+  mutate(datasetRousseau = "Y") %>% 
+  mutate(perc_effort = (total_fishing_hours/sum(total_fishing_hours))*100) %>% 
+  arrange(-perc_effort) 
+
+combo_ais<-model_data %>% 
+  select(flag_fin, gear, length_category) %>% 
+  distinct() %>% 
+  mutate(datasetAIS = "Y")
+
+missing_combo <- combo_rousseau %>% full_join(combo_ais) %>% 
+  filter(is.na(datasetAIS)) %>% 
+  mutate(perc_effort = (total_fishing_hours/sum(hist_fish_data$total_fishing_hours))*100) %>% 
+  arrange(-perc_effort) %>% 
+  select(-c(datasetRousseau, datasetAIS))
+
+sum(missing_combo$perc_effort)
+
+## missing combo account for 82% of effort in Yannick's data - is this possible?! - no one combo being particularly influential. 
+# without artisanal: missing combo account for 36% of effort - no one combo being particularly influential. 
+
+filter(model_data, flag_fin == "CIV", gear == "Trawl_Midwater_or_Unsp", length_category == "24-50m")
+filter(model_data, flag_fin == "CIV", gear == "Trawl_Midwater_or_Unsp")
+filter(model_data, flag_fin == "CIV")
+
+# options: 
+# if missing year from AIS data (currently removed from analysis above) - assume constant value 
+
+### Also the opposite is problematic - i.e. combo missing in Rousseau. It is not worth modelling these as we don't have country data to spread spatially. 
+
+missing_combo2 <- combo_rousseau %>% full_join(combo_ais) %>% 
+  filter(is.na(datasetRousseau)) %>% 
+  distinct() %>% 
+  select(-c(datasetRousseau, datasetAIS))
+
+# 497 combo in AIS that are missing from R dataset. create ID and remove? 
+
+
+
+
+
+
+
+### end CN check ----
+
+
+
+
+
+
+flags <- setdiff(flags, missing_flags) 
+
+## CN are these countries that have not run from previous iterations? is it because of 
+## Error in `contrasts<-`(`*tmp*`, value = contr.funs[1 + isOF[nn]]) : 
+  # contrasts can be applied only to factors with 2 or more levels 
+# i.e. only one gear or one length cat? Ask Gege
+
+
+
+
+
+
 
 # Set up parallel backend
 # num_cores <- detectCores() - 1  # Use available cores minus 1 to avoid overloading
@@ -326,10 +435,21 @@ num_cores = 10 # to be safe. I tried with 31 and it overloaded. Lets assume ~8gb
 cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 
-# Run in parallel
+# Run in parallel 
 foreach(flag = flags, .packages = c("dplyr", "glue", "stats", "tictoc", "tidyr")) %dopar% {
   
-  # flag = "CMR"
+  
+  ## CN trial ---- 
+  flag = "CIV" 
+  ## end ----
+  
+  
+  
+  
+  
+  
+  
+  
   model_path <- glue(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_{flag}.rds"))
   
   if (file.exists(model_path)) {
@@ -376,13 +496,57 @@ foreach(flag = flags, .packages = c("dplyr", "glue", "stats", "tictoc", "tidyr")
   model <- stats::glm(model_formula, data = full_data, family = binomial(link = "logit"))
   toc()
   
-  saveRDS(model, model_path)
+  
+  # CN check one of the missing combo ---- 
+  # check info for midwater trawler - i.e missing_combo in CIV - longline 24-50 taken as baseline? 
+  trial<- full_data %>% 
+    filter(flag_fin == "CIV") %>% 
+    select(gear,length_category) %>% 
+    distinct()
+  
+  ## different set of data - does it make sense to fit a model using this if we consider rousseau as our starting data to spread? 
+  trial2<- hist_fish_data %>% 
+    filter(flag_fin == "CIV") %>% 
+    select(gear,length_category) %>% 
+    distinct()
+  
+  
+  # need to figure out how this plays out in predictions. should add 0s as in no fishing effort for these missing combo? would then prediction be 0s or underestimates compared to Rousseau?  
+  
+  # end cn ----
+  
+  
+  ## CN
+  ## Error in `contrasts<-`(`*tmp*`, value = contr.funs[1 + isOF[nn]]) : 
+  # contrasts can be applied only to factors with 2 or more levels
+  # unique(full_data$gear)
+  # unique(full_data$length_category)
+  # CMR has 1 length cat only. 
+  # when not in loop, the function below does not work so need to pick country manually to test the loop. 
+  
+  
+  
+  ## CN diagnostics - which? 
+  plot(model)
+  
+  
+  # CN commented not to overwrite
+  # saveRDS(model, model_path)
 }
 
 # Stop cluster
 stopCluster(cl)
 
 ```
+
+# CN check countries not run or gear combinations not run 
+
+# CN model diagnostic plots - print  
+
+
+
+
+
 
 
 
