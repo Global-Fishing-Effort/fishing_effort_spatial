@@ -76,7 +76,7 @@ world_plotting <- ne_countries(scale = "small", returnclass = "sf")  %>%
 # Defining our global grid
 
 ```{r}
-pixel_size <- 0.5
+pixel_size <- 1
 
 mollweide_projection <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
 
@@ -344,5 +344,104 @@ elnino <-  read.table(url("https://psl.noaa.gov/data/correlation/oni.data"),skip
     ungroup()
 
 write.csv(elnino, here("data/model_features/enso_index.csv"), row.names = FALSE)
+```
+
+
+Pacific Decadal Oscillation index 
+
+```{r}
+
+# Pull and wrangle PDO data from NOAA
+# ttps://psl.noaa.gov/data/climateindices/list/
+# Calculate annual mean and SD for our time period of interest
+wrangle_pdo_data <- 
+  read.table(url("https://psl.noaa.gov/data/correlation/pdo.data"),skip=1,nrows=74) %>%
+    as_tibble() %>%
+    rename(year = V1) %>%
+    pivot_longer(-year) %>%
+    mutate(month = stringr::str_remove_all(name,"V") %>%
+             as.numeric() - 1,
+           date = lubridate::ymd(glue::glue("{year}-{month}-1")),
+           year = lubridate::year(date)) %>%
+    dplyr::select(year,pdo_index = value) %>%
+    filter(year >= 2015,
+           year <= 2021)%>%
+    mutate(pdo_index = ifelse(pdo_index == -9.9,NA_real_,pdo_index))%>%
+    group_by(year) %>%
+    summarize(across(everything(),list(mean = ~mean(.,na.rm=TRUE),
+                                       sd = ~sd(.,na.rm=TRUE)))) %>%
+    ungroup()
+
+write.csv(wrangle_pdo_data, here("data/model_features/pdo_index.csv"), row.names = FALSE)
+
+```
+
+
+Distance to seamount data 
+
+```{r}
+
+library(nngeo)
+
+pixel_size <- 1
+
+mollweide_projection <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+
+# Read in data_grid, generated in data_wrangling.Rmd
+# We will do spatial joining in Mollweide, for proper calculations
+# Note that data grid still retains lat and lon columns, for joining with non-spatial tibbles
+# For Mollweide, always wrap around dateline, then transform, then calculate areas at end
+data_grid <- data.table::fread(here("data/model_features/deg_1_x_1/global_grid.csv"))%>%
+  st_as_sf(wkt = "geometry_wkt",
+           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")%>% 
+  st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% 
+  st_transform(mollweide_projection) %>%
+  mutate(pixel_area_m2 = st_area(geometry_wkt)%>%
+           units::drop_units()) 
+
+seamounts <- st_read(file.path(rdsi_raw_dir, "seamounts-yesson-2019/"), layer = "YessonEtAl2019-Seamounts-V2")
+
+analysis_projection = mollweide_projection
+
+global_grid = data_grid
+
+# Wrangle seamounts data
+# Calculate nearest distance from the centroid of each pixel to each seamount
+
+  seamounts <- seamounts %>%
+    dplyr::select(seamount_id = PeakID,
+                  geometry)%>% 
+    st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% 
+    st_transform(analysis_projection)
+  
+  wrangle_seamounts <- nngeo::st_nn(global_grid %>%
+                 st_centroid(),
+               seamounts, 
+               # Only select single nearest eez
+               k = 1, 
+               returnDist = T,
+               parallel = 1) %>%# floor(parallel::detectCores()/4))  %>% 
+    as_tibble() %>% 
+    mutate(nearest_seamount_id =  seamounts$seamount_id[as.numeric(nn)], 
+           nearest_seamount_distance_m = as.numeric(dist)) %>%
+    dplyr::select(-nn,-dist) %>%
+    bind_cols(global_grid %>%
+                st_set_geometry(NULL) %>%
+                dplyr::select(pixel_id))
+
+  write.csv(wrangle_seamounts, here("data/model_features/deg_1_x_1/seamounts.csv"), row.names = FALSE)
+  
+```
+
+
+Global fishing index data 
+
+```{r}
+library(readxl)
+
+gfi_raw <- readxl::read_xlsx("/home/ubuntu/data_storage/raw_data/Global Fishing Index 2021 - Data download V1.1/Global Fishing Index 2021 Data for Download V1.1.xlsx", sheet = 3, skip = 1)  %>% 
+  dplyr::select(flag_fin  = "ISO Code", gov_score = "Assessment score")
+
+write.csv(gfi_raw, here("data/model_features/global_fishing_index_governance.csv"), row.names = FALSE)
 ```
 

@@ -405,6 +405,18 @@ write.csv(eez_lookup_ids, here("data/model_features/deg_1_x_1/eez/eez_lookup.csv
 
 ```
 
+# World bank development regions
+
+```{r}
+
+eez_region_features <- eez_lookup_ids %>%
+    mutate(eez_region_world_bank_7 = countrycode::countrycode(ISO_SOV1,"iso3c","region"))%>%
+    distinct(ISO_SOV1, eez_region_world_bank_7)  %>% 
+  mutate(eez_region_world_bank_7 = ifelse(ISO_SOV1 == "ESH", "Middle East & North Africa", eez_region_world_bank_7))
+
+write.csv(eez_region_features, here("data/model_features/world_bank_regions.csv"), row.names = FALSE)
+```
+
 
 # Determine FAO region of each cell 
 https://data.apps.fao.org/map/catalog/srv/eng/catalog.search#/metadata/ac02a460-da52-11dc-9d70-0017f293bd28d
