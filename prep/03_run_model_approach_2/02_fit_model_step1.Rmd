@@ -593,9 +593,11 @@ model <- stats::glm(model_formula, data = data_glm, family = binomial(link = "lo
 toc() # full model 191 sec elapsed
 # model
 par(mfrow = c(2,2))
-plot(model) # awful except qq plot
+plot(model) 
 
 ### remove outliers and refit the model 
+
+
 
 
 ## Error in `contrasts<-`(`*tmp*`, value = contr.funs[1 + isOF[nn]]) : 
@@ -622,17 +624,15 @@ library(randomForest)
 # classifier <- randomForest( formula = vs~hp+drat, data=mtcars)
 # predict(classifier, type="prob")
 
-# colnames(full_data)
-# my data - JUST understanding the function ... 
 data_random_forest<-full_data %>% 
   # filter(!is.na(sst_c_mean)) %>% # cannot handle NAs - Why? and why are there NAs? is this land?
   na.omit() %>% # these removes all NAs but... 
   mutate(presence = as.factor(presence)) %>% # transform in ctegorical
   distinct()
 
-# problems with categorical predictors: rf does not like them in model formula as done for glm; also Error in randomForest.default(m, y, ...) : 
+# problems with categorical predictors: rf does not like them in model formula as done for glm; also when I convert them in the dataset: Error in randomForest.default(m, y, ...) : 
   # Can not handle categorical predictors with more than 53 categories.
-# should we not convert?? some transformation neede https://www.geeksforgeeks.org/how-to-fit-categorical-data-types-for-random-forest-classification/
+# Some transformation needed https://www.geeksforgeeks.org/how-to-fit-categorical-data-types-for-random-forest-classification/
 # though not doing anything seems to produce results too but not sure if right
 
 # data_random_forest<-data_random_forest %>% 
@@ -642,12 +642,6 @@ data_random_forest<-full_data %>%
 #          eez_id = as.factor(eez_id),
 #          fao_id = as.factor(fao_id),
 #          ocean = as.factor(ocean))
-
-# nrow(full_data)
-# nrow(data_random_forest)
-# 
-# filter(data_random_forest, is.na(presence))
-# filter(data_random_forest, is.na(sst_c_mean))
 
 # plot the data 
 # map 
