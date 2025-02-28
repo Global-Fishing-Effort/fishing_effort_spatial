@@ -190,9 +190,12 @@ model_formula <- formula(
   presence ~ 
     # Categorical/factor predictors
    # flag_fin + 
-    gear  + length_category +
-    
-    factor(meso_id) +  factor(eez_id) + factor(fao_id) + factor(ocean) +  # Spatial categorical variables
+    gear  + 
+    length_category +
+    factor(meso_id) +  
+    factor(eez_id) + 
+    factor(fao_id) + 
+    factor(ocean) +  # Spatial categorical variables
     # Total effort predictor (log-transformed)
     log_total_fishing_hours + # honestly not sure if this is necessary. It was a suggestion from Julia to include. Basically a sort of fishing capacity variable. 
     # Continuous predictors
@@ -434,8 +437,12 @@ filter(trial, prop>1)
 ## why prop > 1?? Also when effort = 0 ... 
 
 ### missing combo ----
+
 ## how much of the total effort do these missing flags account for? 
 length(unique(hist_fish_data$flag_fin)) # 147 when artisanal is not considered. 
+missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
+length(missing_flags)
+
 trial<-hist_fish_data %>% 
   mutate(missing_flag = ifelse(flag_fin %in% missing_flags, flag_fin, "not_missing")) %>% 
   group_by(missing_flag) %>% 
@@ -445,8 +452,8 @@ trial<-hist_fish_data %>%
 
 ## with artisanal: missing flags account for 21% of effort in Yannick's data - United Arab Emirates alone accounts for 15%. 
 # without artisanal - see function in line ~160: missing flags account for 5% of effort.
-unique(hist_fish_data$length_category) # length cat does not mean "artisanal"
-unique(model_data$length_category) # same cat here. 
+sort(unique(hist_fish_data$gear)) # length cat does not mean "artisanal"
+sort(unique(model_data$gear)) # same cat here. 
 
 ## missing gear combinations
 combo_rousseau<-hist_fish_data %>% 
@@ -534,7 +541,7 @@ length(unique(full_data$gear)) == 1 | length(unique(full_data$length_category)) 
 nrow(full_data) == 0
 
 # compare AIS with R combo - NO MATCH for flag = CIV! no need to model this as no R effort data is available... see comment above on removing these combo
-# though for countries where some combo are matching - combos in ais not present in r might still add info to the model - we could leave them here but do not consider them in final dataset when info from ais-driven model/s is matched to R data. 
+# though for countries where some combo are matching - combos in ais not present in R might still add info to the model - we could leave them here but do not consider them in final dataset when info from ais-driven model/s is matched to R data. 
 
 full_data %>% 
   select(gear,length_category) %>% 
@@ -556,9 +563,9 @@ model_formula_simpler <- formula(
     # factor(fao_id) + 
     # factor(ocean) +  # Spatial categorical variables
     # log_total_fishing_hours + # honestly not sure if this is necessary. It was a suggestion from Julia to include. Basically a sort of fishing capacity variable. 
-    lon + 
-    lat + 
-    elevation_m + # depth
+    # lon + 
+    # lat + 
+    # elevation_m + # depth
     # distance_from_port_m + 
     # distance_from_shore_m +
     # chl_mg_per_m3_mean + 
@@ -574,11 +581,22 @@ model_formula_simpler <- formula(
 )
 
 ### GLM ---- 
+data_glm<-full_data %>% 
+  # done for random forest below 
+  # filter(!is.na(sst_c_mean)) %>% # cannot handle NAs - Why? and why are there NAs? is this land?
+  na.omit() %>% # these removes all NAs but... 
+  mutate(presence = as.factor(presence)) %>% # transform in ctegorical
+  distinct()
+
 tic()
-model <- stats::glm(model_formula_simpler, data = full_data, family = binomial(link = "logit"))
-toc() # 
-model
+model <- stats::glm(model_formula, data = data_glm, family = binomial(link = "logit"))
+toc() # full model 191 sec elapsed
+# model
+par(mfrow = c(2,2))
 plot(model) # awful except qq plot
+
+### remove outliers and refit the model 
+
 
 ## Error in `contrasts<-`(`*tmp*`, value = contr.funs[1 + isOF[nn]]) : 
 # contrasts can be applied only to factors with 2 or more levels
@@ -590,54 +608,100 @@ plot(model) # awful except qq plot
 # install.packages("randomForest")
 library(randomForest)
 
-# example https://www.r-bloggers.com/2021/04/random-forest-in-r/
-library(datasets)
-# install.packages("caret")
-library(caret)
-data<-iris
-data$Species <- as.factor(data$Species)
-set.seed(222)
-ind <- sample(2, nrow(data), replace = TRUE, prob = c(0.7, 0.3))
-train <- data[ind==1,]
-test <- data[ind==2,]
-rf <- randomForest(Species~., data=train, proximity=TRUE) 
-print(rf)
-p1 <- predict(rf, train)
-confusionMatrix(p1, train$ Species)
-p2 <- predict(rf, test)
-confusionMatrix(p2, test$ Species)
+# https://www.geeksforgeeks.org/ml-classification-vs-regression/
 
-# https://stats.stackexchange.com/questions/327081/random-forest-for-regression-binary-response
-mtcars$vs <- as.factor(mtcars$vs) # set to factor otherwise does regression. 
-classifier <- randomForest( formula = vs~hp+drat, data=mtcars)
-predict(classifier, type="prob")
+# classification: aims to find decision boundaries that separate classes (e.g. predict weather conditions like “sunny,” “rainy,” or “cloudy.”)
+  # 1) A linear decision boundary might separate two classes in a 2D space with a straight line (e.g., logistic regression).
+    # Binomial: In binomial Logistic regression, there can be only two possible types of the dependent variables, such as 0 or 1, Pass or Fail, etc. See assumtions 
+  # 2) A more complex model, may create non-linear boundaries to better fit intricate datasets.
 
+# regression: focuses on finding the best-fitting line to predict numerical outcomes
+
+# # https://stats.stackexchange.com/questions/327081/random-forest-for-regression-binary-response
+# mtcars$vs <- as.factor(mtcars$vs) # set to factor otherwise does regression. 
+# classifier <- randomForest( formula = vs~hp+drat, data=mtcars)
+# predict(classifier, type="prob")
+
+# colnames(full_data)
 # my data - JUST understanding the function ... 
 data_random_forest<-full_data %>% 
-  filter(!is.na(sst_c_mean), year == 2015) %>% # cannot handle NAs - also why are there NAs? is this land? # considering only 1 year to speed up calculations 
-  mutate(presence = as.factor(presence)) %>% 
-  select(presence, gear, length_category, sst_c_mean)
-
-data_random_forest<-data_random_forest[1:(nrow(data_random_forest)/2),] # further subset to speed up calculations and understand the code
-nrow(data_random_forest)
-
-data_random_forest<-data_random_forest %>% 
+  # filter(!is.na(sst_c_mean)) %>% # cannot handle NAs - Why? and why are there NAs? is this land?
+  na.omit() %>% # these removes all NAs but... 
+  mutate(presence = as.factor(presence)) %>% # transform in ctegorical
   distinct()
 
-nrow(data_random_forest)
-unique(data_random_forest$presence)
-unique(data_random_forest$gear)
-unique(data_random_forest$length_category)
-unique(data_random_forest$sst_c_mean)
+# problems with categorical predictors: rf does not like them in model formula as done for glm; also Error in randomForest.default(m, y, ...) : 
+  # Can not handle categorical predictors with more than 53 categories.
+# should we not convert?? some transformation neede https://www.geeksforgeeks.org/how-to-fit-categorical-data-types-for-random-forest-classification/
+# though not doing anything seems to produce results too but not sure if right
 
-head(data_random_forest)
+# data_random_forest<-data_random_forest %>% 
+#   mutate(gear = as.factor(gear),  
+#          length_category = as.factor(length_category),
+#          meso_id = as.factor(meso_id),
+#          eez_id = as.factor(eez_id),
+#          fao_id = as.factor(fao_id),
+#          ocean = as.factor(ocean))
+
+# nrow(full_data)
+# nrow(data_random_forest)
+# 
+# filter(data_random_forest, is.na(presence))
+# filter(data_random_forest, is.na(sst_c_mean))
+
+# plot the data 
+# map 
+
+# barplot - we don't have enough data on 1s to run a random forest I guess... e.g. the train data might only have 0s?
+# ggplot(data_random_forest,aes(presence)) + geom_histogram(aes(fill=gear),bins=50, stat="count")
+
+# Split the data into training and testing. 80% for training, 20% for testing.
+set.seed(123)
+samp <- sample(nrow(data_random_forest), 0.5 * nrow(data_random_forest)) 
+# if the training dataset is too big: Error in randomForest.default(m, y, ...) : 
+  # long vectors (argument 28) are not supported in .C
+# Can check solutions here: https://stackoverflow.com/questions/24195805/issue-with-randomforest-long-vectors
+train <- data_random_forest[samp, ]
+# ggplot(train,aes(presence)) + geom_histogram(aes(fill=gear),bins=50, stat="count")
+# ggplot(filter(train, presence == 1),aes(presence)) + geom_histogram(aes(fill=gear),bins=50, stat="count")
+test <- data_random_forest[-samp, ]
+
+# apply model on train 
+model_formula_rf <- formula(
+  presence ~ 
+    gear  + 
+    length_category +
+    meso_id +
+    eez_id +
+    fao_id +
+    ocean +  
+    # log_total_fishing_hours + 
+    lon +
+    lat +
+    elevation_m + # depth
+    distance_from_port_m +
+    distance_from_shore_m +
+    chl_mg_per_m3_mean +
+    chl_mg_per_m3_sd +
+    sst_c_mean + 
+    sst_c_sd +
+    wind_speed_ms_mean +
+    wind_speed_ms_sd +
+    enso_index_mean + 
+    enso_index_sd +
+    year
+)
 
 tic()
-model_forest <- randomForest(formula = presence ~ gear + length_category + sst_c_mean, data=data_random_forest, type = "classification") # classification use Gini - logistic regression
-toc() 
-model_forest
-predict(model_forest, type="prob")
+model <- randomForest(model_formula_rf, data = train, type = "classification", proximity = FALSE, ntree = 100) # , mtry = 5) # proximity = FALSE to speed up the process as no needed for classification (I think), reduce ntree to speed up process but careful not to set too low
+toc() # 19 sec
+model
 
+# validate our model using the test data
+prediction <- predict(model, newdata = test, type="prob")
+
+# view results 
+# calculate the accuracy of the model
 
 ```
 
