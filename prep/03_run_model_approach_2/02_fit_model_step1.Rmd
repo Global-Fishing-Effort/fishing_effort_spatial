@@ -697,6 +697,36 @@ prediction <- predict(model, newdata = test, type="prob")
 # view results 
 # calculate the accuracy of the model
 
+
+## GC - lets try looking at the testing predictions? 
+
+pred_test <- test %>%
+  mutate(pred_prop_pres = predict(model, newdata = ., type="prob")[, "1"]) %>%
+   mutate(pred_prop_abs = predict(model, newdata = ., type="prob")[, "1"]) %>%
+  filter(pred_prop_pres > 0) %>% # just test filtering for any presence possible
+  # mutate(pres = ifelse(pred_prop_pres > 0, 1, 0)) %>%
+  mutate(pres = 1) %>%
+  distinct(lat, lon, pres)
+
+pred_rast <- pred_test %>%
+  rast(., type = "xyz")
+
+plot(pred_rast, col = "red") # ok... looks a little wonky... but I guess we are only predicting to the testing data. Maybe doing predictions on all data would be better? 
+
+
+pred_test <- full_data %>%
+  mutate(pred_prop_pres = predict(model, newdata = ., type="prob")[, "1"]) %>%
+   mutate(pred_prop_abs = predict(model, newdata = ., type="prob")[, "1"]) %>%
+  filter(pred_prop_pres > 0) %>% # just test filtering for any presence possible
+  # mutate(pres = ifelse(pred_prop_pres > 0, 1, 0)) %>%
+  mutate(pres = 1) %>%
+  distinct(lat, lon, pres)
+
+pred_rast <- pred_test %>%
+  rast(., type = "xyz")
+
+plot(pred_rast) # still looks really weird. hard to tell what is going on but its putting fishing predictions from 150 to -150 longitude I think?
+
 ```
 
 # CN model diagnostic plots - print  
