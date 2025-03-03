@@ -697,9 +697,12 @@ prediction <- predict(model, newdata = test, type="prob")
 # view results 
 # calculate the accuracy of the model
 
+```
+
 
 ## GC - lets try looking at the testing predictions? 
 
+```{r}
 pred_test <- test %>%
   mutate(pred_prop_pres = predict(model, newdata = ., type="prob")[, "1"]) %>%
    mutate(pred_prop_abs = predict(model, newdata = ., type="prob")[, "1"]) %>%
