@@ -220,7 +220,7 @@ eez_lookup_ids <- eezs %>%
   st_drop_geometry() %>%
   dplyr::distinct(ISO_SOV1, MRGID_SOV1) %>%
   add_row(ISO_SOV1 = "Land", MRGID_SOV1 = 999999) %>%
-  add_row(ISO_SOV1 = "Hish seas", MRGID_SOV1 = 99999)
+  add_row(ISO_SOV1 = "High seas", MRGID_SOV1 = 99999)
 
 write.csv(eez_lookup_ids, here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"), row.names = FALSE)
 
@@ -440,7 +440,8 @@ Global fishing index data
 library(readxl)
 
 gfi_raw <- readxl::read_xlsx("/home/ubuntu/data_storage/raw_data/Global Fishing Index 2021 - Data download V1.1/Global Fishing Index 2021 Data for Download V1.1.xlsx", sheet = 3, skip = 1)  %>% 
-  dplyr::select(flag_fin  = "ISO Code", gov_score = "Assessment score")
+  dplyr::select(flag_fin  = "ISO Code", gov_score = "Governance capacity") %>%
+  mutate(gov_score = as.factor(gov_score)) # make it into a categorical variable
 
 write.csv(gfi_raw, here("data/model_features/global_fishing_index_governance.csv"), row.names = FALSE)
 ```

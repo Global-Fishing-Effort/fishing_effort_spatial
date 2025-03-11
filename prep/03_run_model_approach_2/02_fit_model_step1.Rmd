@@ -24,6 +24,10 @@ library(tidyverse)
 # install.packages("tictoc")
 # install.packages("terra")
 # install.packages("arrow")
+# install.packages("qs")
+# install.packages("strex")
+
+library("qs")
 library(betareg)
 library(foreach)
 library(doParallel)
@@ -34,6 +38,7 @@ library(progress)
 library(terra)
 library(glue)
 library(arrow)
+library(strex)
 
 source(here("R/dir.R"))
 
@@ -46,8 +51,18 @@ pixel_size <- 1 # change this if you want to run 0.5?
 
 ```{r}
 
-if(pixel_size == 1){
+elnino <- read.csv(here("data/model_features/enso_index.csv"))
 
+pdo <- read.csv(here("data/model_features/pdo_index.csv"))
+
+world_bank <- read.csv(here("data/model_features/world_bank_regions.csv")) %>%
+  filter(ISO_SOV1 != "GIB")
+
+gfi_df <- read.csv(here("data/model_features/global_fishing_index_governance.csv"))
+
+
+if(pixel_size == 1){
+  
 # Load prepared data
 model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
   mutate(year = as.numeric(year)) %>%
@@ -69,13 +84,23 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/eez/eez.csv")), by = "pixel_id") %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/fao/fao.csv")), by = "pixel_id") %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/oceans.csv")), by = "pixel_id") %>%
+    left_join(read.csv(here("data/model_features/deg_1_x_1/seamounts.csv")), by = "pixel_id") %>% 
    crossing(., year = c(2015:2017)) 
   
   
   env_data <- spatial_data %>%
     left_join(ocean_data) %>% # cool.
     rename(meso_id = provid) %>%
-    dplyr::select(-geometry_wkt)
+    dplyr::select(-geometry_wkt) %>%
+    left_join(elnino) %>%
+    left_join(pdo) %>%
+    left_join(world_bank, by = c("eez_id" = "MRGID_SOV1")) %>%
+    mutate(eez_region_world_bank_7 = ifelse(ISO_SOV1 %in% c("High seas", "Land"), "high_seas", eez_region_world_bank_7)) %>% 
+    left_join(gfi_df, by = c("ISO_SOV1" = "flag_fin")) %>% # add in global fishing index data here
+    mutate(gov_score = ifelse(eez_id >= 99999 & is.na(gov_score), "high_seas", gov_score)) %>%
+        mutate(gov_score = ifelse(eez_id < 99999 & is.na(gov_score), "no_data", gov_score)) %>%
+    dplyr::select(-ISO_SOV1, -nearest_seamount_id) %>% 
+    distinct() 
 
 }else{
   # Load prepared data
@@ -189,7 +214,7 @@ get_historical_total_fishing_hours <- function(yr) {
 model_formula <- formula(
   presence ~ 
     # Categorical/factor predictors
-   # flag_fin + 
+   # flag_fin + # since we're creating a model for each flag country? s
     gear  + 
     length_category +
     factor(meso_id) +  
@@ -210,30 +235,29 @@ model_formula <- formula(
     wind_speed_ms_mean + 
     wind_speed_ms_sd +
     enso_index_mean + # el nino data 
-    enso_index_sd + 
+    enso_index_sd + # pacific decadal oscillation
+    pdo_index_mean +  
+    pdo_index_sd + 
+    nearest_seamount_distance_m + 
+    eez_region_world_bank_7 + # world bank regions
+    factor(gov_score) + # global fishing index; make sure this is factor and not a numeric variable
     # Year effect
   # s(year, k=2) # smooth term for year; maybe not necessary? Fishing effort isn't necessarily linear so keeping for now. Does this slow down modeling? 
     year
 )
 
-elnino <- read.csv(here("data/model_features/enso_index.csv"))
-
 if(pixel_size == 1){
   
-  env_data <- env_data %>%
-    left_join(elnino)
+  env_data <- env_data
   
 }else{
 
   env_data <- prepare_pred_data(2015) %>%
     rbind(., prepare_pred_data(2016)) %>%
     rbind(., prepare_pred_data(2017)) %>%
-    left_join(elnino)
+    left_join(elnino) 
   
 }
-
-# install.packages("qs")
-library("qs")
 
 hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
     rbind(., get_historical_total_fishing_hours(2016)) %>%
@@ -255,92 +279,19 @@ unique_combinations <- hist_fish_data %>%
 env_grid <- env_data %>% 
   dplyr::select(lon, lat) %>% distinct()
 
-# for(flag in flags){
-#        
-#   # flag = "AUS"
-#   
-#   
-#   if(file.exists(glue(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_{flag}.rds")))){
-#     cat("exists... next")
-#     next()
-#   }
-#         
-#         
-# 
-# # Fit beta regression model
-# message("Fitting logistic regression model...")
-# 
-# 
-#   model_data_flag <- model_data %>%
-#     dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
-#     filter(flag_fin == flag)
-# 
-#   # test <- model_data_flag %>%
-#   #    distinct(year, flag_fin, gear, length_category) # oof... GFW Australia only has data for at least 44 out of 128 categories in rousseau...
-# 
-#   distinct_cats <- model_data_flag %>%
-#     distinct(year, flag_fin, gear, length_category) 
-#   
-# full_grid <- crossing(env_grid, distinct_cats)
-# 
-# # Join with environmental data (already included in full_grid)
-# full_data <- full_grid %>%
-#   left_join(env_data, by = c("lon", "lat", "year")) %>%
-#   left_join(model_data_flag) %>%  # Join with fishing presence data
-#     mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
-#   dplyr::select(-pixel_id) %>%
-#     left_join(hist_fish_data) %>%
-#     mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
-#          log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours)) # there are some combinations that are not in the IMAS data but in the GFW data, so we'll just put total fishing hours as 0 for these cases... This will just predict 0 for those (i think?), which is fine, since we technically don't have to predict anything for these anyways. 
-# 
-# # what about if they are in IMAS data but not in GFW? This could be problematic! 
-# 
-# #ctrl <- list(nthreads = 24) # specify cores; for some reason >=24 cores didn't work, maybe a memory issue
-# 
-# tic()
-# # model <- bam( # trying bam because it is supposed to be good for "very large datasets"
-# #   model_formula,
-# #   data = full_data,
-# #   na.action = na.exclude,
-# #  control = ctrl, # I think this does parallelization? 
-# #   family = binomial(link = "logit")
-# # )
-# 
-# model <- stats::glm(model_formula, data = full_data, family = binomial(link = "logit"))
-# toc() 
-# ## with bam(); took ~4 mins for flag country Australia using 20 cores (i think using that many cores...?). 
-# ## with stats::glm() took ~ 4 mins for flag country australia using 1 core
-# 
-# # Save model
-# saveRDS(model, glue(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_{flag}.rds")))
-# 
-# }
-# 
-# 
-# # Print model summary
-# summary(model)
-
-
-
-# random forest instead of logistic regression???? Or maybe try a regular logistic regression using stats::glm without smoothing parameters. maybe those would be faster? Consider speedglm package
-
 ```
 
 ## Run models in parallel 
 
 ```{r}
+flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 167 of them
 
-library(foreach)
-library(doParallel)
-# install.packages("strex")
-library(strex)
-
-flags <- setdiff(flags,  str_before_last(str_after_last(list.files("/home/ubuntu/data_storage/prep/logistic_regression_models/"), "_"), "\\."))
+# flags <- setdiff(flags,  str_before_last(str_after_last(list.files(file.path(rdsi_dir, "prep/logistic_regression_models/")), "_"), "\\."))
 
 missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
-length(missing_flags)
+length(missing_flags) # 28
 
-flags <- setdiff(flags, missing_flags)  ## CN are these countries that have not run from previous iterations? 
+flags <- setdiff(flags, missing_flags)  ## CN are these countries that have not run from previous iterations? GC - yes, these would not have been run before. 
 
 # Set up parallel backend
 # num_cores <- detectCores() - 1  # Use available cores minus 1 to avoid overloading
@@ -351,14 +302,14 @@ registerDoParallel(cl)
 # Run in parallel 
 foreach(flag = flags, .packages = c("dplyr", "glue", "stats", "tictoc", "tidyr")) %dopar% {
   
-  # flag = "CIV" 
+  # flag = "ISL" 
   
   model_path <- glue(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_{flag}.rds"))
   
-  if (file.exists(model_path)) {
-    cat("Model for", flag, "exists... skipping\n")
-    return(NULL)
-  }
+  # if (file.exists(model_path)) {
+  #   cat("Model for", flag, "exists... skipping\n")
+  #   return(NULL)
+  # }
   
   if(flag %in% missing_flags){
     cat(flag, "not in data... skippings")
@@ -385,12 +336,12 @@ foreach(flag = flags, .packages = c("dplyr", "glue", "stats", "tictoc", "tidyr")
     mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
            log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours))
   
-  if(length(unique(full_data$gear)) == 1 | length(unique(full_data$length_category)) == 1 ){
+  if(length(unique(full_data$gear)) == 1 | length(unique(full_data$length_category)) == 1 ){ # skipping any that only have one categorical variable since we can't model these? 
   return(NULL)
   
 }
   
-  if(nrow(full_data) == 0){
+  if(nrow(full_data) == 0){ # if its an empty dataframe we have nothing to model... These would be the countries missing from AIS i guess? 
         cat(flag, "not in data... skippings")
     return(NULL)
   }
@@ -400,11 +351,14 @@ foreach(flag = flags, .packages = c("dplyr", "glue", "stats", "tictoc", "tidyr")
   toc()
   
   # CN commented not to overwrite
-  # saveRDS(model, model_path)
+  saveRDS(model, model_path)
 }
 
 # Stop cluster
 stopCluster(cl)
+
+############ March 11, 2025 - GC -
+#### ok getting some weird results. For example, for ivory coast some of the variables are all NA and prompt this response "not defined because of singularities". I think this means that some of the variables are perfectly collinear... So maybe we shouldn't include every variable that mcdonald et al includes? Anyway, I am rerunning all of these models with all of the new variables I've prepped (e.g., PDO index, ocean, nearest seamount, global fishing index, world bank regions)
 
 ```
 

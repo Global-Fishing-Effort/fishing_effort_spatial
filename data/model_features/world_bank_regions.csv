@@ -1,160 +1,161 @@
-"ISO_SOV1","eez_region_world_bank_7"
-"USA","North America"
-"GBR","Europe & Central Asia"
-"NZL","East Asia & Pacific"
-"FRA","Europe & Central Asia"
-"WSM","East Asia & Pacific"
-"TON","East Asia & Pacific"
-"CHL","Latin America & Caribbean"
-"URY","Latin America & Caribbean"
-"PER","Latin America & Caribbean"
-"BRA","Latin America & Caribbean"
-"KIR","East Asia & Pacific"
-"ARG","Latin America & Caribbean"
-"AUS","East Asia & Pacific"
-"COM","Sub-Saharan Africa"
-"MDG","Sub-Saharan Africa"
-"ZAF","Sub-Saharan Africa"
-"MUS","Sub-Saharan Africa"
-"VUT","East Asia & Pacific"
-"NAM","Sub-Saharan Africa"
-"TLS","East Asia & Pacific"
-"COG","Sub-Saharan Africa"
-"AGO","Sub-Saharan Africa"
-"MOZ","Sub-Saharan Africa"
-"KEN","Sub-Saharan Africa"
-"PNG","East Asia & Pacific"
-"TZA","Sub-Saharan Africa"
-"SLB","East Asia & Pacific"
-"SYC","Sub-Saharan Africa"
-"COD","Sub-Saharan Africa"
-"ATG","Latin America & Caribbean"
-"NLD","Europe & Central Asia"
-"PRT","Europe & Central Asia"
-"BHS","Latin America & Caribbean"
-"BRB","Latin America & Caribbean"
-"MEX","Latin America & Caribbean"
-"CPV","Sub-Saharan Africa"
-"ESP","Europe & Central Asia"
-"PAN","Latin America & Caribbean"
-"CRI","Latin America & Caribbean"
-"DMA","Latin America & Caribbean"
-"DOM","Latin America & Caribbean"
-"GTM","Latin America & Caribbean"
-"DNK","Europe & Central Asia"
-"GMB","Sub-Saharan Africa"
-"GIB","Europe & Central Asia"
-"GRD","Latin America & Caribbean"
-"SLE","Sub-Saharan Africa"
-"ISL","Europe & Central Asia"
-"JAM","Latin America & Caribbean"
-"MRT","Sub-Saharan Africa"
-"HTI","Latin America & Caribbean"
-"KNA","Latin America & Caribbean"
-"LCA","Latin America & Caribbean"
-"VCT","Latin America & Caribbean"
-"TTO","Latin America & Caribbean"
-"SLV","Latin America & Caribbean"
-"BLZ","Latin America & Caribbean"
-"CUB","Latin America & Caribbean"
-"SEN","Sub-Saharan Africa"
-"VEN","Latin America & Caribbean"
-"CAN","North America"
-"NIC","Latin America & Caribbean"
-"GUY","Latin America & Caribbean"
-"COL","Latin America & Caribbean"
-"IRL","Europe & Central Asia"
-"GNB","Sub-Saharan Africa"
-"GIN","Sub-Saharan Africa"
-"CIV","Sub-Saharan Africa"
-"LBR","Sub-Saharan Africa"
-"HND","Latin America & Caribbean"
-"ECU","Latin America & Caribbean"
-"ESH","Middle East & North Africa"
-"SUR","Latin America & Caribbean"
-"MAR","Middle East & North Africa"
-"ARE","Middle East & North Africa"
-"CYP","Europe & Central Asia"
-"ERI","Sub-Saharan Africa"
-"EGY","Middle East & North Africa"
-"GEO","Europe & Central Asia"
-"IRN","Middle East & North Africa"
-"LBN","Middle East & North Africa"
-"LBY","Middle East & North Africa"
-"MLT","Middle East & North Africa"
-"OMN","Middle East & North Africa"
-"SAU","Middle East & North Africa"
-"LKA","South Asia"
-"SYR","Middle East & North Africa"
-"TGO","Sub-Saharan Africa"
-"GRC","Europe & Central Asia"
-"TUR","Europe & Central Asia"
-"MCO","Europe & Central Asia"
-"TUN","Middle East & North Africa"
-"MNE","Europe & Central Asia"
-"ALB","Europe & Central Asia"
-"BGR","Europe & Central Asia"
-"PSE","Middle East & North Africa"
-"KWT","Middle East & North Africa"
-"IRQ","Middle East & North Africa"
-"BHR","Middle East & North Africa"
-"QAT","Middle East & North Africa"
-"YEM","Middle East & North Africa"
-"ISR","Middle East & North Africa"
-"JOR","Middle East & North Africa"
-"DJI","Middle East & North Africa"
-"BGD","South Asia"
-"NGA","Sub-Saharan Africa"
-"CMR","Sub-Saharan Africa"
-"STP","Sub-Saharan Africa"
-"BIH","Europe & Central Asia"
-"MHL","East Asia & Pacific"
-"PLW","East Asia & Pacific"
-"PHL","East Asia & Pacific"
-"TWN","East Asia & Pacific"
-"SGP","East Asia & Pacific"
-"THA","East Asia & Pacific"
-"VNM","East Asia & Pacific"
-"KOR","East Asia & Pacific"
-"BRN","East Asia & Pacific"
-"PRK","East Asia & Pacific"
-"KHM","East Asia & Pacific"
-"CHN","East Asia & Pacific"
-"EST","Europe & Central Asia"
-"FIN","Europe & Central Asia"
-"SWE","Europe & Central Asia"
-"LTU","Europe & Central Asia"
-"NOR","Europe & Central Asia"
-"BEL","Europe & Central Asia"
-"DEU","Europe & Central Asia"
-"LVA","Europe & Central Asia"
-"HRV","Europe & Central Asia"
-"ITA","Europe & Central Asia"
-"UKR","Europe & Central Asia"
-"ROU","Europe & Central Asia"
-"JPN","East Asia & Pacific"
-"IND","South Asia"
-"PAK","South Asia"
-"TKM","Europe & Central Asia"
-"AZE","Europe & Central Asia"
-"KAZ","Europe & Central Asia"
-"MMR","East Asia & Pacific"
-"POL","Europe & Central Asia"
-"SDN","Sub-Saharan Africa"
-"BEN","Sub-Saharan Africa"
-"SVN","Europe & Central Asia"
-"MYS","East Asia & Pacific"
-"TUV","East Asia & Pacific"
-"FJI","East Asia & Pacific"
-"FSM","East Asia & Pacific"
-"GNQ","Sub-Saharan Africa"
-"MDV","South Asia"
-"SOM","Sub-Saharan Africa"
-"NRU","East Asia & Pacific"
-"GAB","Sub-Saharan Africa"
-"IDN","East Asia & Pacific"
-"DZA","Middle East & North Africa"
-"GHA","Sub-Saharan Africa"
-"RUS","Europe & Central Asia"
-"Land",NA
-"Hish seas",NA
+"ISO_SOV1","eez_region_world_bank_7","MRGID_SOV1"
+"USA","North America",2204
+"GBR","Europe & Central Asia",2208
+"NZL","East Asia & Pacific",2227
+"FRA","Europe & Central Asia",17
+"WSM","East Asia & Pacific",8671
+"TON","East Asia & Pacific",8674
+"CHL","Latin America & Caribbean",2165
+"URY","Latin America & Caribbean",2216
+"PER","Latin America & Caribbean",2257
+"BRA","Latin America & Caribbean",2143
+"KIR","East Asia & Pacific",2116
+"ARG","Latin America & Caribbean",2149
+"AUS","East Asia & Pacific",2147
+"COM","Sub-Saharan Africa",2163
+"MDG","Sub-Saharan Africa",7963
+"ZAF","Sub-Saharan Africa",2176
+"MUS","Sub-Saharan Africa",8614
+"VUT","East Asia & Pacific",2202
+"NAM","Sub-Saharan Africa",2218
+"TLS","East Asia & Pacific",8757
+"COG","Sub-Saharan Africa",8633
+"AGO","Sub-Saharan Africa",2150
+"MOZ","Sub-Saharan Africa",2220
+"KEN","Sub-Saharan Africa",2118
+"PNG","East Asia & Pacific",2237
+"TZA","Sub-Saharan Africa",2205
+"SLB","East Asia & Pacific",8593
+"SYC","Sub-Saharan Africa",2192
+"COD","Sub-Saharan Africa",2198
+"ATG","Latin America & Caribbean",8645
+"NLD","Europe & Central Asia",15
+"PRT","Europe & Central Asia",2243
+"BHS","Latin America & Caribbean",2144
+"BRB","Latin America & Caribbean",8649
+"MEX","Latin America & Caribbean",2224
+"CPV","Sub-Saharan Africa",2168
+"ESP","Europe & Central Asia",2185
+"PAN","Latin America & Caribbean",2249
+"CRI","Latin America & Caribbean",2162
+"DMA","Latin America & Caribbean",8648
+"DOM","Latin America & Caribbean",8640
+"GTM","Latin America & Caribbean",2097
+"DNK","Europe & Central Asia",2157
+"GMB","Sub-Saharan Africa",2113
+"GIB","Europe & Central Asia",2208
+"GRD","Latin America & Caribbean",8650
+"SLE","Sub-Saharan Africa",2191
+"ISL","Europe & Central Asia",2129
+"JAM","Latin America & Caribbean",8682
+"MRT","Sub-Saharan Africa",2236
+"HTI","Latin America & Caribbean",8639
+"KNA","Latin America & Caribbean",8644
+"LCA","Latin America & Caribbean",8647
+"VCT","Latin America & Caribbean",8651
+"TTO","Latin America & Caribbean",2186
+"SLV","Latin America & Caribbean",2135
+"BLZ","Latin America & Caribbean",8681
+"CUB","Latin America & Caribbean",8637
+"SEN","Sub-Saharan Africa",2225
+"VEN","Latin America & Caribbean",2201
+"CAN","North America",2169
+"NIC","Latin America & Caribbean",2255
+"GUY","Latin America & Caribbean",2124
+"COL","Latin America & Caribbean",2175
+"IRL","Europe & Central Asia",2114
+"GNB","Sub-Saharan Africa",8685
+"GIN","Sub-Saharan Africa",2122
+"CIV","Sub-Saharan Africa",2161
+"LBR","Sub-Saharan Africa",2105
+"HND","Latin America & Caribbean",2103
+"ECU","Latin America & Caribbean",2166
+"ESH","Middle East & North Africa",8617
+"SUR","Latin America & Caribbean",2182
+"MAR","Middle East & North Africa",2221
+"ARE","Middle East & North Africa",2206
+"CYP","Europe & Central Asia",2159
+"ERI","Sub-Saharan Africa",2111
+"EGY","Middle East & North Africa",3868
+"GEO","Europe & Central Asia",2102
+"IRN","Middle East & North Africa",2126
+"LBN","Middle East & North Africa",2098
+"LBY","Middle East & North Africa",2194
+"MLT","Middle East & North Africa",2217
+"OMN","Middle East & North Africa",2251
+"SAU","Middle East & North Africa",2215
+"LKA","South Asia",2195
+"SYR","Middle East & North Africa",3384
+"TGO","Sub-Saharan Africa",8632
+"GRC","Europe & Central Asia",2099
+"TUR","Europe & Central Asia",2213
+"MCO","Europe & Central Asia",2222
+"TUN","Middle East & North Africa",2214
+"MNE","Europe & Central Asia",17831
+"ALB","Europe & Central Asia",2153
+"BGR","Europe & Central Asia",2174
+"PSE","Middle East & North Africa",15525
+"KWT","Middle East & North Africa",2115
+"IRQ","Middle East & North Africa",2125
+"BHR","Middle East & North Africa",2154
+"QAT","Middle East & North Africa",2242
+"YEM","Middle East & North Africa",2199
+"ISR","Middle East & North Africa",2123
+"JOR","Middle East & North Africa",2120
+"DJI","Middle East & North Africa",2131
+"BGD","South Asia",2142
+"NGA","Sub-Saharan Africa",2253
+"CMR","Sub-Saharan Africa",2170
+"STP","Sub-Saharan Africa",2238
+"BIH","Europe & Central Asia",2136
+"MHL","East Asia & Pacific",2226
+"PLW","East Asia & Pacific",8594
+"PHL","East Asia & Pacific",2245
+"TWN","East Asia & Pacific",2177
+"SGP","East Asia & Pacific",2190
+"THA","East Asia & Pacific",2207
+"VNM","East Asia & Pacific",2200
+"KOR","East Asia & Pacific",8600
+"BRN","East Asia & Pacific",2145
+"PRK","East Asia & Pacific",8601
+"KHM","East Asia & Pacific",2171
+"CHN","East Asia & Pacific",8603
+"EST","Europe & Central Asia",2110
+"FIN","Europe & Central Asia",2106
+"SWE","Europe & Central Asia",2180
+"LTU","Europe & Central Asia",2156
+"NOR","Europe & Central Asia",2252
+"BEL","Europe & Central Asia",14
+"DEU","Europe & Central Asia",2101
+"LVA","Europe & Central Asia",2132
+"HRV","Europe & Central Asia",2160
+"ITA","Europe & Central Asia",2133
+"UKR","Europe & Central Asia",2196
+"ROU","Europe & Central Asia",2241
+"JPN","East Asia & Pacific",2121
+"IND","South Asia",2128
+"PAK","South Asia",2250
+"TKM","Europe & Central Asia",2212
+"AZE","Europe & Central Asia",2134
+"KAZ","Europe & Central Asia",2119
+"MMR","East Asia & Pacific",2219
+"POL","Europe & Central Asia",2244
+"SDN","Sub-Saharan Africa",2183
+"BEN","Sub-Saharan Africa",2139
+"SVN","Europe & Central Asia",2188
+"MYS","East Asia & Pacific",2230
+"QAT","Middle East & North Africa",8468
+"TUV","East Asia & Pacific",2210
+"FJI","East Asia & Pacific",2108
+"FSM","East Asia & Pacific",8595
+"GNQ","Sub-Saharan Africa",2112
+"MDV","South Asia",2229
+"SOM","Sub-Saharan Africa",2187
+"NRU","East Asia & Pacific",8596
+"GAB","Sub-Saharan Africa",2104
+"IDN","East Asia & Pacific",2127
+"DZA","Middle East & North Africa",2152
+"GHA","Sub-Saharan Africa",2100
+"RUS","Europe & Central Asia",2240
+"Land",NA,999999
+"High seas",NA,99999
