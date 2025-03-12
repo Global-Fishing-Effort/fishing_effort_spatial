@@ -43,13 +43,11 @@
 "GTM","Latin America & Caribbean",2097
 "DNK","Europe & Central Asia",2157
 "GMB","Sub-Saharan Africa",2113
-"GIB","Europe & Central Asia",2208
 "GRD","Latin America & Caribbean",8650
 "SLE","Sub-Saharan Africa",2191
 "ISL","Europe & Central Asia",2129
 "JAM","Latin America & Caribbean",8682
 "MRT","Sub-Saharan Africa",2236
-"HTI","Latin America & Caribbean",8639
 "KNA","Latin America & Caribbean",8644
 "LCA","Latin America & Caribbean",8647
 "VCT","Latin America & Caribbean",8651
@@ -57,26 +55,26 @@
 "SLV","Latin America & Caribbean",2135
 "BLZ","Latin America & Caribbean",8681
 "CUB","Latin America & Caribbean",8637
+"HTI","Latin America & Caribbean",8639
 "SEN","Sub-Saharan Africa",2225
-"VEN","Latin America & Caribbean",2201
-"CAN","North America",2169
 "NIC","Latin America & Caribbean",2255
 "GUY","Latin America & Caribbean",2124
-"COL","Latin America & Caribbean",2175
 "IRL","Europe & Central Asia",2114
 "GNB","Sub-Saharan Africa",8685
 "GIN","Sub-Saharan Africa",2122
 "CIV","Sub-Saharan Africa",2161
 "LBR","Sub-Saharan Africa",2105
 "HND","Latin America & Caribbean",2103
+"VEN","Latin America & Caribbean",2201
 "ECU","Latin America & Caribbean",2166
-"ESH","Middle East & North Africa",8617
+"CAN","North America",2169
 "SUR","Latin America & Caribbean",2182
+"COL","Latin America & Caribbean",2175
 "MAR","Middle East & North Africa",2221
 "ARE","Middle East & North Africa",2206
 "CYP","Europe & Central Asia",2159
-"ERI","Sub-Saharan Africa",2111
 "EGY","Middle East & North Africa",3868
+"ERI","Sub-Saharan Africa",2111
 "GEO","Europe & Central Asia",2102
 "IRN","Middle East & North Africa",2126
 "LBN","Middle East & North Africa",2098
@@ -111,7 +109,6 @@
 "MHL","East Asia & Pacific",2226
 "PLW","East Asia & Pacific",8594
 "PHL","East Asia & Pacific",2245
-"TWN","East Asia & Pacific",2177
 "SGP","East Asia & Pacific",2190
 "THA","East Asia & Pacific",2207
 "VNM","East Asia & Pacific",2200
@@ -130,7 +127,6 @@
 "LVA","Europe & Central Asia",2132
 "HRV","Europe & Central Asia",2160
 "ITA","Europe & Central Asia",2133
-"UKR","Europe & Central Asia",2196
 "ROU","Europe & Central Asia",2241
 "JPN","East Asia & Pacific",2121
 "IND","South Asia",2128
@@ -140,11 +136,9 @@
 "KAZ","Europe & Central Asia",2119
 "MMR","East Asia & Pacific",2219
 "POL","Europe & Central Asia",2244
-"SDN","Sub-Saharan Africa",2183
 "BEN","Sub-Saharan Africa",2139
 "SVN","Europe & Central Asia",2188
 "MYS","East Asia & Pacific",2230
-"QAT","Middle East & North Africa",8468
 "TUV","East Asia & Pacific",2210
 "FJI","East Asia & Pacific",2108
 "FSM","East Asia & Pacific",8595
@@ -157,5 +151,6 @@
 "DZA","Middle East & North Africa",2152
 "GHA","Sub-Saharan Africa",2100
 "RUS","Europe & Central Asia",2240
+"SDN","Sub-Saharan Africa",2183
 "Land",NA,999999
 "High seas",NA,99999

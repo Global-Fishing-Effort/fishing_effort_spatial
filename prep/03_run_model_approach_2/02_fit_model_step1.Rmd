@@ -1,5 +1,5 @@
 ---
-title: "Fit prediction model for fishing effort"
+title: "Fit prediction model for fishing effort: stage 1"
 output: html_document
 date: "2024-12-11"
 editor_options: 
@@ -8,16 +8,17 @@ editor_options:
 
 # Summary 
 
-We use the data compiled in the previous scripts to fit a logistic regression model (or a random forest) to predict the prescence (1) or absence (0) of fishing effort in every cell. We will do this for each flag country individually. We will start by testing some individual countries. 
+We use the data compiled in the previous scripts to fit a logistic regression model (or a random forest) to predict the presence (1) or absence (0) of fishing effort in every cell. We will do this for each flag country individually. We will start by testing some individual countries. 
 
-## Environement
+In the second step, they model the intensity of fishing on only cells which actually have fishing effort. In our case, this will be the proportion of global production. Then they multiply the prediction of where fishing occurs (from step 1, 0 or 1) by the intensity of fishing (in our case 0-1). 
+
+## Environment
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
 rm(list = ls())
 
-library(tidyverse)
 # install.packages("betareg")
 # install.packages("foreach")
 # install.packages("doParallel")
@@ -27,6 +28,7 @@ library(tidyverse)
 # install.packages("qs")
 # install.packages("strex")
 
+library(tidyverse)
 library("qs")
 library(betareg)
 library(foreach)
@@ -39,6 +41,10 @@ library(terra)
 library(glue)
 library(arrow)
 library(strex)
+library(broom)
+
+# install.packages("randomForest")
+library(randomForest)
 
 source(here("R/dir.R"))
 
@@ -56,7 +62,7 @@ elnino <- read.csv(here("data/model_features/enso_index.csv"))
 pdo <- read.csv(here("data/model_features/pdo_index.csv"))
 
 world_bank <- read.csv(here("data/model_features/world_bank_regions.csv")) %>%
-  filter(ISO_SOV1 != "GIB")
+  filter(ISO_SOV1 != "GIB") # filter out gibralter bc it is duplicating the UK for some reason
 
 gfi_df <- read.csv(here("data/model_features/global_fishing_index_governance.csv"))
 
@@ -80,22 +86,21 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
 
   spatial_data <- global_grid %>%
     left_join(read.csv(here("data/model_features/deg_1_x_1/gfw_static_spatial_measures.csv")) %>% dplyr::select(-lat, -lon), by = "pixel_id") %>%
-   left_join(read.csv(here("data/model_features/deg_1_x_1/mesopelagiczones/mesopelagiczones.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/deg_1_x_1/mesopelagiczones/mesopelagiczones_fixed.csv")), by = "pixel_id") %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/eez/eez.csv")), by = "pixel_id") %>%
-   left_join(read.csv(here("data/model_features/deg_1_x_1/fao/fao.csv")), by = "pixel_id") %>%
-   left_join(read.csv(here("data/model_features/deg_1_x_1/oceans.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/deg_1_x_1/fao/fao_fixed.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/deg_1_x_1/oceans_fixed.csv")), by = "pixel_id") %>%
     left_join(read.csv(here("data/model_features/deg_1_x_1/seamounts.csv")), by = "pixel_id") %>% 
    crossing(., year = c(2015:2017)) 
   
   
   env_data <- spatial_data %>%
     left_join(ocean_data) %>% # cool.
-    rename(meso_id = provid) %>%
     dplyr::select(-geometry_wkt) %>%
     left_join(elnino) %>%
     left_join(pdo) %>%
     left_join(world_bank, by = c("eez_id" = "MRGID_SOV1")) %>%
-    mutate(eez_region_world_bank_7 = ifelse(ISO_SOV1 %in% c("High seas", "Land"), "high_seas", eez_region_world_bank_7)) %>% 
+    mutate(eez_region_world_bank_7 = ifelse(ISO_SOV1 %in% c("High seas", "Land"), "High seas", eez_region_world_bank_7)) %>% 
     left_join(gfi_df, by = c("ISO_SOV1" = "flag_fin")) %>% # add in global fishing index data here
     mutate(gov_score = ifelse(eez_id >= 99999 & is.na(gov_score), "high_seas", gov_score)) %>%
         mutate(gov_score = ifelse(eez_id < 99999 & is.na(gov_score), "no_data", gov_score)) %>%
@@ -302,7 +307,7 @@ registerDoParallel(cl)
 # Run in parallel 
 foreach(flag = flags, .packages = c("dplyr", "glue", "stats", "tictoc", "tidyr")) %dopar% {
   
-  # flag = "ISL" 
+  # flag = "VNM" 
   
   model_path <- glue(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_{flag}.rds"))
   
@@ -336,19 +341,19 @@ foreach(flag = flags, .packages = c("dplyr", "glue", "stats", "tictoc", "tidyr")
     mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
            log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours))
   
-  if(length(unique(full_data$gear)) == 1 | length(unique(full_data$length_category)) == 1 ){ # skipping any that only have one categorical variable since we can't model these? 
+  if(length(unique(full_data$gear)) == 1 | length(unique(full_data$length_category)) == 1 ){ # skipping any that only have one categorical variable since model won't run these?  
   return(NULL)
   
 }
   
   if(nrow(full_data) == 0){ # if its an empty dataframe we have nothing to model... These would be the countries missing from AIS i guess? 
-        cat(flag, "not in data... skippings")
+        cat(flag, "not in data... skipping")
     return(NULL)
   }
   
   tic()
-  model <- stats::glm(model_formula, data = full_data, family = binomial(link = "logit"))
-  toc()
+  model <- stats::glm(model_formula, data = full_data, family = binomial(link = "logit")) ## March 12 - not sure why, but these models are taking a lot longer to run now... is it because i fixed some of the input data? for example, the saved models are much larger now. Canada has a saved model of ~4GB now... 
+  toc() # ok viet nam took ~ 10 mins now...
   
   # CN commented not to overwrite
   saveRDS(model, model_path)
@@ -360,7 +365,55 @@ stopCluster(cl)
 ############ March 11, 2025 - GC -
 #### ok getting some weird results. For example, for ivory coast some of the variables are all NA and prompt this response "not defined because of singularities". I think this means that some of the variables are perfectly collinear... So maybe we shouldn't include every variable that mcdonald et al includes? Anyway, I am rerunning all of these models with all of the new variables I've prepped (e.g., PDO index, ocean, nearest seamount, global fishing index, world bank regions)
 
+
+test <- readRDS(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_VNM.rds"))
+coef_df <- tidy(test)
+summary(test)
+
+# interesting... this is saying all variables are highly signficant, except for the ones not included due to collinearity (see below)...
+# why are year, pdo, world bank regions, gfi governance score all NA??? The NAs are "not defined because of singularities". Apparently this means 2 or more variables are highly collinear
+
 ```
+
+## GC - do some predictions 
+
+```{r}
+flag = "CAN" 
+  
+model_data_flag <- model_data %>%
+  dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
+  filter(flag_fin == flag)
+  
+distinct_cats <- model_data_flag %>%
+    distinct(year, flag_fin, gear, length_category)
+  
+full_grid <- tidyr::crossing(env_grid, distinct_cats)
+  
+full_data <- full_grid %>%
+  left_join(env_data, by = c("lon", "lat", "year")) %>%
+  left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
+  mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
+  dplyr::select(-pixel_id) %>%
+  left_join(hist_fish_data) %>%
+  mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
+         log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours))
+
+test_mod <- readRDS(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_CAN.rds"))
+
+pred_test <- full_data %>%
+  mutate(eez_region_world_bank_7 = ifelse(eez_region_world_bank_7 == "High seas", "high_seas", eez_region_world_bank_7)) %>%
+    mutate(pred_prop_pres = stats::predict(test_mod, newdata = ., type = "response")) # ok...
+
+testing <- pred_test %>% filter(pred_prop_pres >= 0.5, year == 2015) # filter for probs > 0.5 (i.e., more likely than not to having fishing in them). Results in only 464 cells for 2015... that doesn't seem right. 
+testing <- full_data %>% filter(year == 2015, presence == 1) # 1549 cells reported in AIS data. That seems problematic that we are getting less cells predicted with fishing effort in them.
+
+## what about if we do any probabilities greater than the minimum prob? 
+min_prob <- min(pred_test$pred_prop_pres, na.rm = TRUE)
+testing <- pred_test %>% filter(pred_prop_pres > min_prob, year == 2015) # seems like too many cells now.
+quantile(testing$pred_prop_pres) # not sure what the best thing to do if we want to use logistic regression. Maybe we should just use random forest, but I fear we'll run into the same problem of not enough cells being predicted with fishing effort in them. Surely we should get at least the same number of cells with fishing predicted in them as there is actually AIS cells?
+
+```
+
 
 ## CN check countries not run or gear combinations not run 
 
@@ -463,14 +516,14 @@ filter(model_data, id == "DJI Trawl_Midwater_or_Unsp Over 50m")
 
 ```
 
-## CN apply model to one country only fo ease of investigation 
+## CN apply model to one country only for ease of investigation 
 
 ```{r}
 
 ### prepare data as per function above ---- 
 # unique(model_data$flag_fin)
 
-flag = "NZL" # "CIV" no match between r and ias data  
+flag = "NZL" # "CIV" no match between r and ais data  
   
 model_data_flag <- model_data %>%
   dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
@@ -510,40 +563,48 @@ hist_fish_data %>%
 # simplify model formula to
 model_formula_simpler <- formula(
   presence ~ 
+    # Categorical/factor predictors
+   # flag_fin + # since we're creating a model for each flag country? s
     gear  + 
     length_category +
-    # factor(meso_id) +  
-    # factor(eez_id) + 
-    # factor(fao_id) + 
-    # factor(ocean) +  # Spatial categorical variables
-    # log_total_fishing_hours + # honestly not sure if this is necessary. It was a suggestion from Julia to include. Basically a sort of fishing capacity variable. 
-    # lon + 
-    # lat + 
-    # elevation_m + # depth
-    # distance_from_port_m + 
-    # distance_from_shore_m +
-    # chl_mg_per_m3_mean + 
-    # chl_mg_per_m3_sd +
+    factor(meso_id) +  
+    factor(eez_id) + 
+    factor(fao_id) + 
+    factor(ocean) +  # Spatial categorical variables
+    factor(eez_region_world_bank_7) + # world bank regions
+    factor(gov_score) + # global fishing index; make sure this is factor and not a numeric variable
+    # Total effort predictor (log-transformed)
+    log_total_fishing_hours + # honestly not sure if this is necessary. It was a suggestion from Julia to include. Basically a sort of fishing capacity variable. 
+    # Continuous predictors
+    lon + lat + 
+    elevation_m + # depth
+    distance_from_port_m + 
+    distance_from_shore_m +
+    chl_mg_per_m3_mean + 
+    chl_mg_per_m3_sd +
     sst_c_mean + 
-    # sst_c_sd +
-    # wind_speed_ms_mean + 
-    # wind_speed_ms_sd +
-    # enso_index_mean + # el nino data 
-    # enso_index_sd + 
-    # s(year, k=2) # smooth term for year; maybe not necessary? Fishing effort isn't necessarily linear so keeping for now. Does this slow down modeling? 
+    sst_c_sd +
+    wind_speed_ms_mean + 
+    wind_speed_ms_sd +
+    enso_index_mean + # el nino data 
+    enso_index_sd + # pacific decadal oscillation
+    pdo_index_mean +  
+    pdo_index_sd + 
+    nearest_seamount_distance_m + 
+    # Year effect
     year
 )
 
 ### GLM ---- 
-data_glm<-full_data %>% 
+data_glm <- full_data %>% 
   # done for random forest below 
   # filter(!is.na(sst_c_mean)) %>% # cannot handle NAs - Why? and why are there NAs? is this land?
-  na.omit() %>% # these removes all NAs but... 
+  # na.omit() %>% # these removes all NAs but... 
   mutate(presence = as.factor(presence)) %>% # transform in ctegorical
   distinct()
 
 tic()
-model <- stats::glm(model_formula, data = data_glm, family = binomial(link = "logit"))
+model <- stats::glm(model_formula_simpler, data = data_glm, family = binomial(link = "logit"))
 toc() # full model 191 sec elapsed
 # model
 par(mfrow = c(2,2))
@@ -561,8 +622,6 @@ plot(model)
 # when a factor has 1 cat only - possible with gear, length_cat and year as for checks above 
 
 #### random forest ----
-# install.packages("randomForest")
-library(randomForest)
 
 # https://www.geeksforgeeks.org/ml-classification-vs-regression/
 
@@ -578,17 +637,17 @@ library(randomForest)
 # classifier <- randomForest( formula = vs~hp+drat, data=mtcars)
 # predict(classifier, type="prob")
 
-data_random_forest<-full_data %>% 
+data_random_forest <- full_data %>% 
   # filter(!is.na(sst_c_mean)) %>% # cannot handle NAs - Why? and why are there NAs? is this land?
-  na.omit() %>% # these removes all NAs but... 
-  mutate(presence = as.factor(presence)) %>% # transform in ctegorical
+  na.omit() %>% # these removes all NAs but removes a decent chunk of data. GC - I looked into why there are NAs in the sst, chl, and wind variables, and couldn't find a great answer. I've prepped the data the same exact way as McDonald et al, and I even looked at their input files and they have the exact same number of cells with data in them. 
+  mutate(presence = as.factor(presence)) %>% # transform in categorical
   distinct()
 
 # problems with categorical predictors: rf does not like them in model formula as done for glm; also when I convert them in the dataset: Error in randomForest.default(m, y, ...) : 
   # Can not handle categorical predictors with more than 53 categories.
 # Some transformation needed https://www.geeksforgeeks.org/how-to-fit-categorical-data-types-for-random-forest-classification/
 # though not doing anything seems to produce results too but not sure if right
-
+#### GC - It looks like to me that RF just doesn't like factors, but if we include them as categorical, it works for me? 
 # data_random_forest<-data_random_forest %>% 
 #   mutate(gear = as.factor(gear),  
 #          length_category = as.factor(length_category),
@@ -617,36 +676,71 @@ test <- data_random_forest[-samp, ]
 # apply model on train 
 model_formula_rf <- formula(
   presence ~ 
+    # Categorical/factor predictors
+   # flag_fin + # since we're creating a model for each flag country? s
     gear  + 
     length_category +
     meso_id +
     eez_id +
     fao_id +
-    ocean +  
-    # log_total_fishing_hours + 
-    lon +
-    lat +
+    ocean +  # Spatial categorical variables
+    eez_region_world_bank_7 + # world bank regions
+  #  factor(gov_score) + # global fishing index; make sure this is factor and not a numeric variable
+    # Total effort predictor (log-transformed)
+    log_total_fishing_hours + # honestly not sure if this is necessary. It was a suggestion from Julia to include. Basically a sort of fishing capacity variable. 
+    # Continuous predictors
+    lon + lat + 
     elevation_m + # depth
-    distance_from_port_m +
+    distance_from_port_m + 
     distance_from_shore_m +
-    chl_mg_per_m3_mean +
+    chl_mg_per_m3_mean + 
     chl_mg_per_m3_sd +
     sst_c_mean + 
     sst_c_sd +
-    wind_speed_ms_mean +
+    wind_speed_ms_mean + 
     wind_speed_ms_sd +
-    enso_index_mean + 
-    enso_index_sd +
+    enso_index_mean + # el nino data 
+    enso_index_sd + # pacific decadal oscillation
+    pdo_index_mean +  
+    pdo_index_sd + 
+    nearest_seamount_distance_m + 
+    # Year effect
     year
 )
 
 tic()
 model <- randomForest(model_formula_rf, data = train, type = "classification", proximity = FALSE, ntree = 100) # , mtry = 5) # proximity = FALSE to speed up the process as no needed for classification (I think), reduce ntree to speed up process but careful not to set too low
-toc() # 19 sec
+toc() # 19 sec ## GC - March 12 - I fixed some of the input layers and now this is taking MUCH longer to run, now ~4 mins for NZL 
 model
 
+qs::qsave(model, here("data/output/train_rf_model_nzl.qs"))
+
 # validate our model using the test data
-prediction <- predict(model, newdata = test, type="prob")
+
+## GC - look at some predictions
+prediction_prob <- data.frame(pred_presence = predict(model, newdata = test, type="prob")[, "1"]) # so these are the probability of presence. 
+nrow(prediction_prob %>% filter(pred_presence>=0.5)) # 554 with prob of presence >= 0.5
+
+prediction <- data.frame(pred_presence = predict(model, newdata = test, type="response")) # so these are the presence (0 or 1) predictions 
+nrow(prediction %>% filter(pred_presence == 1)) # 543 cells with predictions? 
+
+prediction_vote <- data.frame(pred_presence = predict(model, newdata = test, type="vote")) # not sure how this is different than the probability one?  
+
+nrow(test %>% filter(presence ==1)) # 1134. So we are predicting less cells than are shown in the AIS data... that doesn't seem right. 
+nrow(prediction_prob %>% filter(pred_presence>0)) # 554 with prob of presence >= 0.5
+
+test_preds <- test %>%
+  mutate(pred_presence = predict(model, newdata = .,, type="prob")[, "1"]) %>%
+  filter(gear == "Trawl_Midwater_or_Unsp",
+         length_category == "12-24m", 
+         year == 2015) %>% 
+  dplyr::select(lon, lat, pred_presence) %>%
+#  mutate(pred_presence = ifelse(pred_presence > 0.5, 1, pred_presence)) %>%
+  distinct() %>%
+  rast(., type = "xyz")
+
+plot(test_preds)
+
 
 # view results 
 # calculate the accuracy of the model
@@ -654,37 +748,8 @@ prediction <- predict(model, newdata = test, type="prob")
 ```
 
 
-## GC - lets try looking at the testing predictions? 
-
-```{r}
-pred_test <- test %>%
-  mutate(pred_prop_pres = predict(model, newdata = ., type="prob")[, "1"]) %>%
-   mutate(pred_prop_abs = predict(model, newdata = ., type="prob")[, "1"]) %>%
-  filter(pred_prop_pres > 0) %>% # just test filtering for any presence possible
-  # mutate(pres = ifelse(pred_prop_pres > 0, 1, 0)) %>%
-  mutate(pres = 1) %>%
-  distinct(lat, lon, pres)
-
-pred_rast <- pred_test %>%
-  rast(., type = "xyz")
-
-plot(pred_rast, col = "red") # ok... looks a little wonky... but I guess we are only predicting to the testing data. Maybe doing predictions on all data would be better? 
 
 
-pred_test <- full_data %>%
-  mutate(pred_prop_pres = predict(model, newdata = ., type="prob")[, "1"]) %>%
-   mutate(pred_prop_abs = predict(model, newdata = ., type="prob")[, "1"]) %>%
-  filter(pred_prop_pres > 0) %>% # just test filtering for any presence possible
-  # mutate(pres = ifelse(pred_prop_pres > 0, 1, 0)) %>%
-  mutate(pres = 1) %>%
-  distinct(lat, lon, pres)
-
-pred_rast <- pred_test %>%
-  rast(., type = "xyz")
-
-plot(pred_rast) # still looks really weird. hard to tell what is going on but its putting fishing predictions from 150 to -150 longitude I think?
-
-```
 
 # CN model diagnostic plots - print  
 
@@ -697,6 +762,118 @@ plot(pred_rast) # still looks really weird. hard to tell what is going on but it
 ```{r}
 
 ```
+
+
+## GC testing a random forest presence/absence model with the full dataset
+
+```{r}
+
+model_data_all <- model_data %>%
+  dplyr::select(lon, lat, gear, length_category, year, presence) %>%
+  distinct()
+  
+distinct_cats <- model_data_all %>%
+    distinct(year, gear, length_category)
+  
+full_grid <- tidyr::crossing(env_grid, distinct_cats)
+  
+hist_fish_data_all <- hist_fish_data %>%
+  group_by(gear, length_category, year) %>%
+  summarise(total_fishing_hours = sum(total_fishing_hours)) %>%
+  ungroup() %>%
+  mutate(log_total_fishing_hours = log1p(total_fishing_hours))
+  
+full_data <- full_grid %>%
+  left_join(env_data, by = c("lon", "lat", "year")) %>%
+  left_join(model_data_all, by = c("lon", "lat", "year", "gear", "length_category")) %>%
+  mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
+  dplyr::select(-pixel_id) %>%
+  left_join(hist_fish_data_all) %>%
+  mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
+         log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours))
+  
+# checkes 
+length(unique(full_data$gear)) == 1 | length(unique(full_data$length_category)) == 1 
+nrow(full_data) == 0
+
+
+
+
+#### random forest ----
+
+data_random_forest <- full_data %>% 
+  na.omit() %>% 
+  mutate(presence = as.factor(presence)) %>% # transform in categorical
+  distinct()
+
+
+# Split the data into training and testing. 80% for training, 20% for testing.
+set.seed(123)
+samp <- sample(nrow(data_random_forest), 0.5 * nrow(data_random_forest)) 
+
+train <- data_random_forest[samp, ]
+# ggplot(train,aes(presence)) + geom_histogram(aes(fill=gear),bins=50, stat="count")
+# ggplot(filter(train, presence == 1),aes(presence)) + geom_histogram(aes(fill=gear),bins=50, stat="count")
+test <- data_random_forest[-samp, ]
+
+# apply model on train 
+model_formula_rf <- formula(
+  presence ~ 
+    # Categorical/factor predictors
+   # flag_fin + # since we're creating a model for each flag country? s
+    gear  + 
+    length_category +
+    meso_id +
+    eez_id +
+    fao_id +
+    ocean +  # Spatial categorical variables
+    eez_region_world_bank_7 + # world bank regions
+  #  factor(gov_score) + # global fishing index; make sure this is factor and not a numeric variable
+    # Total effort predictor (log-transformed)
+    log_total_fishing_hours + # honestly not sure if this is necessary. It was a suggestion from Julia to include. Basically a sort of fishing capacity variable. 
+    # Continuous predictors
+    lon + lat + 
+    elevation_m + # depth
+    distance_from_port_m + 
+    distance_from_shore_m +
+    chl_mg_per_m3_mean + 
+    chl_mg_per_m3_sd +
+    sst_c_mean + 
+    sst_c_sd +
+    wind_speed_ms_mean + 
+    wind_speed_ms_sd +
+    enso_index_mean + # el nino data 
+    enso_index_sd + # pacific decadal oscillation
+    pdo_index_mean +  
+    pdo_index_sd + 
+    nearest_seamount_distance_m + 
+    # Year effect
+    year
+)
+
+tic()
+model <- randomForest(model_formula_rf, data = train, type = "classification", proximity = FALSE, ntree = 100) # , mtry = 5) # proximity = FALSE to speed up the process as no needed for classification (I think), reduce ntree to speed up process but careful not to set too low
+toc() # 
+model
+
+qs::qsave(model, here("data/output/FULL_rf_model_train.qs"))
+
+# validate our model using the test data
+
+## GC - look at some predictions
+prediction_prob <- data.frame(pred_presence = predict(model, newdata = test, type="prob")[, "1"]) # so these are the probability of presence. 
+nrow(prediction_prob %>% filter(pred_presence>=0.5)) # 554 with prob of presence >= 0.5
+
+prediction <- data.frame(pred_presence = predict(model, newdata = test, type="response")) # so these are the presence (0 or 1) predictions 
+nrow(prediction %>% filter(pred_presence == 1)) # 543 cells with predictions? 
+
+prediction_vote <- data.frame(pred_presence = predict(model, newdata = test, type="vote")) # not sure how this is different than the probability one?  
+
+nrow(test %>% filter(presence ==1)) # 1134. So we are predicting less cells than are shown in the AIS data... that doesn't seem right. 
+
+```
+
+
 
 ## Test to see if predictions look OK
 
@@ -1057,4 +1234,49 @@ test_gfw <- qs::qread(file.path(rdsi_dir, "prep/gfw_props/deg_half/all_effort_ge
 
 plot(test_gfw)
 ```
+
+
+**How the model from McDonald et al works:**
+
+**Overview of the Model**
+The researchers developed a two-stage hurdle random forest model to predict fishing effort:
+
+Stage 1 (Classification/Extensive Margin): Predicts whether any fishing occurs in a pixel (binary outcome: 0 or 1)
+Stage 2 (Regression/Intensive Margin): Predicts the intensity of fishing effort if fishing occurred (continuous outcome: hours/m²)
+
+**Data Used in Both Stages**
+Both stages use the same set of input features, which include:
+
+1. MPA implementation features (11 features): Distance to nearest MPA, years since MPA designation, fraction of MPA coverage, etc.
+2. Environmental features (12 features): Sea surface temperature, chlorophyll-A, wind speed, etc.
+3. Geographic features (7 features): Latitude, longitude, distance to shore, distance to seamount, bathymetry depth, etc.
+4. Governance features (6 features): EEZ presence, governance capacity scores, etc.
+5. Economic features (3 features): Distance to port, fuel prices, etc.
+6. Technological features (2 features): AIS reception quality metrics
+7. Residual effects features: Lagged fishing effort from previous years, year variable
+
+**Relationship Between Stage 1 and Stage 2**
+Training Process: The stages are trained independently but with different subsets of data:
+
+ - Stage 1 uses all observations from the training dataset
+ - Stage 2 only uses observations where fishing effort is non-zero (conditional on fishing occurring)
+ 
+Prediction Process: When making predictions, the outputs from both stages are combined:
+
+ - The paper explicitly states: "We combine each Stage 1 and Stage 2 out-of-sample predictions into full hurdle model predictions. For each observation, we simply multiply the stage 1 classification prediction (0 or 1) by the stage 2 prediction (h/m² of fishing effort)."
+  
+Data Flow: The Stage 1 model does not directly feed data into Stage 2 during training. Instead:
+
+ - Stage 1 determines IF fishing occurs (probability of fishing)
+ - Stage 2 determines HOW MUCH fishing occurs (intensity of fishing)
+ - The final prediction multiplies these two outputs together
+ 
+This is a classic hurdle model approach where the first stage models the "hurdle" of whether an event occurs at all, and the second stage models the intensity given that the hurdle is crossed.
+
+**Performance Metrics**
+ - Stage 1 (Classification): Evaluated using ROC area-under-curve (~0.97), F1 score (~0.91), precision, and recall
+ - Stage 2 (Regression): Evaluated using R² (~0.8), RMSE, and normalized RMSE
+ 
+**Summary**
+The two stages work together but are trained separately. Stage 1 doesn't directly feed data into Stage 2 during training, but their outputs are multiplied together during prediction. This approach allows the model to separately handle the binary question of "does fishing occur?" and the continuous question of "how much fishing occurs?" which is particularly useful when dealing with data that has many zeros (areas with no fishing).
 
