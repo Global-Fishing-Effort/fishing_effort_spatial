@@ -769,7 +769,7 @@ plot(test_preds)
 
 
 test_actual <- test %>%
-  mutate(pred_presence = predict(model, newdata = .,, type="prob")[, "1"]) %>%
+  mutate(pred_presence = predict(model, newdata = ., type="prob")[, "1"]) %>%
   filter(gear == "Trawl_Midwater_or_Unsp",
          length_category == "12-24m", 
          year == 2015) %>% 
@@ -889,7 +889,7 @@ model_formula_rf <- formula(
 
 tic()
 model <- randomForest(model_formula_rf, data = train, type = "classification", proximity = FALSE, ntree = 100) # , mtry = 5) # proximity = FALSE to speed up the process as no needed for classification (I think), reduce ntree to speed up process but careful not to set too low
-toc() # 
+toc() # 28 mins
 model
 
 qs::qsave(model, here("data/output/FULL_rf_model_train.qs"))
