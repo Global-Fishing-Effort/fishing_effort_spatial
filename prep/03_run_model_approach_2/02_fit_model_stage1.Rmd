@@ -286,136 +286,6 @@ env_grid <- env_data %>%
 
 ```
 
-## Run models in parallel 
-
-```{r}
-flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 167 of them
-
-# flags <- setdiff(flags,  str_before_last(str_after_last(list.files(file.path(rdsi_dir, "prep/logistic_regression_models/")), "_"), "\\."))
-
-missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
-length(missing_flags) # 28
-
-flags <- setdiff(flags, missing_flags)  ## CN are these countries that have not run from previous iterations? GC - yes, these would not have been run before. 
-
-# Set up parallel backend
-# num_cores <- detectCores() - 1  # Use available cores minus 1 to avoid overloading
-num_cores = 10 # to be safe. I tried with 31 and it overloaded. Lets assume ~8gb per model (that was what australia was, so ~16 is the max we could use)
-cl <- makeCluster(num_cores)
-registerDoParallel(cl)
-
-# Run in parallel 
-foreach(flag = flags, .packages = c("dplyr", "glue", "stats", "tictoc", "tidyr")) %dopar% {
-  
-  # flag = "VNM" 
-  
-  model_path <- glue(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_{flag}.rds"))
-  
-  # if (file.exists(model_path)) {
-  #   cat("Model for", flag, "exists... skipping\n")
-  #   return(NULL)
-  # }
-  
-  if(flag %in% missing_flags){
-    cat(flag, "not in data... skippings")
-    return(NULL)
-  }
-  
-  message("Fitting logistic regression model for ", flag, "...")
-  
-  model_data_flag <- model_data %>%
-    dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
-    filter(flag_fin == flag)
-  
-  distinct_cats <- model_data_flag %>%
-    distinct(year, flag_fin, gear, length_category)
-  
-  full_grid <- tidyr::crossing(env_grid, distinct_cats)
-  
-  full_data <- full_grid %>%
-    left_join(env_data, by = c("lon", "lat", "year")) %>%
-    left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
-    mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
-    dplyr::select(-pixel_id) %>%
-    left_join(hist_fish_data) %>%
-    mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
-           log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours))
-  
-  if(length(unique(full_data$gear)) == 1 | length(unique(full_data$length_category)) == 1 ){ # skipping any that only have one categorical variable since model won't run these?  
-  return(NULL)
-  
-}
-  
-  if(nrow(full_data) == 0){ # if its an empty dataframe we have nothing to model... These would be the countries missing from AIS i guess? 
-        cat(flag, "not in data... skipping")
-    return(NULL)
-  }
-  
-  tic()
-  model <- stats::glm(model_formula, data = full_data, family = binomial(link = "logit")) ## March 12 - not sure why, but these models are taking a lot longer to run now... is it because i fixed some of the input data? for example, the saved models are much larger now. Canada has a saved model of ~4GB now... 
-  toc() # ok viet nam took ~ 10 mins now...
-  
-  # CN commented not to overwrite
-  saveRDS(model, model_path)
-}
-
-# Stop cluster
-stopCluster(cl)
-
-############ March 11, 2025 - GC -
-#### ok getting some weird results. For example, for ivory coast some of the variables are all NA and prompt this response "not defined because of singularities". I think this means that some of the variables are perfectly collinear... So maybe we shouldn't include every variable that mcdonald et al includes? Anyway, I am rerunning all of these models with all of the new variables I've prepped (e.g., PDO index, ocean, nearest seamount, global fishing index, world bank regions)
-
-
-test <- readRDS(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_VNM.rds"))
-coef_df <- tidy(test)
-summary(test)
-
-# why are year, pdo, world bank regions, gfi governance score all NA??? The NAs are "not defined because of singularities". Apparently this means 2 or more variables are highly collinear
-
-test_mod <- readRDS(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_CAN.rds"))
-coef_df <- tidy(test_mod)
-summary(test_mod)
-
-```
-
-## GC - do some predictions 
-
-```{r}
-flag = "CAN" 
-  
-model_data_flag <- model_data %>%
-  dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
-  filter(flag_fin == flag)
-  
-distinct_cats <- model_data_flag %>%
-    distinct(year, flag_fin, gear, length_category)
-  
-full_grid <- tidyr::crossing(env_grid, distinct_cats)
-  
-full_data <- full_grid %>%
-  left_join(env_data, by = c("lon", "lat", "year")) %>%
-  left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
-  mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
-  dplyr::select(-pixel_id) %>%
-  left_join(hist_fish_data) %>%
-  mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
-         log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours))
-
-test_mod <- readRDS(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_CAN.rds"))
-
-pred_test <- full_data %>%
-  mutate(eez_region_world_bank_7 = ifelse(eez_region_world_bank_7 == "High seas", "high_seas", eez_region_world_bank_7)) %>%
-    mutate(pred_prop_pres = stats::predict(test_mod, newdata = ., type = "response")) # ok...
-
-testing <- pred_test %>% filter(pred_prop_pres >= 0.5, year == 2015) # filter for probs > 0.5 (i.e., more likely than not to having fishing in them). Results in only 464 cells for 2015... that doesn't seem right. 
-testing <- full_data %>% filter(year == 2015, presence == 1) # 1549 cells reported in AIS data. That seems problematic that we are getting less cells predicted with fishing effort in them.
-
-## what about if we do any probabilities greater than the minimum prob? 
-min_prob <- min(pred_test$pred_prop_pres, na.rm = TRUE)
-testing <- pred_test %>% filter(pred_prop_pres > min_prob, year == 2015) # seems like too many cells now.
-quantile(testing$pred_prop_pres) # not sure what the best thing to do if we want to use logistic regression. Maybe we should just use random forest, but I fear we'll run into the same problem of not enough cells being predicted with fishing effort in them. Surely we should get at least the same number of cells with fishing predicted in them as there is actually AIS cells?
-
-```
 
 
 ## CN check countries not run or gear combinations not run 
@@ -755,7 +625,7 @@ nrow(test %>% filter(presence ==1)) # 1134. So we are predicting less cells than
 nrow(prediction_prob %>% filter(pred_presence>0)) # 554 with prob of presence >= 0.5
 
 test_preds <- test %>%
-  mutate(pred_presence = predict(model, newdata = .,, type="prob")[, "1"]) %>%
+  mutate(pred_presence = predict(model, newdata = ., type="prob")[, "1"]) %>%
   filter(gear == "Trawl_Midwater_or_Unsp",
          length_category == "12-24m", 
          year == 2015) %>% 
@@ -894,129 +764,234 @@ model
 
 qs::qsave(model, here("data/output/FULL_rf_model_train.qs"))
 
+full_model <- qs::qread(here("data/output/FULL_rf_model_train.qs"))
+
+varImpPlot(full_model)
+
+importance <- data.frame(importance(full_model)) %>%
+  arrange(-MeanDecreaseGini)
+
+# Threshold-Based Selection: Remove variables with importance scores below a certain threshold (e.g., the median or a predefined percentage of the highest importance value).
+# Recursive Feature Elimination (RFE): Iteratively remove the least important variable and re-run the model until performance stabilizes. 
+#### How to check when model performance stabilizes?? Look at RMSE vs number of variables in each model. When the RMSE stops getting better is where you make the variable delineation.  
+## caret package is good with model evaluation stuff 
+
+
+test_preds <- test %>%
+  mutate(pred_presence = predict(full_model, newdata = ., type="prob")[, "1"]) %>%
+  # filter(gear == "Trawl_Midwater_or_Unsp",
+  #        length_category == "12-24m", 
+  #        year == 2015) %>% 
+  filter(year == 2017) %>%
+  dplyr::select(lon, lat, pred_presence) %>%
+   filter(pred_presence > 0.1) %>%
+  #mutate(pred_presence = ifelse(pred_presence > 0.5, 1, pred_presence)) %>%
+  distinct() %>%
+  rast(., type = "xyz")
+
+plot(test_preds) # ok looks really similar to figure 1 from mcdonald et al. which it should! https://www.pnas.org/doi/10.1073/pnas.2400592121
+
+
+
+bottom_trawls <- test %>%
+  mutate(pred_presence = predict(full_model, newdata = ., type="prob")[, "1"]) %>%
+   filter(gear == "Trawl_Bottom") %>%
+  filter(year == 2017) %>%
+  dplyr::select(lon, lat, pred_presence) %>%
+   filter(pred_presence > 0.1) %>%
+  distinct() %>%
+  rast(., type = "xyz")
+
+plot(bottom_trawls) # ok looks really similar to figure 1 from mcdonald et al. which it should! https://www.pnas.org/doi/10.1073/pnas.2400592121
+
+
+mid_trawls <- test %>%
+  mutate(pred_presence = predict(full_model, newdata = ., type="prob")[, "1"]) %>%
+   filter(gear == "Trawl_Midwater_or_Unsp") %>%
+  filter(year == 2017) %>%
+  dplyr::select(lon, lat, pred_presence) %>%
+   filter(pred_presence > 0.5) %>%
+  distinct() %>%
+  rast(., type = "xyz")
+
+plot(mid_trawls) # ok looks really similar to figure 1 from mcdonald et al. which it should! https://www.pnas.org/doi/10.1073/pnas.2400592121
+
+bottom_trawls <- test %>%
+  mutate(pred_presence = predict(full_model, newdata = ., type="prob")[, "1"]) %>%
+   filter(gear == "Trawl_Bottom") %>%
+  filter(year == 2017) %>%
+  dplyr::select(lon, lat, pred_presence) %>%
+   filter(pred_presence > 0.5) %>%
+  distinct() %>%
+  rast(., type = "xyz")
+
+plot(bottom_trawls) # ok looks really similar to figure 1 from mcdonald et al. which it should! https://www.pnas.org/doi/10.1073/pnas.2400592121
+
+
+dredges <- test %>%
+  mutate(pred_presence = predict(full_model, newdata = ., type="prob")[, "1"]) %>%
+   filter(gear == "Dredges") %>%
+  filter(year == 2017) %>%
+  dplyr::select(lon, lat, pred_presence) %>%
+   filter(pred_presence > 0.5) %>%
+  distinct() %>%
+  rast(., type = "xyz")
+
+plot(dredges) # ok looks really similar to figure 1 from mcdonald et al. which it should! https://www.pnas.org/doi/10.1073/pnas.2400592121
+
+gillnets <- test %>%
+  mutate(pred_presence = predict(full_model, newdata = ., type="prob")[, "1"]) %>%
+   filter(gear == "Gillnets") %>%
+  filter(year == 2017) %>%
+  dplyr::select(lon, lat, pred_presence) %>%
+   filter(pred_presence > 0.5) %>%
+  distinct() %>%
+  rast(., type = "xyz")
+
+plot(gillnets) # ok looks really similar to figure 1 from mcdonald et al. which it should! https://www.pnas.org/doi/10.1073/pnas.2400592121
+
+Lines_Longlines <- test %>%
+  mutate(pred_presence = predict(full_model, newdata = ., type="prob")[, "1"]) %>%
+   filter(gear == "Lines_Longlines") %>%
+  filter(year == 2017) %>%
+  dplyr::select(lon, lat, pred_presence) %>%
+   filter(pred_presence > 0.5) %>%
+  distinct() %>%
+  rast(., type = "xyz")
+
+plot(Lines_Longlines) # ok looks really similar to figure 1 from mcdonald et al. which it should! https://www.pnas.org/doi/10.1073/pnas.2400592121
+
+
 ```
 
-
-
-## Test to see if predictions look OK
+## Run logistic regression models in parallel 
 
 ```{r}
+flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 167 of them
 
-# all_predictions <- list()
-#     
-# # Function to make predictions for a specific combination
-# 
-#   flags <- unique(hist_fish_data$flag_fin)
-#   # gears <- unique(hist_fish_data$gear)
-#   # years <- 2015:2017
-#   # lengths <- unique(hist_fish_data$length_category)
-#   
-#   for(yr in years){
-#     # for(gear_type in gear){
-#     #   for(length in lengths){
-#     #     for(flag in flags){
-#           
-#           
-# 
-# # flag = "AUS"
-# # yr = 2015
-# # gear_type = "Lines_Longlines"
-# # length = "Over 50m"
-#     
-#     pred_data <- env_data 
-#     imas_data <- hist_fish_data
-#   
-#       
-#       #flag = "USA"
-#     flag_data <- imas_data %>% 
-#      filter(
-#            flag_fin == flag)
-#   
-#     
-#     model <- readRDS(glue(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_{flag}.rds")))
-#     
-# #     eez_levels_in_model <- gsub("^eez_id", "", grep("eez_id", names(model$coefficients), value = TRUE))
-# # eez_levels_in_model <- str_replace_all(eez_levels_in_model, "factor\\(eez_id\\)", "") # we only want to make predictions in EEZs which are represented in the gfw data? 
-# # 
-# #    fao_levels_in_model <- gsub("^fao_id", "", grep("fao_id", names(model$coefficients), value = TRUE))
-# # fao_levels_in_model <- str_replace_all(fao_levels_in_model, "factor\\(fao_id\\)", "") # we only want to make predictions in faos which are represented in the gfw data? 
-#     
-# gear_levels_in_model <- gsub("^gear", "", grep("gear", names(model$coefficients), value = TRUE))
-# length_levels_in_model <- gsub("^length_category", "", grep("length_category", names(model$coefficients), value = TRUE)) # adding these in for now so that the predictions will actually run...
-# 
-#     
-#   # Create prediction dataset
-#   pred_df <- pred_data %>%
-#     left_join(flag_data) %>%
-#     filter(gear %in% c(gear_levels_in_model),
-#            length_category %in% c(length_levels_in_model))
-# 
-# 
-#   # Make predictions in chunks to manage memory
-#   chunk_size <- 10000
-#   n_chunks <- ceiling(nrow(pred_df) / chunk_size)
-#   predictions <- numeric(nrow(pred_df))
-#   
-#   pb <- progress_bar$new(
-#     format = "Predicting [:bar] :percent eta: :eta",
-#     total = n_chunks
-#   )
-# 
-#   for(j in 1:n_chunks) { # not sure if we need to chunk but might as well...
-#     # j = 1
-#     chunk_start <- (j-1) * chunk_size + 1
-#     chunk_end <- min(j * chunk_size, nrow(pred_df))
-#     chunk_indices <- chunk_start:chunk_end
-#     
-#   predicted_props <- mgcv::predict.bam(model, newdata = pred_df[chunk_indices,], type = "response") # should the predicted proportions add to one for each category? 
-#   
-#   # Ensure predictions are valid proportions
-#  # predicted_props <- pmax(0, pmin(1, predicted_props))
-#   
-#   predictions[chunk_indices] <- predicted_props  
-#   
-#     pb$tick()
-#   }
-#   
-#   # Add predictions to dataframe
-#   
-#   predictions[is.na(predictions)] <- 0 # make any NAs into 0
-#   
-#   pred_df$predicted_proportion <- predictions
-#   
-#       # probably wanna save these one at a time?
-#   
-#   write_parquet(pred_df, glue(here("data/output/logistic_regression_predictions/preds_{flag}.parquet"))) # might wanna save on server instead if some get too big for github.
-#   
-#     #     }
-#     #   }
-#     # }
-#   }
-#       
-#     
-# # lets take a look at our predictions
-# all_predictions_df <- read_parquet(glue(here("data/output/logistic_regression_predictions/preds_{flag}.parquet"))) %>%
-#   left_join(global_grid)
-# 
-# test <- all_predictions_df %>%
-#   filter(predicted_proportion > 0) %>%
-# #  mutate(predicted_proportion = 1) %>%
-#   filter(gear == "Lines_Longlines", year == 2015, length_category == "24-50m") %>%
-#   dplyr::select(lon, lat, predicted_proportion) %>%
-#   rast(., type = "xyz")
-#     
-# plot(test, col = "red")
-# 
-#     
-#     ## lets look at raw GFW data 
-# test_gfw <- qs::qread(file.path(rdsi_dir, "prep/gfw_props/deg_one/all_effort_gear_length_props_2017.qs")) %>%
-#       filter(flag_fin == "AUS") %>% 
-#       group_by(x, y) %>%
-#       summarise(fishing_hours = sum(fishing_hours, na.rm = TRUE)) %>%
-#       dplyr::select(x, y, fishing_hours) %>%
-#       rast(., type = "xyz")
-# 
-# plot(test_gfw)
+# flags <- setdiff(flags,  str_before_last(str_after_last(list.files(file.path(rdsi_dir, "prep/logistic_regression_models/")), "_"), "\\."))
+
+missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
+length(missing_flags) # 28
+
+flags <- setdiff(flags, missing_flags)  ## CN are these countries that have not run from previous iterations? GC - yes, these would not have been run before. 
+
+# Set up parallel backend
+# num_cores <- detectCores() - 1  # Use available cores minus 1 to avoid overloading
+num_cores = 10 # to be safe. I tried with 31 and it overloaded. Lets assume ~8gb per model (that was what australia was, so ~16 is the max we could use)
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+# Run in parallel 
+foreach(flag = flags, .packages = c("dplyr", "glue", "stats", "tictoc", "tidyr")) %dopar% {
+  
+  # flag = "VNM" 
+  
+  model_path <- glue(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_{flag}.rds"))
+  
+  # if (file.exists(model_path)) {
+  #   cat("Model for", flag, "exists... skipping\n")
+  #   return(NULL)
+  # }
+  
+  if(flag %in% missing_flags){
+    cat(flag, "not in data... skippings")
+    return(NULL)
+  }
+  
+  message("Fitting logistic regression model for ", flag, "...")
+  
+  model_data_flag <- model_data %>%
+    dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
+    filter(flag_fin == flag)
+  
+  distinct_cats <- model_data_flag %>%
+    distinct(year, flag_fin, gear, length_category)
+  
+  full_grid <- tidyr::crossing(env_grid, distinct_cats)
+  
+  full_data <- full_grid %>%
+    left_join(env_data, by = c("lon", "lat", "year")) %>%
+    left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
+    mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
+    dplyr::select(-pixel_id) %>%
+    left_join(hist_fish_data) %>%
+    mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
+           log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours))
+  
+  if(length(unique(full_data$gear)) == 1 | length(unique(full_data$length_category)) == 1 ){ # skipping any that only have one categorical variable since model won't run these?  
+  return(NULL)
+  
+}
+  
+  if(nrow(full_data) == 0){ # if its an empty dataframe we have nothing to model... These would be the countries missing from AIS i guess? 
+        cat(flag, "not in data... skipping")
+    return(NULL)
+  }
+  
+  tic()
+  model <- stats::glm(model_formula, data = full_data, family = binomial(link = "logit")) ## March 12 - not sure why, but these models are taking a lot longer to run now... is it because i fixed some of the input data? for example, the saved models are much larger now. Canada has a saved model of ~4GB now... 
+  toc() # ok viet nam took ~ 10 mins now...
+  
+  # CN commented not to overwrite
+  saveRDS(model, model_path)
+}
+
+# Stop cluster
+stopCluster(cl)
+
+############ March 11, 2025 - GC -
+#### ok getting some weird results. For example, for ivory coast some of the variables are all NA and prompt this response "not defined because of singularities". I think this means that some of the variables are perfectly collinear... So maybe we shouldn't include every variable that mcdonald et al includes? Anyway, I am rerunning all of these models with all of the new variables I've prepped (e.g., PDO index, ocean, nearest seamount, global fishing index, world bank regions)
+
+
+test <- readRDS(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_VNM.rds"))
+coef_df <- tidy(test)
+summary(test)
+
+# why are year, pdo, world bank regions, gfi governance score all NA??? The NAs are "not defined because of singularities". Apparently this means 2 or more variables are highly collinear
+
+test_mod <- readRDS(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_CAN.rds"))
+coef_df <- tidy(test_mod)
+summary(test_mod)
+
+```
+
+## GC - do some predictions 
+
+```{r}
+flag = "CAN" 
+  
+model_data_flag <- model_data %>%
+  dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
+  filter(flag_fin == flag)
+  
+distinct_cats <- model_data_flag %>%
+    distinct(year, flag_fin, gear, length_category)
+  
+full_grid <- tidyr::crossing(env_grid, distinct_cats)
+  
+full_data <- full_grid %>%
+  left_join(env_data, by = c("lon", "lat", "year")) %>%
+  left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
+  mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
+  dplyr::select(-pixel_id) %>%
+  left_join(hist_fish_data) %>%
+  mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
+         log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours))
+
+test_mod <- readRDS(file.path(rdsi_dir, "prep/logistic_regression_models/fitted_model_CAN.rds"))
+
+pred_test <- full_data %>%
+  mutate(eez_region_world_bank_7 = ifelse(eez_region_world_bank_7 == "High seas", "high_seas", eez_region_world_bank_7)) %>%
+    mutate(pred_prop_pres = stats::predict(test_mod, newdata = ., type = "response")) # ok...
+
+testing <- pred_test %>% filter(pred_prop_pres >= 0.5, year == 2015) # filter for probs > 0.5 (i.e., more likely than not to having fishing in them). Results in only 464 cells for 2015... that doesn't seem right. 
+testing <- full_data %>% filter(year == 2015, presence == 1) # 1549 cells reported in AIS data. That seems problematic that we are getting less cells predicted with fishing effort in them.
+
+## what about if we do any probabilities greater than the minimum prob? 
+min_prob <- min(pred_test$pred_prop_pres, na.rm = TRUE)
+testing <- pred_test %>% filter(pred_prop_pres > min_prob, year == 2015) # seems like too many cells now.
+quantile(testing$pred_prop_pres) # not sure what the best thing to do if we want to use logistic regression. Maybe we should just use random forest, but I fear we'll run into the same problem of not enough cells being predicted with fishing effort in them. Surely we should get at least the same number of cells with fishing predicted in them as there is actually AIS cells?
 
 ```
 

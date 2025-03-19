@@ -1,0 +1,378 @@
+---
+title: "Fit prediction model for fishing effort"
+output: html_document
+date: "2024-12-11"
+---
+
+# Summary 
+
+We use the data compiled in the previous scripts to fit a RF model to predict the proportion of fishing effort occurring in cells. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library("qs")
+library(betareg)
+library(foreach)
+library(doParallel)
+library(here)
+library(mgcv)
+library(tictoc)
+library(progress)
+library(terra)
+library(glue)
+library(arrow)
+library(strex)
+library(broom)
+
+# install.packages("randomForest")
+library(randomForest)
+
+source(here("R/dir.R"))
+
+
+```
+
+## Functions to prepare enviro and effort data  
+
+```{r}
+
+elnino <- read.csv(here("data/model_features/enso_index.csv"))
+
+pdo <- read.csv(here("data/model_features/pdo_index.csv"))
+
+world_bank <- read.csv(here("data/model_features/world_bank_regions.csv")) %>%
+  filter(ISO_SOV1 != "GIB") # filter out gibralter bc it is duplicating the UK for some reason
+
+gfi_df <- read.csv(here("data/model_features/global_fishing_index_governance.csv"))
+  
+# Load prepared data
+model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
+  mutate(year = as.numeric(year)) # i think we need to adjust the prepared data to include cells which have no fishing effort in them. We can do this in the loop below? 
+
+## read in environmental variables
+
+  global_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv"))
+  
+  ocean_data <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv")) %>%
+  left_join(read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv")), by = c("pixel_id", "year")) %>% 
+  left_join(read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv")), by = c("pixel_id", "year")) %>%
+  filter(year %in% c(2015:2017)) 
+
+
+  spatial_data <- global_grid %>%
+    left_join(read.csv(here("data/model_features/deg_1_x_1/gfw_static_spatial_measures.csv")) %>% dplyr::select(-lat, -lon), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/deg_1_x_1/mesopelagiczones/mesopelagiczones_fixed.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/deg_1_x_1/eez/eez.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/deg_1_x_1/fao/fao_fixed.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/deg_1_x_1/oceans_fixed.csv")), by = "pixel_id") %>%
+    left_join(read.csv(here("data/model_features/deg_1_x_1/seamounts.csv")), by = "pixel_id") %>% 
+   crossing(., year = c(2015:2017)) 
+  
+  
+  env_data <- spatial_data %>%
+    left_join(ocean_data) %>% # cool.
+    dplyr::select(-geometry_wkt) %>%
+    left_join(elnino) %>%
+    left_join(pdo) %>%
+    left_join(world_bank, by = c("eez_id" = "MRGID_SOV1")) %>%
+    mutate(eez_region_world_bank_7 = ifelse(ISO_SOV1 %in% c("High seas", "Land"), "High seas", eez_region_world_bank_7)) %>% 
+    left_join(gfi_df, by = c("ISO_SOV1" = "flag_fin")) %>% # add in global fishing index data here
+    mutate(gov_score = ifelse(eez_id >= 99999 & is.na(gov_score), "high_seas", gov_score)) %>%
+        mutate(gov_score = ifelse(eez_id < 99999 & is.na(gov_score), "no_data", gov_score)) %>%
+    dplyr::select(-ISO_SOV1, -nearest_seamount_id) %>% 
+    distinct() 
+
+
+# Get total fishing hours for a specific year from IMAS data
+get_historical_total_fishing_hours <- function(yr) {
+
+  imas_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
+    
+    ## remove artisanal
+    filter(sector == "I") %>%
+    
+    group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
+    summarize(
+      total_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    filter(year == yr) %>%
+    dplyr::select(flag_fin, year, gear, length_category, total_fishing_hours)
+  
+  
+  return(imas_data)
+}
+
+
+```
+
+```{r}
+
+hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
+    rbind(., get_historical_total_fishing_hours(2016)) %>%
+    rbind(., get_historical_total_fishing_hours(2017)) %>%
+    mutate(log_total_fishing_hours = log1p(total_fishing_hours)) %>%
+    filter(total_fishing_hours > 0)
+  
+flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 147 of them
+
+unique_combinations <- hist_fish_data %>%
+  distinct(year, flag_fin, gear, length_category) %>% # we only want to make models for these combinations since these are what is in the IMAS/FAO data 
+  mutate(row_n = row_number())
+
+
+env_grid <- env_data %>% 
+  dplyr::select(lon, lat) %>% distinct()
+
+full_model_formula <- formula(
+  prop_fishing_hours_cell ~ 
+    # Categorical/factor predictors
+    gear  + 
+    length_category +
+    meso_id +  
+    eez_id + 
+    fao_id + 
+    ocean +  # Spatial categorical variables
+    eez_region_world_bank_7 + # world bank regions
+    gov_score + # global fishing index; make sure this is character and not a numeric variable
+    # Total effort predictor (log-transformed)
+  #  log_total_fishing_hours + 
+    # Continuous predictors
+    lon + lat + 
+    elevation_m + # depth
+    distance_from_port_m + 
+    distance_from_shore_m +
+    chl_mg_per_m3_mean + 
+    chl_mg_per_m3_sd +
+    sst_c_mean + 
+    sst_c_sd +
+    wind_speed_ms_mean + 
+    wind_speed_ms_sd +
+    enso_index_mean + # el nino data 
+    enso_index_sd + # pacific decadal oscillation
+    pdo_index_mean +  
+    pdo_index_sd + 
+    nearest_seamount_distance_m + 
+    # Year effect
+    year
+)
+
+```
+
+```{r}
+flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 167 of them
+
+
+missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
+length(missing_flags) # 28 these are flags that are in the rousseau data but not in the gfw data, meaning we can't make predictions on them.
+
+flags <- setdiff(flags, missing_flags)
+
+flags <- setdiff(flags, "CHN")
+
+for(flag in flags) {
+
+#  flag = "SVN"
+  
+model_data_flag <- model_data %>%
+  dplyr::select(lon, lat, flag_fin, gear, length_category, year, prop_fishing_hours_cell) %>%
+  filter(flag_fin == flag) %>% # only 2419 rows for new zealand - could be problematic! 
+  left_join(env_data) %>%
+  left_join(hist_fish_data) %>% 
+  dplyr::select(-total_fishing_hours, -log_total_fishing_hours) %>%
+  na.omit() # this removes the categories which are not in the Rousseau data. For example, Rousseau does not have data for NZL, Lines_Longlines, 24-50m, 2015, but GFW does. 
+
+if(nrow(model_data_flag) == 1){
+  next()
+}
+
+# prop_fishing_hours_cell = the proportion of that flag country's fishing effort represented in that cell (per gear, length, and year groupings; see below)
+
+# test_prop <- model_data_flag %>% 
+#   group_by(flag_fin, gear, length_category, year) %>%
+#   summarise(prop = sum(prop_fishing_hours_cell)) %>%
+#   ungroup() # all should be 1? Some of these aren't because of the weird NAs in the environmental data, and we exclude those cells. I guess it doesn't make too much of a difference as we will rescale the output of the model to 0-1 anyways after predictions. 
+
+set.seed(123)
+samp <- sample(nrow(model_data_flag), 0.6 * nrow(model_data_flag))  # do 60/40 split since this data is mostly small
+
+train <- model_data_flag[samp, ]
+
+test <- model_data_flag[-samp, ]
+
+tic()
+model <- randomForest(full_model_formula, data = train, type = "regression", proximity = FALSE, ntree = 100, importance = TRUE) 
+toc() # half a second for NZL; 45 secs for CHN
+
+# Initialize tracking
+var_imp_i <- importance(model)
+
+rmse_values <- c()
+num_vars <- c(nrow(var_imp_i))
+
+percentile_cutoff <- 10  # Start with bottom 10% of variables
+
+threshold_i <- quantile(var_imp_i[, 2], probs = percentile_cutoff / 100) # Define 10% quantile importance threshold 
+# should we keep year in no matter what? Maybe? 
+
+if(threshold_i == 0){
+  threshold_i + 0.0000001
+}
+
+n_vars <- nrow(var_imp_i)
+
+qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_{n_vars}.qs")))
+
+# Split data for testing
+
+pred_props <- predict(model, newdata = test, type = "response")  # Probability of class 1
+rmse <- sqrt(mean((test$prop_fishing_hours_cell - pred_props)^2)) # use RMSE for probabilities instead?
+
+rmse_values <- c(rmse_values, rmse)
+
+
+# Iteratively remove low-importance variables
+iteration <- 1
+while (TRUE) {
+  
+  # Select variables above threshold
+  selected_vars <- names(var_imp_i[, 2][var_imp_i[, 2] > threshold_i])
+  
+  # Stop if too few variables remain
+  if (length(selected_vars) < 5) break  # Avoid over-pruning. We can change this to any number of variables. Maybe 10 would be better computationally? 
+
+  # Refit model with selected variables
+  model_i <- randomForest(prop_fishing_hours_cell ~ ., data = train[, c("prop_fishing_hours_cell", selected_vars)], 
+                        type = "regression", proximity = FALSE, 
+                        ntree = 100, importance = TRUE)
+
+  
+  # Get new variable importance
+  var_imp_i <- importance(model_i)
+  
+  threshold_i <- quantile(var_imp_i[, 2], probs = percentile_cutoff / 100) # calculate new threshold since variable importance metric will change? 
+  
+  # Compute new RMSE
+  pred_props_i <- predict(model_i, newdata = test, type = "response") 
+  rmse_i <- sqrt(mean(test$prop_fishing_hours_cell - pred_props_i)^2)
+  
+  # Store metrics
+  rmse_values <- c(rmse_values, rmse_i)
+  num_vars <- c(num_vars, length(selected_vars))
+  
+  n_vars <- length(selected_vars)
+    
+    # save model here? Put number of variables (length(selected_vars)) in model save name so we know which one to pick for best predictions? 
+  qs::qsave(model_i, glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_{n_vars}.qs")))
+
+
+  # Check RMSE stability: Stop if improvement is <1%
+  if (length(rmse_values) > 1) {
+    rmse_improvement <- (rmse_values[length(rmse_values) - 1] - rmse_values[length(rmse_values)]) / rmse_values[length(rmse_values) - 1]
+    
+    if (rmse_improvement < 0.01) break  # Stop if RMSE stabilizes
+
+    while(sum(var_imp_i[, 2] > threshold_i) == length(var_imp_i[, 2])) {
+      threshold_i <- threshold_i*1.1 # increase by 1% until the threshold will remove a variable
+    }
+    
+  }
+
+
+  iteration <- iteration + 1
+}
+
+}
+
+rmse_values
+# ok so for CHN, that means we keep 23 variables. Whatever the next to lowest number is in the file structure for that 
+
+```
+
+Now write code to select the "best" model per the variable selection form above. We will rerun the model with just those variables on the FULL dataset to leverage all of the data from GFW
+
+```{r}
+
+```
+
+
+After the models are fit, we make predictions on ALL DATA. So stage 1 is in sample predictions (since we fit the stage one model on all data), and stage two will contain out of sample predictions (since we fit the model on only data with fishing effort in it!)
+
+```{r}
+
+## out of sample predictions for CHN 
+env_grid <- env_data %>% 
+  dplyr::select(lon, lat) %>% distinct()
+
+
+model_data_flag <- model_data %>%
+  dplyr::select(lon, lat, flag_fin, gear, length_category, year, prop_fishing_hours_cell) %>%
+  filter(flag_fin == flag)
+  
+distinct_cats <- model_data_flag %>%
+    distinct(year, flag_fin, gear, length_category)
+  
+full_grid <- tidyr::crossing(env_grid, distinct_cats)
+  
+full_data <- full_grid %>%
+  left_join(env_data, by = c("lon", "lat", "year")) %>%
+  left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
+  dplyr::select(-pixel_id) %>%
+  left_join(hist_fish_data) %>%
+  mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
+         log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours))
+
+
+stage2_model <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/stage_2_models/pruning/stage_2_rf_train_CHN_23.qs")
+
+oos_preds <- full_data %>%
+  mutate(pred_prop = predict(stage2_model, newdata = ., type="response")) 
+
+# oos_test <- oos_preds %>%
+#   group_by(flag_fin, gear, length_category, year) %>%
+#   summarise(sum_prop = sum(pred_prop, na.rm = TRUE)) %>% # ok yeah we'll need to rescale these to be between 0 and 1, AFTER multiplying by the stage 1 predictions? 
+#   ungroup()
+
+
+rast_test <- oos_preds %>%
+  filter(gear == "Trawl_Midwater_or_Unsp",
+         length_category == "12-24m",
+         year == 2015) %>%
+  dplyr::select(lon, lat, pred_prop)  %>%
+  rast(., type = "xyz")
+
+plot(rast_test) # yeah this makes sense, It will make a prediction for EVERY CELL globally. Then the stage 1 model is how we mask out the cells where there is no presence prediction. Makes sense the largest values are around NZL too. Cool. 
+
+
+## read in CHN stage one model: 
+
+stage1_chn <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/stage_1_models/pruning/stage_1_rf_train_CHN_26.qs")
+# stage1_full <- qs::qread(here("data/output/FULL_rf_model_train.qs"))
+
+stage1_preds <- full_data %>%
+    mutate(pred_presence = predict(stage1_chn, newdata = ., type="prob")[, "1"]) %>%
+  mutate(pred_presence = ifelse(pred_presence < 0.5, 0, 1))
+
+
+## join stage 1 and 2 preds together and multiply 
+all_preds <- oos_preds %>%
+  # probably select lat, lon, gear, length, year, flag here? 
+  #dplyr::select(lat, lon, gear, length_category, year, flag_fin, pred_prop) %>%
+  left_join(., stage1_preds) %>%
+  mutate(pred_prop_final = pred_prop*pred_presence) 
+
+test_preds <- all_preds %>%
+    filter(gear == "Lines_Longlines",
+         length_category == "12-24m",
+         year == 2015,
+         pred_prop_final > 0) %>%
+  dplyr::select(lon, lat, pred_prop_final) %>%
+  rast(., type = "xyz")
+
+plot(test_preds) # ok looks a lot better when using China specific stage 1 model. We're going to have to fit a model for each flag country for each stage. 
+
+
+```
+
