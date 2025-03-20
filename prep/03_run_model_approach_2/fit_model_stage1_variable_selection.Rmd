@@ -1,16 +1,16 @@
 ---
 title: "Fit prediction model for fishing effort: stage 1"
 output: html_document
-date: "2024-12-11"
+date: "2024-03-20"
 editor_options: 
   chunk_output_type: console
 ---
 
 # Summary 
 
-We use the data compiled in the previous scripts to fit a logistic regression model (or a random forest) to predict the presence (1) or absence (0) of fishing effort in every cell. We will do this for each flag country individually. We will start by testing some individual countries. 
+We use the data compiled in the previous scripts to fit a random forest regression to predict the presence (1) or absence (0) of fishing effort in every cell. We will do this for each flag country individually.  
 
-In the second step, they model the intensity of fishing on only cells which actually have fishing effort. In our case, this will be the proportion of global production. Then they multiply the prediction of where fishing occurs (from step 1, 0 or 1) by the intensity of fishing (in our case 0-1). 
+We apply a variable selection methdolody of...
 
 ## Environment
 
@@ -34,6 +34,7 @@ library(arrow)
 library(strex)
 library(broom)
 library(randomForest)
+library(PRROC)
 
 source(here("R/dir.R"))
 
@@ -181,29 +182,32 @@ env_grid <- env_data %>%
 ```
 
 
+```{r}
+test <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_BGR_25.qs"))
 
-## Run variable selection for every individual country
+## ok so things started to go wrong at BGR. After than, each pruned model saved is much larger in size than the full model, which doesn't make sense. I will need to rerun. Perhaps as just a for loop instead of a foreach loop. I think the parallelization screwed things up. Or something within the while loop messed things up. Because it saved all of the full models fine (the models with 25 variables)
 
- - calculate the full model using all variables available on NZL
- - calculate variable importance metrics and RMSE 
- - Set a threshold of 10% of the maximum variable importance and remove any variables with variable importance less than that
- - Rerun model with new variables and calculate model metrics again
- - If the RMSE doesn't decrease by more than 1%, we stop the model pruning, if it does, we continue 
+```
+
+
+
+## Run models and variable selection for every individual country
+
+ - calculate the full model using all variables available per flag country
+ - calculate variable importance metrics and RMSE or AUC
+ - Set a threshold of the 10th quantile of the variable importance (GINI index for classification) and remove any variables with variable importance less than that
+ - Rerun model with new variables and calculate model importance metrics and AUC-PR again
+ - If the AUC doesn't increase at all, we stop the model pruning, if it does, we continue, hoping that the AUC will improve even more in the next iteration. 
  - If the threshold doesn't remove any variables, we increase the threshold by 1% until a variable is removed, and rerun the process
- - We loop through this until the RMSE does not improve by more than 1%
+ - We loop through this until the AUC does not improve at all. 
  
- Problems with this: 
-  - Computation time. NZL for example takes ~5 mins to run. Larger countries make take much longer. If we are running say 10 model improvements per each country, this time would add up. 
+ NOTE: lets use Area Under the Precision-Recall Curve (AUC-PR) instead of RMSE because RMSE isn't really relevant to classification regression; Higher AUC-PR value is better. 
 
+
+
+Run full models first 
 
 ```{r}
-# Threshold-Based Selection: Remove variables with importance scores below a certain threshold (e.g., the median or a predefined percentage of the highest importance value).
-# Recursive Feature Elimination (RFE): Iteratively remove the least important variable and re-run the model until performance stabilizes. 
-#### How to check when model performance stabilizes?? Look at RMSE vs number of variables in each model. When the RMSE stops getting better is where you make the variable delineation.  
-## caret package is good with model evaluation stuff 
-
-
-## lets try the threshold based selection, where the threshold is 10% of max importance score (i.e. we keep any variable that is above that 10% of max importance score) and rerun the model and test RMSE
 
 flags <- unique(hist_fish_data$flag_fin)
 
@@ -219,9 +223,12 @@ registerDoParallel(cl)
 
 # Run the loop in parallel
 foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc")) %dopar% {
+  
+    # flag = "BGR"
   model_data_flag <- model_data %>%
     dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
     filter(flag_fin == flag)
+  
   
   distinct_cats <- model_data_flag %>%
     distinct(year, flag_fin, gear, length_category)
@@ -259,82 +266,243 @@ foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glu
   model <- randomForest(model_formula_rf, data = train, type = "classification", proximity = FALSE, ntree = 100, importance = TRUE)
   toc()
   
+ # model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_25.qs")))
+
+  
   var_imp_i <- importance(model)
+  
+  n_vars <- nrow(var_imp_i)
+  qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_{n_vars}.qs")))
+
+  
+}
+
+```
+ 
+Now apply variable selection methods 
+
+```{r}
+# Threshold-Based Selection: Remove variables with importance scores below a certain threshold (e.g., the median or a predefined percentage of the highest importance value).
+# Recursive Feature Elimination (RFE): Iteratively remove the least important variable and re-run the model until performance stabilizes. - NOTE: this would probably be the best option, but would take the longest 
+#### How to check when model performance stabilizes?? Look at RMSE vs number of variables in each model. When the RMSE stops getting better is where you make the variable delineation.  
+
+
+## lets try the threshold based selection, where the threshold is 10% of max importance score (i.e. we keep any variable that is above that 10% of max importance score) and rerun the model and test to see if RMSE improves or not 
+
+flags <- unique(hist_fish_data$flag_fin)
+
+missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
+length(missing_flags) # 28 these are flags that are in the rousseau data but not in the gfw data, meaning we can't fit a model or make predictions on them.
+
+flags <- setdiff(flags, missing_flags)
+
+flags <- setdiff(flags, c("ALB", "BGR", "AGO")) # remove those we've already finished
+
+flags <- flags[35:length(flags)]
+flags <- "ZAF"
+
+# Set up parallel backend
+#### NOTE: THIS ISN'T WORKING; for some reason it gets hung up when saving the new rf model and saves it as realllllly large and only saves one per flag, which isn't correct. I think it might have to do with the while loops I've included. In theory it should work though...
+# num_cores <- 3 # Use one less than the total available cores
+# cl <- makeCluster(num_cores)
+# registerDoParallel(cl)
+
+# Run the loop in parallel
+# foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc")) %dopar% {
+
   rmse_values <- c()
+  auc_values <- c()
+  num_vars <- c()
+  
+  tracking_df <- data.frame(flag = NA, auc = NA, n_vars = NA)
+
+for(flag in flags){
+  
+    # flag = "GNQ"
+  model_data_flag <- model_data %>%
+    dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
+    filter(flag_fin == flag)
+  
+  if(nrow(model_data_flag) == 1){
+    cat(flag, "not enough categories to model... skipping\n") # should i keep track of the flags we are missing? 
+    # return(NULL)
+    next()
+  }
+  
+  distinct_cats <- model_data_flag %>%
+    distinct(year, flag_fin, gear, length_category)
+  
+  full_grid <- tidyr::crossing(env_grid, distinct_cats)
+  
+  full_data <- full_grid %>%
+    left_join(env_data, by = c("lon", "lat", "year")) %>%
+    left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
+    mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
+    dplyr::select(-pixel_id)
+  
+  if (nrow(full_data) == 0) {
+    cat(flag, "not in data... skipping\n")
+    # return(NULL)
+    next()
+  }
+  
+  data_random_forest <- full_data %>% 
+    na.omit() %>%
+    mutate(presence = as.factor(presence)) %>%
+    distinct()
+  
+  if (nrow(full_data) == 1) {
+    cat(flag, "not enough rows\n")
+    # return(NULL)
+    next()
+  }
+  
+  # Split data into training and testing sets
+  set.seed(123)
+  samp <- sample(nrow(data_random_forest), 0.6 * nrow(data_random_forest)) 
+  train <- data_random_forest[samp, ]
+  test <- data_random_forest[-samp, ]
+  
+  ## if the file doesn't exist for some reason, run this. They should all be there from the previous chunk though.
+  if(!file.exists((glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_25.qs"))))){
+    
+  tic()
+  model <- randomForest(model_formula_rf, data = train, type = "classification", proximity = FALSE, ntree = 100, importance = TRUE)
+  toc()
+  
+  }else{ 
+    model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_25.qs")))
+}
+  
+  var_imp_i <- importance(model)
   num_vars <- c(nrow(var_imp_i))
-  threshold_i <- 0.1 * max(var_imp_i[, 4])
+  threshold_i <- quantile(var_imp_i[, 4], 0.10)  # Use the 10th percentile instead of a fixed multiplier
+  
+    # threshold_i <- max(var_imp_i[, 4])*0.1  # Use the 10th percentile instead of a fixed multiplier
+
   
   if (threshold_i == 0) {
     threshold_i <- 0.0000001
   }
   
-  n_vars <- nrow(var_imp_i)
-  qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_{n_vars}.qs")))
   
   pred_probs <- predict(model, newdata = test, type = "prob")[, 2]
-  rmse <- sqrt(mean((as.numeric(as.character(test$presence)) - pred_probs)^2))
-  rmse_values <- c(rmse_values, rmse)
+  
+  true_labels <- as.numeric(as.character(test$presence))  # Replace with the actual labels in your test data
+
+  pr_curve <- pr.curve(scores.class0 = pred_probs, weights.class0 = true_labels, curve = TRUE)
+  auc_pr <- pr_curve$auc.integral # higher auc_pr is BETTER. So if it gets lower, then we don't want the next model 
+
+  auc_values <- c(auc_values, auc_pr)
+  # rmse <- sqrt(mean((as.numeric(as.character(test$presence)) - pred_probs)^2))
+  # rmse_values <- c(rmse_values, rmse)
   
   iteration <- 1
-  while (TRUE) {
-    selected_vars <- names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i])
-    if (length(selected_vars) < 5) break
+ while (TRUE) {
+    
+   selected_vars <- names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i])
+    
+    # Rank variables by importance (column 4 of var_imp_i)
+   #  sorted_vars <- names(sort(var_imp_i[, 4], decreasing = TRUE))
+    
+    
+    
+     if (length(selected_vars) < 6) break  # Ensure at least 5 variables remain
+    
+        # selected_vars <- sorted_vars[-length(sorted_vars)]
+        
+        # Increase the threshold iteratively until at least one variable is removed
+    while (length(selected_vars) == num_vars[length(num_vars)]) {
+        threshold_i <- threshold_i * 1.01  # Increase threshold by 1%
+        selected_vars <- names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i])
+    }
     
     model_i <- randomForest(presence ~ ., data = train[, c("presence", selected_vars)], 
                             type = "classification", proximity = FALSE, 
                             ntree = 100, importance = TRUE)
     
     var_imp_i <- importance(model_i)
-    threshold_i <- 0.1 * max(var_imp_i[, 4])
     
+    # Compute a new threshold dynamically based on the 10th percentile
+    threshold_i <- quantile(var_imp_i[, 4], 0.10)  # Use the 10th percentile instead of a fixed multiplier
+    # threshold_i <- max(var_imp_i[, 4])*0.1  # Use 10% of max importance
+
     pred_probs_i <- predict(model_i, newdata = test, type = "prob")[, 2]
-    rmse_i <- sqrt(mean((as.numeric(as.character(test$presence)) - pred_probs_i)^2))
+    # rmse_i <- sqrt(mean((as.numeric(as.character(test$presence)) - pred_probs_i)^2))
     
-    rmse_values <- c(rmse_values, rmse_i)
+   true_labels_i <- as.numeric(as.character(test$presence))  # Replace with the actual labels in your test data
+
+  pr_curve <- pr.curve(scores.class0 = pred_probs_i, weights.class0 = true_labels_i, curve = TRUE)
+  auc_pr_i <- pr_curve$auc.integral # higher auc_pr is BETTER. So if it gets lower, then we don't want the next model 
+
+  auc_values <- c(auc_values, auc_pr_i)
+    
+    # rmse_values <- c(rmse_values, rmse_i)
     num_vars <- c(num_vars, length(selected_vars))
     
     n_vars <- length(selected_vars)
-    qs::qsave(model_i, glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_{n_vars}.qs")))
-    
-    if (length(rmse_values) > 1) {
-      rmse_improvement <- (rmse_values[length(rmse_values) - 1] - rmse_values[length(rmse_values)]) / rmse_values[length(rmse_values) - 1]
-      if (rmse_improvement < 0.01) break
-      
-      while (sum(var_imp_i[, 4] > threshold_i) == length(var_imp_i[, 4])) {
-        threshold_i <- threshold_i * 1.1
-      }
+    file_path <- glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_{n_vars}.qs"))
+
+    if(!file.exists(file_path)){
+
+          qs::qsave(model_i, file_path)
     }
+    
+    if (length(auc_values) > 1) {
+        # model_improvement <- (rmse_values[length(rmse_values) - 1] - rmse_values[length(rmse_values)]) / rmse_values[length(rmse_values) - 1] # RMSE is the opposite of AUC; i.e., a lower RMSE is better whereas a higher AUC is better
+      
+      model_improvement <- auc_values[length(auc_values)] - auc_values[length(auc_values) - 1]
+        
+        if (model_improvement <= 0)  break  # Stop if improvement is <=0
+        
+    }
+    
     iteration <- iteration + 1
-  }
+ }
+
+  
+  # tracking_df_i <- data.frame(flag = flag, auc = auc_values, n_vars = num_vars)
+  # 
+  # tracking_df <- rbind(tracking_df, tracking_df_i)
+  
 }
 
 # Stop parallel cluster
-stopCluster(cl)
+#stopCluster(cl)
 
 # Save performance data
-perf_metrics <- data.frame(Num_Variables = num_vars, RMSE = rmse_values)
-
-# Plot RMSE vs. number of variables
-ggplot(perf_metrics, aes(x = Num_Variables, y = RMSE)) +
-  geom_line() + geom_point() +
-  labs(title = "Model Performance vs. Number of Variables", 
-       x = "Number of Variables", y = "RMSE") 
-
-# ok so for NZL for example, the RMSE actually got greater when we removed more than 9 variables! 
-# interesting, removing least important variables did not improve model performance for China! 
+# perf_metrics <- data.frame(Num_Variables = num_vars, RMSE = rmse_values)
+# 
+# # Plot RMSE vs. number of variables
+# ggplot(perf_metrics, aes(x = Num_Variables, y = RMSE)) +
+#   geom_line() + geom_point() +
+#   labs(title = "Model Performance vs. Number of Variables", 
+#        x = "Number of Variables", y = "RMSE") 
 
 
-## ok, so once we've run the model (training data) and selected variabales (testing data), should we rerun the model on the full data (train + test) to leverage full prediction? Yes... ? 
 
 ```
 
-Check to see if it worked properly; testing CHN
+
+Now write code to select the "best" model per the variable selection from above. We will rerun the model with just those variables on the FULL dataset to leverage all of the data from GFW and save
 
 ```{r}
 
-flag = "CHN"
+```
 
-model_data_flag <- model_data %>%
+Check to see if it worked properly; testing AGO
+
+```{r}
+
+flag = "AGO"
+
+## read in models 
+files <- list.files(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/"), pattern = "AGO", full.names = TRUE)
+
+all_models <- lapply(files, qs::qread)
+
+## get training and testing datasets
+  model_data_flag <- model_data %>%
     dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
     filter(flag_fin == flag)
   
@@ -348,55 +516,50 @@ model_data_flag <- model_data %>%
     left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
     mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
     dplyr::select(-pixel_id)
-
   
   data_random_forest <- full_data %>% 
     na.omit() %>%
     mutate(presence = as.factor(presence)) %>%
     distinct()
   
+  
   # Split data into training and testing sets
   set.seed(123)
   samp <- sample(nrow(data_random_forest), 0.6 * nrow(data_random_forest)) 
   train <- data_random_forest[samp, ]
   test <- data_random_forest[-samp, ]
-  
-  full_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_CHN_25.qs"))
-  
-  var_imp_i <- importance(full_model)
-  rmse_values <- c()
-  num_vars <- c(nrow(var_imp_i))
-  threshold_i <- 0.1 * max(var_imp_i[, 4])
-  
-  if (threshold_i == 0) {
-    threshold_i <- 0.0000001
-  }
 
+  # test the AUC values
   
-  pred_probs <- predict(full_model, newdata = test, type = "prob")[, 2]
-  rmse <- sqrt(mean((as.numeric(as.character(test$presence)) - pred_probs)^2))
-  rmse_values <- c(rmse_values, rmse)
+
+# Function to calculate AUC-PR
+calculate_auc_pr <- function(model, test_data, test_labels) {
+ # model <- all_models[[i]]
   
-  # in the code, the first pruned model was with 15 variables. Meaning the threshold should've removed 10 variables. Does this check out? 
-  prune_model_1 <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_CHN_15.qs"))
+  # Predict probabilities for the positive class (assumes binary classification)
+    probs <- predict(model, newdata = test_data, type = "prob")[, 2]
   
-  selected_vars <- names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i]) # check to see if we removed the right variables
+  # Calculate AUC-PR using PRROC package
+  pr <- pr.curve(scores.class0 = probs, weights.class0 = test_labels, curve = TRUE)$auc.integral
+  
+  return(pr)  # Return the AUC-PR value
+}
+
+# Initialize a vector to store AUC-PR scores for each model
+auc_pr_scores <- numeric(length(all_models))
  
-  
-  var_imp_i <- importance(full_model)
-  rmse_values <- c()
-  num_vars <- c(nrow(var_imp_i))
-  threshold_i <- 0.1 * max(var_imp_i[, 4])
-  
-  if (threshold_i == 0) {
-    threshold_i <- 0.0000001
-  }
+ test_labels <- as.numeric(as.character(test$presence))  # Adjust based on your data
 
+
+
+# Loop through models and calculate AUC-PR
+for (i in 1:length(all_models)) {
+  # i = 2
   
-  pred_probs <- predict(full_model, newdata = test, type = "prob")[, 2]
-  rmse <- sqrt(mean((as.numeric(as.character(test$presence)) - pred_probs)^2))
-  rmse_values <- c(rmse_values, rmse)
-  
+  auc_pr_scores[i] <- calculate_auc_pr(model = all_models[[i]], test_data = test, test_labels = test_labels)
+}
+ 
+ auc_pr_scores # ok this makes sense. The next to last model run (in this case, the second number in the list) is the highest. 
   
 ```
 

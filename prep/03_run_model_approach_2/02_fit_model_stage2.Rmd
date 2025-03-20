@@ -161,6 +161,22 @@ full_model_formula <- formula(
 
 ```
 
+## Run models and variable selection for every individual country
+
+ - calculate the full model using all variables available per flag country
+ - calculate variable importance metrics and root mean squared error (RMSE)
+ - Set a threshold of the 10th quantile of the variable importance (RMSE for regression) and remove any variables with variable importance less than that
+ - Rerun model with new variables and calculate model importance metrics and RMSE again
+ - If the RMSE doesn't DECREASE at all, we stop the model pruning, if it does, we continue, hoping that the RMSE will improve even more in the next iteration. 
+ - If the threshold doesn't remove any variables, we increase the threshold by 1% until a variable is removed, and rerun the process
+ - We loop through this until the RMSE does not improve at all (improvement being a decrease in RMSE)
+ 
+ NOTE: Lower RMSE is better
+
+NOTE: need to check on flags which have very little data. Some of the flags have only ~5 rows of data (flag == "SVN" for example only has 2 rows), so obviously the predictions for these would be horrible. Maybe we want to exclude these and gapfill with something later on? Maybe add a sample size filter? Check to see if these even ran for the classification. If they didn't, we probably won't include them anyways. 
+
+Save full models first 
+
 ```{r}
 flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 167 of them
 
@@ -170,11 +186,10 @@ length(missing_flags) # 28 these are flags that are in the rousseau data but not
 
 flags <- setdiff(flags, missing_flags)
 
-flags <- setdiff(flags, "CHN")
 
 for(flag in flags) {
 
-#  flag = "SVN"
+#  flag = "PRK"
   
 model_data_flag <- model_data %>%
   dplyr::select(lon, lat, flag_fin, gear, length_category, year, prop_fishing_hours_cell) %>%
@@ -208,24 +223,68 @@ toc() # half a second for NZL; 45 secs for CHN
 
 # Initialize tracking
 var_imp_i <- importance(model)
-
-rmse_values <- c()
-num_vars <- c(nrow(var_imp_i))
-
-percentile_cutoff <- 10  # Start with bottom 10% of variables
-
-threshold_i <- quantile(var_imp_i[, 2], probs = percentile_cutoff / 100) # Define 10% quantile importance threshold 
-# should we keep year in no matter what? Maybe? 
-
-if(threshold_i == 0){
-  threshold_i + 0.0000001
-}
-
 n_vars <- nrow(var_imp_i)
 
 qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_{n_vars}.qs")))
+}
+```
 
-# Split data for testing
+Now apply variable selection methods 
+
+```{r}
+rmse_values <- c()
+num_vars <- c()
+
+  for(flag in flags){
+    
+      
+model_data_flag <- model_data %>%
+  dplyr::select(lon, lat, flag_fin, gear, length_category, year, prop_fishing_hours_cell) %>%
+  filter(flag_fin == flag) %>% # only 2419 rows for new zealand - could be problematic! 
+  left_join(env_data) %>%
+  left_join(hist_fish_data) %>% 
+  dplyr::select(-total_fishing_hours, -log_total_fishing_hours) %>%
+  na.omit() # this removes the categories which are not in the Rousseau data. For example, Rousseau does not have data for NZL, Lines_Longlines, 24-50m, 2015, but GFW does. 
+
+if(nrow(model_data_flag) == 1){
+  next()
+}
+
+# prop_fishing_hours_cell = the proportion of that flag country's fishing effort represented in that cell (per gear, length, and year groupings; see below)
+
+# test_prop <- model_data_flag %>% 
+#   group_by(flag_fin, gear, length_category, year) %>%
+#   summarise(prop = sum(prop_fishing_hours_cell)) %>%
+#   ungroup() # all should be 1? Some of these aren't because of the weird NAs in the environmental data, and we exclude those cells. I guess it doesn't make too much of a difference as we will rescale the output of the model to 0-1 anyways after predictions. 
+
+set.seed(123)
+samp <- sample(nrow(model_data_flag), 0.6 * nrow(model_data_flag))  # do 60/40 split since this data is mostly small
+
+train <- model_data_flag[samp, ]
+
+test <- model_data_flag[-samp, ]
+
+
+if(!file.exists(glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_{n_vars}.qs")))){
+tic()
+model <- randomForest(full_model_formula, data = train, type = "regression", proximity = FALSE, ntree = 100, importance = TRUE) 
+toc() # half a second for NZL; 45 secs for CHN
+}else{
+  
+  model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_{n_vars}.qs")))
+  
+}
+
+
+# Initialize tracking
+var_imp_i <- importance(model)
+num_vars <- c(nrow(var_imp_i))
+threshold_i <- quantile(var_imp_i[, 2], 0.10)  # Use the 10th percentile instead of a fixed multiplier
+n_vars <- nrow(var_imp_i)
+
+  if (threshold_i == 0) {
+    threshold_i <- 0.0000001
+  }
 
 pred_props <- predict(model, newdata = test, type = "response")  # Probability of class 1
 rmse <- sqrt(mean((test$prop_fishing_hours_cell - pred_props)^2)) # use RMSE for probabilities instead?
@@ -241,7 +300,13 @@ while (TRUE) {
   selected_vars <- names(var_imp_i[, 2][var_imp_i[, 2] > threshold_i])
   
   # Stop if too few variables remain
-  if (length(selected_vars) < 5) break  # Avoid over-pruning. We can change this to any number of variables. Maybe 10 would be better computationally? 
+  if (length(selected_vars) < 6) break  # Avoid over-pruning. We can change this to any number of variables. Maybe 10 would be better computationally? 
+  
+          # Increase the threshold iteratively until at least one variable is removed
+    while (length(selected_vars) == num_vars[length(num_vars)]) {
+        threshold_i <- threshold_i * 1.01  # Increase threshold by 1%
+        selected_vars <- names(var_imp_i[, 2][var_imp_i[, 2] > threshold_i])
+    }
 
   # Refit model with selected variables
   model_i <- randomForest(prop_fishing_hours_cell ~ ., data = train[, c("prop_fishing_hours_cell", selected_vars)], 
@@ -251,8 +316,8 @@ while (TRUE) {
   
   # Get new variable importance
   var_imp_i <- importance(model_i)
-  
-  threshold_i <- quantile(var_imp_i[, 2], probs = percentile_cutoff / 100) # calculate new threshold since variable importance metric will change? 
+
+  threshold_i <- quantile(var_imp_i[, 2], 0.1) # calculate new threshold since variable importance metric will change
   
   # Compute new RMSE
   pred_props_i <- predict(model_i, newdata = test, type = "response") 
@@ -263,20 +328,19 @@ while (TRUE) {
   num_vars <- c(num_vars, length(selected_vars))
   
   n_vars <- length(selected_vars)
-    
+  file_path <-   glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_{n_vars}.qs"))
+  
+  if(!file.exists(file_path)){
     # save model here? Put number of variables (length(selected_vars)) in model save name so we know which one to pick for best predictions? 
-  qs::qsave(model_i, glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_{n_vars}.qs")))
+  qs::qsave(model_i, file_path)
+  }
 
-
-  # Check RMSE stability: Stop if improvement is <1%
+  # Check RMSE stability: Stop if no improvement
   if (length(rmse_values) > 1) {
+    
     rmse_improvement <- (rmse_values[length(rmse_values) - 1] - rmse_values[length(rmse_values)]) / rmse_values[length(rmse_values) - 1]
     
-    if (rmse_improvement < 0.01) break  # Stop if RMSE stabilizes
-
-    while(sum(var_imp_i[, 2] > threshold_i) == length(var_imp_i[, 2])) {
-      threshold_i <- threshold_i*1.1 # increase by 1% until the threshold will remove a variable
-    }
+    if (rmse_improvement <= 0) break  # Stop if RMSE stabilizes
     
   }
 
@@ -287,11 +351,10 @@ while (TRUE) {
 }
 
 rmse_values
-# ok so for CHN, that means we keep 23 variables. Whatever the next to lowest number is in the file structure for that 
 
 ```
 
-Now write code to select the "best" model per the variable selection form above. We will rerun the model with just those variables on the FULL dataset to leverage all of the data from GFW
+Now write code to select the "best" model per the variable selection from above. We will rerun the model with just those variables on the FULL dataset to leverage all of the data from GFW and save
 
 ```{r}
 
