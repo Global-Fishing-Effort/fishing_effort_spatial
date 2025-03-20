@@ -232,6 +232,15 @@ qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pru
 Now apply variable selection methods 
 
 ```{r}
+
+flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 167 of them
+
+
+missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
+length(missing_flags) # 28 these are flags that are in the rousseau data but not in the gfw data, meaning we can't make predictions on them.
+
+flags <- setdiff(flags, missing_flags)
+
 rmse_values <- c()
 num_vars <- c()
 
@@ -265,13 +274,13 @@ train <- model_data_flag[samp, ]
 test <- model_data_flag[-samp, ]
 
 
-if(!file.exists(glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_{n_vars}.qs")))){
+if(!file.exists(glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_25.qs")))){
 tic()
 model <- randomForest(full_model_formula, data = train, type = "regression", proximity = FALSE, ntree = 100, importance = TRUE) 
 toc() # half a second for NZL; 45 secs for CHN
 }else{
   
-  model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_{n_vars}.qs")))
+  model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_25.qs")))
   
 }
 
