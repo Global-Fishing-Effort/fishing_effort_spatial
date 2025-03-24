@@ -10,7 +10,7 @@ editor_options:
 
 We use the data compiled in the previous scripts to fit a random forest regression to predict the presence (1) or absence (0) of fishing effort in every cell. We will do this for each flag country individually.  
 
-We apply a variable selection methdolody of...
+We apply a variable selection methodology of...
 
 ## Environment
 
@@ -469,10 +469,16 @@ stage_1_path <- file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning")
 stage_1_files <- list.files(stage_1_path, full.names = TRUE)
 stage_1_flags <- unique(sub(".*stage_1_rf_train_([A-Z]{3})_.*", "\\1", stage_1_files)) # 118 flags; weird there are more here than in stage 2?!
 
+stage_1_flags <- setdiff(stage_1_flags, c("ZAF", "TON", "AGO", "ALB", "ARG", "AUS", "BEL", "BGR", "BRA", "CAN"))
+
+# num_cores <- 3 # Use one less than the total available cores
+# cl <- makeCluster(num_cores)
+# registerDoParallel(cl)
+# foreach(flag = stage_1_flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "strex", "stats")) %dopar% {
 
 for(flag in stage_1_flags) {
 
-#  flag = "ZAF"
+#  flag = "AGO"
   flag_files <- list.files(stage_1_path, pattern = glue("_{flag}_"))
   # select the model with the next to lowest number of variables. E.g., if the final model run for ZAF is 17, then we want to grab the model with the next to lowest number of variables, which is 19. 
   n_variables <- as.numeric(str_before_first(str_after_last(flag_files, "_"), "\\."))
@@ -505,7 +511,8 @@ for(flag in stage_1_flags) {
   
   if (nrow(full_data) == 0) { # shouldn't ever happen but just in case
     cat(flag, "not in data... skipping\n")
-    return(NULL)
+    # return(NULL)
+    next()
   }
   
   data_random_forest <- full_data %>% 
@@ -515,7 +522,8 @@ for(flag in stage_1_flags) {
   
   if (nrow(full_data) == 1) { # shouldn't ever happen but just in case
     cat(flag, "not enough rows\n")
-    return(NULL)
+    #return(NULL)
+    next()
   }
   
   tic()
@@ -526,6 +534,8 @@ for(flag in stage_1_flags) {
 
 
 }
+# stopCluster(cl)
+# test <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/stage_1_models/stage_1_rf_model_full_data_AGO_19.qs")
 
 ```
 
