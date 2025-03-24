@@ -18,6 +18,8 @@ library(pryr)  # for memory tracking
 library(glue)
 library(qs)
 library(here)
+library(randomForest)
+library(janitor)
 
 source(here("R/dir.R"))
 ```
@@ -102,7 +104,7 @@ hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
     rbind(., get_historical_total_fishing_hours(2016)) %>%
     rbind(., get_historical_total_fishing_hours(2017)) %>%
     mutate(log_total_fishing_hours = log1p(total_fishing_hours)) %>%
-    filter(total_fishing_hours > 0)
+    filter(total_fishing_hours > 0) # do we need this anymore? 
   
 flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 147 of them
 
@@ -150,6 +152,25 @@ full_model_formula <- formula(
 ```
 
 
+Read in EEZ id and FAO id lookup tables so we can save with the actual iso3c and FAO id numbers
+
+```{r}
+
+eez_lookup <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv")) %>%
+  clean_names() %>%
+  rename("eez_id" = "mrgid_sov1", "eez_iso3c" = "iso_sov1")
+
+
+fao_lookup <- read.csv(here("data/model_features/deg_1_x_1/fao/fao_major_ids.csv")) %>%
+  clean_names() %>%
+  dplyr::select(fao_id, "fao_major_fishing_area" = "name_en")
+
+global_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
+  dplyr::select(lon, lat, pixel_id)
+
+```
+
+
 
 After the models are fit, we make predictions on ALL DATA. So stage 1 is in sample predictions (since we fit the stage one model on all data), and stage two will contain out of sample predictions (since we fit the model on only data with fishing effort in it!)
 
@@ -159,8 +180,27 @@ After the models are fit, we make predictions on ALL DATA. So stage 1 is in samp
 env_grid <- env_data %>% 
   dplyr::select(lon, lat) %>% distinct()
 
-flag = "CHN"
 
+stage_1_path <- file.path(rdsi_dir, "prep/random_forest/stage_1_models/")
+stage_1_files <- list.files(stage_1_path, full.names = TRUE)
+stage_1_flags <- unique(sub(".*stage_1_rf_model_full_data_([A-Z]{3})_.*", "\\1", stage_1_files))[-1] # 118 flags; weird there are more here than in stage 2?!
+
+
+stage_2_path <- file.path(rdsi_dir, "prep/random_forest/stage_2_models/")
+stage_2_files <- list.files(stage_2_path, full.names = TRUE)
+stage_2_flags <- unique(sub(".*stage_2_rf_model_full_data_([A-Z]{3})_.*", "\\1", stage_2_files))[-1] # 118 flags; weird there are more here than in stage 2?!
+
+diff_flags_1 <- setdiff(stage_1_flags, stage_2_flags)
+diff_flags_2 <- setdiff(stage_2_flags, stage_1_flags)
+
+model_flags <- intersect(stage_1_flags, stage_2_flags)
+
+
+
+for(flag in model_flags){
+
+# flag = "ZAF"
+  
 model_data_flag <- model_data %>%
   dplyr::select(lon, lat, flag_fin, gear, length_category, year, prop_fishing_hours_cell) %>%
   filter(flag_fin == flag)
@@ -179,57 +219,168 @@ full_data <- full_grid %>%
          log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours))
 
 
-stage2_model <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/stage_2_models/pruning/stage_2_rf_train_CHN_25.qs")
+# stage2_model <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/stage_2_models/pruning/stage_2_rf_train_CHN_19.qs")
+
+# Get the list of matching files
+matching_files <- list.files(
+  path = file.path(rdsi_dir, "prep/random_forest/stage_2_models/"), 
+  pattern = glue::glue("stage_2_rf_model_full_data_{flag}_.*\\.qs$"),
+  full.names = TRUE
+)
+
+# Check if a matching file exists
+if (length(matching_files) > 0) {
+  stage2_model <- qs::qread(matching_files[1])  # Read the first matching file
+} else {
+  stop("No matching file found for flag: ", flag)
+}
 
 oos_preds <- full_data %>%
   mutate(pred_prop = predict(stage2_model, newdata = ., type="response")) 
 
 
-rast_test <- oos_preds %>%
-  filter(gear == "Trawl_Midwater_or_Unsp",
-         length_category == "12-24m",
-         year == 2015) %>%
-  dplyr::select(lon, lat, pred_prop)  %>%
-  rast(., type = "xyz")
-
-plot(rast_test) # yeah this makes sense, It will make a prediction for EVERY CELL globally. Then the stage 1 model is how we mask out the cells where there is no presence prediction. Makes sense the largest values are around NZL too. Cool. 
+# rast_test <- oos_preds %>%
+#   filter(gear == "Trawl_Midwater_or_Unsp",
+#          length_category == "Over 50m",
+#          year == 2015) %>%
+#   dplyr::select(lon, lat, pred_prop)  %>%
+#   rast(., type = "xyz")
+# 
+# plot(rast_test) # yeah this makes sense, It will make a prediction for EVERY CELL globally. Then the stage 1 model is how we mask out the cells where there is no presence prediction.
 
 
 ## read in CHN stage one model: 
 
-stage1_chn <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/stage_1_models/pruning/stage_1_rf_train_CHN_25.qs")
+# stage1_chn <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/stage_1_models/pruning/stage_1_rf_train_CHN_25.qs")
+
+# Get the list of matching files
+matching_files <- list.files(
+  path = file.path(rdsi_dir, "prep/random_forest/stage_1_models/"), 
+  pattern = glue::glue("stage_1_rf_model_full_data_{flag}_.*\\.qs$"),
+  full.names = TRUE
+)
+
+# Check if a matching file exists
+if (length(matching_files) > 0) {
+  stage1_model <- qs::qread(matching_files[1])  # Read the first matching file
+} else {
+  stop("No matching file found for flag: ", flag)
+}
+
 
 stage1_preds <- full_data %>%
-    mutate(pred_presence = predict(stage1_chn, newdata = ., type="prob")[, "1"]) %>%
-  mutate(pred_presence = ifelse(pred_presence < 0.5, 0, 1))
+    mutate(pred_presence = predict(stage1_model, newdata = ., type="prob")[, "1"])
+
+stage_1_preds_rescale <- stage1_preds %>%
+  mutate(pred_presence = ifelse(pred_presence  == 0, 0, 1))
 
 
-rast_test <- stage1_preds %>%
-  filter(gear == "Trawl_Midwater_or_Unsp",
-         length_category == "12-24m",
-         year == 2015) %>%
-  dplyr::select(lon, lat, pred_presence)  %>%
-  rast(., type = "xyz")
-
-plot(rast_test) #
+# rast_test <- stage_1_preds_rescale %>%
+#   filter(gear == "Trawl_Midwater_or_Unsp",
+#          length_category == "Over 50m",
+#          year == 2015) %>%
+#   dplyr::select(lon, lat, pred_presence)  %>%
+#   rast(., type = "xyz")
+# 
+# plot(rast_test) 
 
 
 ## join stage 1 and 2 preds together and multiply 
 all_preds <- oos_preds %>%
-  # probably select lat, lon, gear, length, year, flag here? 
-  #dplyr::select(lat, lon, gear, length_category, year, flag_fin, pred_prop) %>%
-  left_join(., stage1_preds) %>%
-  mutate(pred_prop_final = pred_prop*pred_presence) 
+  #dplyr::select(lat, lon, gear, length_category, year, flag_fin, pred_prop) %>% # probably select lat, lon, gear, length, year, flag here? 
+  left_join(., stage_1_preds_rescale) %>%
+  mutate(pred_prop_final = pred_prop*pred_presence) %>%
+  filter(pred_prop_final > 0) %>%
+  filter(!is.na(pred_prop_final)) %>%
+ group_by(year, flag_fin, gear, length_category) %>%
+  mutate(prop_fishing_hours_cell_predict_rescaled = pred_prop_final / sum(pred_prop_final, na.rm = TRUE)) %>%
+ ungroup() %>% # need to rescale the predictions to be between 0 and 1 here
+  mutate(eff_active_fishing_hours = prop_fishing_hours_cell_predict_rescaled*total_fishing_hours) %>%
+  left_join(global_grid) %>%
+  left_join(fao_lookup) %>%
+  left_join(eez_lookup) %>%
+    dplyr::select(pixel_id, lon, lat, year, flag_fin, gear, length_category, pixel_area_m2, eez_iso3c, fao_id, fao_major_fishing_area,  total_fishing_hours, prop_fishing_hours_cell_raw = prop_fishing_hours_cell, prop_fishing_hours_cell_predict_rescaled, eff_active_fishing_hours)
 
-test_preds <- all_preds %>%
-    filter(gear == "Trawl_Midwater_or_Unsp",
-         length_category == "12-24m",
-         year == 2015,
-         pred_prop_final > 0) %>%
-  dplyr::select(lon, lat, pred_prop_final) %>%
-  rast(., type = "xyz")
+## some checking
+# test <- all_preds %>%
+#   group_by(year, flag, gear, length_category) %>%
+#   summarise(prop = sum(prop_fishing_hours_cell_predict_rescaled)) %>%
+#   ungroup()
 
-plot(test_preds) # ok looks a lot better when using China specific stage 1 model. We're going to have to fit a model for each flag country for each stage. 
+# test <- all_preds %>%
+#   group_by(year, flag, gear, length_category) %>%
+#   summarise(total = sum(eff_active_fishing_hours)) %>%
+#   ungroup() %>%
+#   left_join(hist_fish_data, by = c("flag" = "flag_fin", "year", "gear", "length_category"))
+
+# test_preds <- all_preds %>%
+#     filter(gear == "Trawl_Midwater_or_Unsp",
+#          length_category == "Over 50m",
+#          year == 2015,
+#          prop_fishing_hours_cell_predict_rescaled > 0) %>%
+#   dplyr::select(lon, lat, prop_fishing_hours_cell_predict_rescaled) %>%
+#   rast(., type = "xyz")
+# 
+# plot(test_preds) # ok looks a lot better when using flag specific models.
+
+# test_preds <- all_preds %>%
+#     filter(gear == "Trawl_Midwater_or_Unsp",
+#          length_category == "24-50m",
+#          year == 2015,
+#          eff_active_fishing_hours > 0) %>%
+#   dplyr::select(lon, lat, eff_active_fishing_hours) %>%
+#   rast(., type = "xyz")
+# 
+# plot(test_preds) # ok looks a lot better when using flag specific models.
+
+# test_preds <- all_preds %>%
+#   dplyr::group_by(lon, lat) %>%
+#   summarise(eff_active_fishing_hours = sum(eff_active_fishing_hours, na.rm = TRUE)) %>%
+#   ungroup() %>%
+#   rast(., type = "xyz")
+# 
+# plot(log(test_preds+1)) # Cool!
+
+qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/predictions/model_preds_{flag}.qs")))
+
+}
+
 
 
 ```
+
+Actual CHN, trawlers, 12-24m, 2015 data
+
+```{r}
+
+    test_gfw_raw <- qs::qread(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v2_aggregated/all_effort_2015.qs")) %>%
+      filter(flag_gfw == "CHN", 
+             vessel_class_gfw == "trawlers",
+             length_m_gfw <=24 & length_m_gfw >=12) %>%
+  group_by(cell_ll_lon, cell_ll_lat) %>%
+  summarise(total_hours = sum(fishing_hours, na.rm = TRUE)) %>% 
+  ungroup()
+
+test_rast <- test_gfw_raw %>%
+  rast(., type = "xyz")
+plot(test_rast, col = "green")
+plot(test_rast)
+
+
+    test_gfw_prep <- qs::qread(file.path(rdsi_dir, "prep/gfw_props/deg_one/all_effort_gear_length_props_2015.qs")) %>%
+      filter(flag_fin == "CHN", 
+             gear == "Trawl_Midwater_or_Unsp",
+             length_category == "Over 50m") %>%
+  group_by(x, y) %>%
+  summarise(total_hours = sum(fishing_hours, na.rm = TRUE)) %>% 
+  ungroup()
+
+test_rast <- test_gfw_prep %>%
+  rast(., type = "xyz")
+plot(test_rast, col = "green")
+plot(test_rast)
+
+
+
+```
+

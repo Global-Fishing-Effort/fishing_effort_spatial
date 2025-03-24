@@ -6,7 +6,7 @@ date: "2024-12-11"
 
 # Summary 
 
-We use the data compiled in the previous scripts to fit a RF model to predict the proportion of fishing effort occurring in cells. 
+We use the data compiled in the previous scripts to fit a RF regression model to predict the proportion of fishing effort occurring in cells. 
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -366,6 +366,50 @@ rmse_values
 Now write code to select the "best" model per the variable selection from above. We will rerun the model with just those variables on the FULL dataset to leverage all of the data from GFW and save
 
 ```{r}
+# grab the flags that were run in the folder
+stage_2_path <- file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning")
+stage_2_files <- list.files(stage_2_path, full.names = TRUE)
+stage_2_flags <- unique(sub(".*stage_2_rf_train_([A-Z]{3})_.*", "\\1", stage_2_files)) # 117 flags 
+
+
+for(flag in stage_2_flags) {
+
+#  flag = "ZAF"
+  flag_files <- list.files(stage_2_path, pattern = glue("_{flag}_"))
+  # select the model with the next to lowest number of variables. E.g., if the final model run for ZAF is 17, then we want to grab the model with the next to lowest number of variables, which is 19. 
+  n_variables <- as.numeric(str_before_first(str_after_last(flag_files, "_"), "\\."))
+  
+  if(length(n_variables) > 1){
+  best_model_n <- as.character(sort(n_variables[2]))
+  }else{
+    best_model_n <- as.character(n_variables[1])
+  }
+  
+  best_train_model <- qs::qread(file.path(stage_2_path, glue("stage_2_rf_train_{flag}_{best_model_n}.qs")))
+  
+  rf_formula <- as.formula(deparse(formula(best_train_model)) |> paste(collapse = " "))
+  
+model_data_flag <- model_data %>%
+  dplyr::select(lon, lat, flag_fin, gear, length_category, year, prop_fishing_hours_cell) %>%
+  filter(flag_fin == flag) %>% 
+  left_join(env_data) %>%
+  left_join(hist_fish_data) %>% 
+  dplyr::select(-total_fishing_hours, -log_total_fishing_hours) %>%
+  na.omit() # this removes the categories which are not in the Rousseau data. For example, Rousseau does not have data for NZL, Lines_Longlines, 24-50m, 2015, but GFW does. 
+
+if(nrow(model_data_flag) == 1){
+  next()
+} # skip if not enough data, I don't think this is a worry here but just in case.
+
+
+tic()
+model <- randomForest(rf_formula, data = model_data_flag, type = "regression", proximity = FALSE, ntree = 100, importance = TRUE) 
+toc() # half a second for NZL; 45 secs for CHN
+
+
+qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/stage_2_rf_model_full_data_{flag}_{best_model_n}.qs")))
+}
+
 
 ```
 

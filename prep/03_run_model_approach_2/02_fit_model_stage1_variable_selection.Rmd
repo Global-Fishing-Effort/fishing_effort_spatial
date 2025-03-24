@@ -181,16 +181,6 @@ env_grid <- env_data %>%
 
 ```
 
-
-```{r}
-test <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_BGR_25.qs"))
-
-## ok so things started to go wrong at BGR. After than, each pruned model saved is much larger in size than the full model, which doesn't make sense. I will need to rerun. Perhaps as just a for loop instead of a foreach loop. I think the parallelization screwed things up. Or something within the while loop messed things up. Because it saved all of the full models fine (the models with 25 variables)
-
-```
-
-
-
 ## Run models and variable selection for every individual country
 
  - calculate the full model using all variables available per flag country
@@ -284,7 +274,7 @@ Now apply variable selection methods
 ```{r}
 # Threshold-Based Selection: Remove variables with importance scores below a certain threshold (e.g., the median or a predefined percentage of the highest importance value).
 # Recursive Feature Elimination (RFE): Iteratively remove the least important variable and re-run the model until performance stabilizes. - NOTE: this would probably be the best option, but would take the longest 
-#### How to check when model performance stabilizes?? Look at RMSE vs number of variables in each model. When the RMSE stops getting better is where you make the variable delineation.  
+#### How to check when model performance stabilizes?? Look at AUC-PR vs number of variables in each model. When the AUC-PR stops getting better is where you make the variable delineation.  
 
 
 ## lets try the threshold based selection, where the threshold is 10% of max importance score (i.e. we keep any variable that is above that 10% of max importance score) and rerun the model and test to see if RMSE improves or not 
@@ -296,13 +286,8 @@ length(missing_flags) # 28 these are flags that are in the rousseau data but not
 
 flags <- setdiff(flags, missing_flags)
 
-flags <- setdiff(flags, c("ALB", "BGR", "AGO")) # remove those we've already finished
-
-flags <- flags[35:length(flags)]
-flags <- "ZAF"
-
 # Set up parallel backend
-#### NOTE: THIS ISN'T WORKING; for some reason it gets hung up when saving the new rf model and saves it as realllllly large and only saves one per flag, which isn't correct. I think it might have to do with the while loops I've included. In theory it should work though...
+#### NOTE ABOUT PARALLEL: THIS ISN'T WORKING; for some reason it gets hung up when saving the new rf model and saves it as realllllly large and only saves one per flag, which isn't correct. I think it might have to do with the while loops I've included. In theory it should work though... Without it takes ~12 hours to run. 
 # num_cores <- 3 # Use one less than the total available cores
 # cl <- makeCluster(num_cores)
 # registerDoParallel(cl)
@@ -470,14 +455,6 @@ for(flag in flags){
 # Stop parallel cluster
 #stopCluster(cl)
 
-# Save performance data
-# perf_metrics <- data.frame(Num_Variables = num_vars, RMSE = rmse_values)
-# 
-# # Plot RMSE vs. number of variables
-# ggplot(perf_metrics, aes(x = Num_Variables, y = RMSE)) +
-#   geom_line() + geom_point() +
-#   labs(title = "Model Performance vs. Number of Variables", 
-#        x = "Number of Variables", y = "RMSE") 
 
 
 
@@ -487,6 +464,68 @@ for(flag in flags){
 Now write code to select the "best" model per the variable selection from above. We will rerun the model with just those variables on the FULL dataset to leverage all of the data from GFW and save
 
 ```{r}
+# grab the flags that were run in the folder
+stage_1_path <- file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning")
+stage_1_files <- list.files(stage_1_path, full.names = TRUE)
+stage_1_flags <- unique(sub(".*stage_1_rf_train_([A-Z]{3})_.*", "\\1", stage_1_files)) # 118 flags; weird there are more here than in stage 2?!
+
+
+for(flag in stage_1_flags) {
+
+#  flag = "ZAF"
+  flag_files <- list.files(stage_1_path, pattern = glue("_{flag}_"))
+  # select the model with the next to lowest number of variables. E.g., if the final model run for ZAF is 17, then we want to grab the model with the next to lowest number of variables, which is 19. 
+  n_variables <- as.numeric(str_before_first(str_after_last(flag_files, "_"), "\\."))
+  
+  if(length(n_variables) > 1){
+  best_model_n <- as.character(sort(n_variables[2]))
+  }else{
+    best_model_n <- as.character(n_variables[1])
+  }
+  
+  best_train_model <- qs::qread(file.path(stage_1_path, glue("stage_1_rf_train_{flag}_{best_model_n}.qs")))
+  
+  rf_formula <- as.formula(deparse(formula(best_train_model)) |> paste(collapse = " "))
+  
+  model_data_flag <- model_data %>%
+    dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
+    filter(flag_fin == flag)
+  
+  
+  distinct_cats <- model_data_flag %>%
+    distinct(year, flag_fin, gear, length_category)
+  
+  full_grid <- tidyr::crossing(env_grid, distinct_cats)
+  
+  full_data <- full_grid %>%
+    left_join(env_data, by = c("lon", "lat", "year")) %>%
+    left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
+    mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
+    dplyr::select(-pixel_id)
+  
+  if (nrow(full_data) == 0) { # shouldn't ever happen but just in case
+    cat(flag, "not in data... skipping\n")
+    return(NULL)
+  }
+  
+  data_random_forest <- full_data %>% 
+    na.omit() %>%
+    mutate(presence = as.factor(presence)) %>%
+    distinct()
+  
+  if (nrow(full_data) == 1) { # shouldn't ever happen but just in case
+    cat(flag, "not enough rows\n")
+    return(NULL)
+  }
+  
+  tic()
+  model <- randomForest(rf_formula, data = data_random_forest, type = "classification", proximity = FALSE, ntree = 100, importance = TRUE)
+  toc()
+
+  qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/stage_1_rf_model_full_data_{flag}_{best_model_n}.qs")))
+
+
+}
 
 ```
 
