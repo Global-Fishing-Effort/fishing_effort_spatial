@@ -155,9 +155,7 @@ model_formula_rf <- formula(
     nearest_seamount_distance_m + 
     year
 )
-  env_data <- env_data
   
-
 
 hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
     rbind(., get_historical_total_fishing_hours(2016)) %>%
@@ -205,6 +203,8 @@ missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag
 length(missing_flags) # 28 these are flags that are in the rousseau data but not in the gfw data, meaning we can't fit a model or make predictions on them.
 
 flags <- setdiff(flags, missing_flags)
+
+flags <- setdiff(flags, c("BGR", "BEL", "CMR"))
 
 # Set up parallel backend
 num_cores <- 3 # Use one less than the total available cores
@@ -267,6 +267,8 @@ foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glu
   
 }
 
+stopCluster(cl)
+
 ```
  
 Now apply variable selection methods 
@@ -286,6 +288,7 @@ length(missing_flags) # 28 these are flags that are in the rousseau data but not
 
 flags <- setdiff(flags, missing_flags)
 
+
 # Set up parallel backend
 #### NOTE ABOUT PARALLEL: THIS ISN'T WORKING; for some reason it gets hung up when saving the new rf model and saves it as realllllly large and only saves one per flag, which isn't correct. I think it might have to do with the while loops I've included. In theory it should work though... Without it takes ~12 hours to run. 
 # num_cores <- 3 # Use one less than the total available cores
@@ -295,11 +298,10 @@ flags <- setdiff(flags, missing_flags)
 # Run the loop in parallel
 # foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc")) %dopar% {
 
-  rmse_values <- c()
   auc_values <- c()
   num_vars <- c()
   
-  tracking_df <- data.frame(flag = NA, auc = NA, n_vars = NA)
+#  tracking_df <- data.frame(flag = NA, auc = NA, n_vars = NA)
 
 for(flag in flags){
   
@@ -434,7 +436,6 @@ for(flag in flags){
     }
     
     if (length(auc_values) > 1) {
-        # model_improvement <- (rmse_values[length(rmse_values) - 1] - rmse_values[length(rmse_values)]) / rmse_values[length(rmse_values) - 1] # RMSE is the opposite of AUC; i.e., a lower RMSE is better whereas a higher AUC is better
       
       model_improvement <- auc_values[length(auc_values)] - auc_values[length(auc_values) - 1]
         
@@ -469,7 +470,14 @@ stage_1_path <- file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning")
 stage_1_files <- list.files(stage_1_path, full.names = TRUE)
 stage_1_flags <- unique(sub(".*stage_1_rf_train_([A-Z]{3})_.*", "\\1", stage_1_files)) # 118 flags; weird there are more here than in stage 2?!
 
-stage_1_flags <- setdiff(stage_1_flags, c("ZAF", "TON", "AGO", "ALB", "ARG", "AUS", "BEL", "BGR", "BRA", "CAN"))
+
+stage_1_path_done <- file.path(rdsi_dir, "prep/random_forest/stage_1_models/")
+stage_1_files_done <- list.files(stage_1_path_done, full.names = TRUE)[-1]
+stage_1_flags_done <- unique(sub(".*stage_1_rf_model_full_data_([A-Z]{3})_.*", "\\1", stage_1_files_done)) # 118 flags; weird there are more here than in stage 2?!
+
+stage_1_flags <- setdiff(stage_1_flags, stage_1_flags_done)
+
+# stage_1_flags <- c("AGO", "ALB", "AUS")
 
 # num_cores <- 3 # Use one less than the total available cores
 # cl <- makeCluster(num_cores)
@@ -478,7 +486,7 @@ stage_1_flags <- setdiff(stage_1_flags, c("ZAF", "TON", "AGO", "ALB", "ARG", "AU
 
 for(flag in stage_1_flags) {
 
-#  flag = "AGO"
+#  flag = "ALB"
   flag_files <- list.files(stage_1_path, pattern = glue("_{flag}_"))
   # select the model with the next to lowest number of variables. E.g., if the final model run for ZAF is 17, then we want to grab the model with the next to lowest number of variables, which is 19. 
   n_variables <- as.numeric(str_before_first(str_after_last(flag_files, "_"), "\\."))
@@ -509,33 +517,36 @@ for(flag in stage_1_flags) {
     mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
     dplyr::select(-pixel_id)
   
-  if (nrow(full_data) == 0) { # shouldn't ever happen but just in case
-    cat(flag, "not in data... skipping\n")
-    # return(NULL)
-    next()
-  }
+  # if (nrow(full_data) == 0) { # shouldn't ever happen but just in case
+  #   cat(flag, "not in data... skipping\n")
+  #   # return(NULL)
+  #   next()
+  # }
   
   data_random_forest <- full_data %>% 
     na.omit() %>%
     mutate(presence = as.factor(presence)) %>%
     distinct()
   
-  if (nrow(full_data) == 1) { # shouldn't ever happen but just in case
-    cat(flag, "not enough rows\n")
-    #return(NULL)
-    next()
-  }
+  # if (nrow(full_data) == 1) { # shouldn't ever happen but just in case
+  #   cat(flag, "not enough rows\n")
+  #   #return(NULL)
+  #   next()
+  # }
+  
+  set.seed(123)
   
   tic()
-  model <- randomForest(rf_formula, data = data_random_forest, type = "classification", proximity = FALSE, ntree = 100, importance = TRUE)
+  model <- randomForest(rf_formula, data = data_random_forest, type = "classification", proximity = FALSE, ntree = 100)
   toc()
 
   qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/stage_1_rf_model_full_data_{flag}_{best_model_n}.qs")))
 
 
 }
-# stopCluster(cl)
-# test <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/stage_1_models/stage_1_rf_model_full_data_AGO_19.qs")
+ # stopCluster(cl)
+ 
+  
 
 ```
 

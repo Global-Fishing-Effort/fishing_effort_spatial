@@ -83,7 +83,9 @@ starting_shape <- ocean
 
 data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
   st_as_sf(wkt = "geometry_wkt",
-           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
+              mutate(pixel_area_m2 = sf::st_area(geometry_wkt) %>%
+                 units::drop_units())
 
 ```
 
@@ -370,87 +372,76 @@ Need to prep 1 by 1 EEZ, FAO, and mesopelagic data
 Use Marine Region's [Maritime Boundaries Geodatabase: Maritime Boundaries and Exclusive Economic Zones (200NM), version 12]
 
 ```{r}
-global_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv"))
-eezs <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"), layer = 'eez_v12') %>%
-  filter(POL_TYPE != "Overlapping claim",
-         ISO_SOV1 != "ATA")  
-  
-world_shp <- sf::st_as_sf(maps::map("world", plot = FALSE, fill = TRUE))
-
-grid <- data_grid %>%
-  st_drop_geometry() %>%
-  dplyr::select(lon, lat, pixel_id) %>% 
-  rast(., type = "xyz") 
-
-eez_rast <- rast(fasterize::fasterize(eezs, raster(grid), field = "MRGID_SOV1"))
-eez_rast
-
-eez_rast[is.na(eez_rast)] <- 99999 # save a value high seas, not if sure necessary
-eez_rast <- mask(eez_rast, vect(world_shp), inverse = TRUE) # mask out any land 
-eez_rast[is.na(eez_rast)] <- 999999 # save a value for land, not sure if necessary
-
-
-
-
-writeRaster(eez_rast, here("data/model_features/deg_1_x_1/eez/eez_id_rast_1.tif"), overwrite = TRUE)
-
-## get x, y lookup table so we can join to the raw mmsi data when saving and have the EEZ id already saved in the csv 
-
-
-eez_lookup <- eez_rast %>%
-  as.data.frame(xy = TRUE)
-
-eez_check <- eez_lookup %>%
-  mutate(x_int = floor(x), y_int = floor(y)) %>%  # extract integer part of x and y
-  group_by(x_int, y_int) %>%
-  summarise(x_unique_decimals = n_distinct(x),
-            y_unique_decimals = n_distinct(y)) %>%
-  ungroup()
-
-eez_lookup_fin <- eez_lookup %>%
-  dplyr::select(lon = x, lat = y, eez_id = layer) %>%
-  left_join(global_grid) %>% 
-  dplyr::select(pixel_id, eez_id)
-  
-
-write.csv(eez_lookup_fin, here("data/model_features/deg_1_x_1/eez/eez.csv"), row.names = FALSE)
-
-eez_lookup_ids <- eezs %>% 
-  st_drop_geometry() %>%
-  dplyr::distinct(ISO_SOV1, MRGID_SOV1) %>%
-  add_row(ISO_SOV1 = "Land", MRGID_SOV1 = 999999) %>%
-  add_row(ISO_SOV1 = "High seas", MRGID_SOV1 = 99999)
-
-write.csv(eez_lookup_ids, here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"), row.names = FALSE)
+# global_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv"))
+# eezs <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"), layer = 'eez_v12') %>%
+#   filter(POL_TYPE != "Overlapping claim",
+#          ISO_SOV1 != "ATA")  
+#   
+# world_shp <- sf::st_as_sf(maps::map("world", plot = FALSE, fill = TRUE))
+# 
+# grid <- data_grid %>%
+#   st_drop_geometry() %>%
+#   dplyr::select(lon, lat, pixel_id) %>% 
+#   rast(., type = "xyz") 
+# 
+# eez_rast <- rast(fasterize::fasterize(eezs, raster(grid), field = "MRGID_SOV1"))
+# eez_rast
+# 
+# eez_rast[is.na(eez_rast)] <- 99999 # save a value high seas, not if sure necessary
+# eez_rast <- mask(eez_rast, vect(world_shp), inverse = TRUE) # mask out any land 
+# eez_rast[is.na(eez_rast)] <- 999999 # save a value for land, not sure if necessary
+# 
+# 
+# 
+# 
+# writeRaster(eez_rast, here("data/model_features/deg_1_x_1/eez/eez_id_rast_1.tif"), overwrite = TRUE)
+# 
+# ## get x, y lookup table so we can join to the raw mmsi data when saving and have the EEZ id already saved in the csv 
+# 
+# 
+# eez_lookup <- eez_rast %>%
+#   as.data.frame(xy = TRUE)
+# 
+# eez_check <- eez_lookup %>%
+#   mutate(x_int = floor(x), y_int = floor(y)) %>%  # extract integer part of x and y
+#   group_by(x_int, y_int) %>%
+#   summarise(x_unique_decimals = n_distinct(x),
+#             y_unique_decimals = n_distinct(y)) %>%
+#   ungroup()
+# 
+# eez_lookup_fin <- eez_lookup %>%
+#   dplyr::select(lon = x, lat = y, eez_id = layer) %>%
+#   left_join(global_grid) %>% 
+#   dplyr::select(pixel_id, eez_id)
+#   
+# 
+# write.csv(eez_lookup_fin, here("data/model_features/deg_1_x_1/eez/eez.csv"), row.names = FALSE)
+# 
+# eez_lookup_ids <- eezs %>% 
+#   st_drop_geometry() %>%
+#   dplyr::distinct(ISO_SOV1, MRGID_SOV1) %>%
+#   add_row(ISO_SOV1 = "Land", MRGID_SOV1 = 999999) %>%
+#   add_row(ISO_SOV1 = "High seas", MRGID_SOV1 = 99999)
+# 
+# write.csv(eez_lookup_ids, here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"), row.names = FALSE)
 
 ```
 
 
 ```{r}
-# Input is a distance rasterStack, a shapefile over which to aggregate,
-# And a column ID from the shapefile for identifying the polygon that is closest
-find_shortest_distance_from_pixel_to_shapefile <- function(distance_raster_stack, shapefile, column_id){
-  # Let's spatially aggregate by taking the min value from the rasterStack for each of our polygons 
-  distance_raster_stack %>%
-    # Raster stack can then be fed to exact_extract
-    exactextractr::exact_extract(shapefile,
-                                 "min",
-                                 append_cols = column_id,
-                                 progress = TRUE) %>%
-    tibble::as_tibble() %>%
-    pivot_longer(-c(column_id)) %>%
-    rename(pixel_id = name,
-           distance_m = value)%>%
-    mutate(pixel_id = stringr::str_remove_all(pixel_id,"min.X") %>%
-             as.numeric()) %>%
-    group_by(pixel_id) %>%
-    # Select the specific polygon that has the minimum distance
-    dplyr::slice_min(order_by = distance_m, n = 1, with_ties = FALSE) %>%
-    ungroup()
-}
 
 analysis_projection <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
 eez <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"), layer = 'eez_v12')
+
+eez_lookup_ids <- eez %>% 
+      filter(POL_TYPE !=  "Overlapping claim") %>% 
+  st_drop_geometry() %>%
+  dplyr::distinct(eez_sovereign = ISO_SOV1, eez_id = MRGID_SOV1) %>%
+        filter(eez_sovereign != "ATA")  %>% 
+  add_row(eez_sovereign = "High seas", eez_id = 99999)
+
+write.csv(eez_lookup_ids, here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"), row.names = FALSE)
+
 
   eez <- eez %>%
     filter(POL_TYPE !=  "Overlapping claim") %>%
@@ -463,51 +454,54 @@ eez <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"),
     mutate(eez_area_m2 = sf::st_area(geometry)%>%
              units::drop_units())
   
+
+
   # Now intersect our grids with EEZs, calculate fraction each grid overlaps with EEZ
   # And only pick one EEZ per grid
   data_grid_eez <- data_grid %>% 
     sf::st_intersection(eez) 
-  # %>%
-    # mutate(area_eez_overlap_m2 = sf::st_area(geometry_wkt)%>%
-    #          units::drop_units())  %>%
-    # sf::st_drop_geometry() %>%
-    # mutate(fraction_eez_overlap = (area_eez_overlap_m2 / pixel_area_m2) %>%
-    #          pmax(0) %>%
-    #          pmin(1))%>%sud
-    # group_by(pixel_id) %>%
-    # slice_max(area_eez_overlap_m2, n = 1, with_ties = FALSE)%>%
-    # # In cases when there are ties, take largest EEZ
-    # ungroup() %>%
+  
+  save_data_grid_eez <- data_grid_eez %>%
+    st_drop_geometry()
+  
+  qs::qsave(save_data_grid_eez, here("data/model_features/deg_1_x_1/eez/int/eez_intersection.qs")) # save as we go
+  
+  data_grid_eez_2 <- data_grid_eez %>% 
+      mutate(geometry_wkt = sf::st_make_valid(geometry_wkt)) %>%
+    mutate(area_eez_overlap_m2 = sf::st_area(geometry_wkt)%>%
+             units::drop_units())
+  
+  data_grid_eez_3 <- data_grid_eez_2 %>%
+    left_join(data_grid %>% st_drop_geometry()) %>%
+    st_drop_geometry() %>%
+    mutate(fraction_eez_overlap = (area_eez_overlap_m2 / pixel_area_m2) %>%
+             pmax(0) %>%
+             pmin(1))%>%
+    group_by(pixel_id) %>%
+    slice_max(area_eez_overlap_m2, n = 1, with_ties = FALSE)%>%
+    # In cases when there are ties, take largest EEZ
+    ungroup() %>%
     dplyr::select(pixel_id,eez_sovereign,fraction_eez_overlap)
   
-  # Which pixel ids have no overlap, i.e. are on the high-seas? We only't need to calculate nearest neighbors for these
-  high_seas_pixels <- data_grid %>%
-    filter(!(pixel_id %in% data_grid_eez$pixel_id)) %>%
-    .$pixel_id
+  qs::qsave(data_grid_eez_3, here("data/model_features/deg_1_x_1/eez/int/eez_intersection_no_highseas.qs"))
+
   
-  high_seas_pixels_vec <- glue::glue("X{high_seas_pixels}")
+  eez_lookup <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"))
   
   
+  data_grid_high_seas <- data_grid_eez_3 %>%
+    full_join(data_grid %>% st_drop_geometry()) %>%
+    mutate(eez_sovereign = ifelse(is.na(eez_sovereign), "High seas", eez_sovereign)) %>%
+        left_join(eez_lookup, by = c("eez_sovereign")) %>%
+    dplyr::distinct(pixel_id, eez_id)
   
-  # Calculate distance between each grid centroid and nearest eez
-  # Only do this for grids on the high seas that don't already overlap with EEZs - this is all that's necessary, and speeds things up computationally as well
-  distance_to_nearest_eez <- find_shortest_distance_from_pixel_to_shapefile(distance_raster_stack[[high_seas_pixels_vec]],
-                                                                            eez,
-                                                                            "eez_sovereign") %>%
-    rename(nearest_eez_sovereign = eez_sovereign,
-           nearest_eez_distance_m = distance_m)
+  # %>%
+    # dplyr::select(lon, lat, eez_id = MRGID_SOV1) %>%
+    # rast(., type = "xyz")
   
-  data_grid %>%
-    dplyr::select(pixel_id) %>%
-    sf::st_set_geometry(NULL) %>%
-    left_join(data_grid_eez,
-              by = "pixel_id") %>%
-    left_join(distance_to_nearest_eez,
-              by = "pixel_id")%>%
-    # Replace missing values with high_seas
-    mutate(across(c(nearest_eez_distance_m,fraction_eez_overlap),~replace_na(.,0)))%>%
-    # Replace missing values with high_seas
-    mutate(across(c(eez_sovereign,eez_region_world_bank_7),~replace_na(.,"high_seas")))
+  write.csv(data_grid_high_seas, here("data/model_features/deg_1_x_1/eez/eez.csv"), row.names = FALSE)
+  
+
 
 ```
 

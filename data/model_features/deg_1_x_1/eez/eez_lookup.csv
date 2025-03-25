@@ -1,4 +1,4 @@
-"ISO_SOV1","MRGID_SOV1"
+"eez_sovereign","eez_id"
 "USA",2204
 "GBR",2208
 "NZL",2227
@@ -152,5 +152,4 @@
 "GHA",2100
 "RUS",2240
 "SDN",2183
-"Land",999999
 "High seas",99999

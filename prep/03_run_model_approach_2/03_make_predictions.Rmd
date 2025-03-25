@@ -20,6 +20,8 @@ library(qs)
 library(here)
 library(randomForest)
 library(janitor)
+library(arrow)
+library(countrycode)
 
 source(here("R/dir.R"))
 ```
@@ -85,7 +87,7 @@ get_historical_total_fishing_hours <- function(yr) {
     
     group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
     summarize(
-      total_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
+      total_fishing_hours = sum(nom_active_hours, na.rm = TRUE),
       .groups = 'drop'
     ) %>%
     filter(year == yr) %>%
@@ -104,7 +106,8 @@ hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
     rbind(., get_historical_total_fishing_hours(2016)) %>%
     rbind(., get_historical_total_fishing_hours(2017)) %>%
     mutate(log_total_fishing_hours = log1p(total_fishing_hours)) %>%
-    filter(total_fishing_hours > 0) # do we need this anymore? 
+    filter(total_fishing_hours > 0) %>%
+  mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name"))
   
 flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 147 of them
 
@@ -158,7 +161,8 @@ Read in EEZ id and FAO id lookup tables so we can save with the actual iso3c and
 
 eez_lookup <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv")) %>%
   clean_names() %>%
-  rename("eez_id" = "mrgid_sov1", "eez_iso3c" = "iso_sov1")
+  mutate(eez_country_name = countrycode(eez_sovereign, origin = "iso3c", destination = "country.name")) %>%
+  mutate(eez_country_name = ifelse(is.na(eez_country_name), "High seas", eez_country_name))
 
 
 fao_lookup <- read.csv(here("data/model_features/deg_1_x_1/fao/fao_major_ids.csv")) %>%
@@ -196,10 +200,15 @@ diff_flags_2 <- setdiff(stage_2_flags, stage_1_flags)
 model_flags <- intersect(stage_1_flags, stage_2_flags)
 
 
+# preds_path <- file.path(rdsi_dir, "prep/random_forest/predictions/")
+# preds_files <- list.files(preds_path, full.names = TRUE)
+# # preds_done_flags <- unique(sub(".*model_preds_([A-Z]{3}).*", "\\1", preds_files)) # 118 flags; weird there are more here than in stage 2?!
+# 
+# model_flags <- setdiff(model_flags, preds_done_flags)
 
 for(flag in model_flags){
 
-# flag = "ZAF"
+# flag = "AGO"
   
 model_data_flag <- model_data %>%
   dplyr::select(lon, lat, flag_fin, gear, length_category, year, prop_fishing_hours_cell) %>%
@@ -292,27 +301,29 @@ all_preds <- oos_preds %>%
   mutate(pred_prop_final = pred_prop*pred_presence) %>%
   filter(pred_prop_final > 0) %>%
   filter(!is.na(pred_prop_final)) %>%
- group_by(year, flag_fin, gear, length_category) %>%
+ group_by(year, flag_fin, flag_country_name, gear, length_category) %>%
   mutate(prop_fishing_hours_cell_predict_rescaled = pred_prop_final / sum(pred_prop_final, na.rm = TRUE)) %>%
  ungroup() %>% # need to rescale the predictions to be between 0 and 1 here
-  mutate(eff_active_fishing_hours = prop_fishing_hours_cell_predict_rescaled*total_fishing_hours) %>%
+  mutate(nom_active_fishing_hours = prop_fishing_hours_cell_predict_rescaled*total_fishing_hours) %>%
   left_join(global_grid) %>%
   left_join(fao_lookup) %>%
   left_join(eez_lookup) %>%
-    dplyr::select(pixel_id, lon, lat, year, flag_fin, gear, length_category, pixel_area_m2, eez_iso3c, fao_id, fao_major_fishing_area,  total_fishing_hours, prop_fishing_hours_cell_raw = prop_fishing_hours_cell, prop_fishing_hours_cell_predict_rescaled, eff_active_fishing_hours)
+    dplyr::select(pixel_id, lon, lat, year, flag_fin, flag_country_name, gear, length_category, pixel_area_m2, eez_sovereign, eez_country_name, fao_id, fao_major_fishing_area,  total_fishing_hours, prop_fishing_hours_cell_raw = prop_fishing_hours_cell, prop_fishing_hours_cell_predict_rescaled, nom_active_fishing_hours) %>%
+  filter(nom_active_fishing_hours > 0) %>%
+  mutate(sector = "Industrial")
 
 ## some checking
 # test <- all_preds %>%
-#   group_by(year, flag, gear, length_category) %>%
+#   group_by(year, flag_fin, gear, length_category) %>%
 #   summarise(prop = sum(prop_fishing_hours_cell_predict_rescaled)) %>%
 #   ungroup()
-
+# 
 # test <- all_preds %>%
-#   group_by(year, flag, gear, length_category) %>%
+#   group_by(year, flag_fin, gear, length_category) %>%
 #   summarise(total = sum(eff_active_fishing_hours)) %>%
 #   ungroup() %>%
-#   left_join(hist_fish_data, by = c("flag" = "flag_fin", "year", "gear", "length_category"))
-
+#   left_join(hist_fish_data, by = c("flag_fin", "year", "gear", "length_category"))
+#
 # test_preds <- all_preds %>%
 #     filter(gear == "Trawl_Midwater_or_Unsp",
 #          length_category == "Over 50m",
@@ -322,7 +333,7 @@ all_preds <- oos_preds %>%
 #   rast(., type = "xyz")
 # 
 # plot(test_preds) # ok looks a lot better when using flag specific models.
-
+# 
 # test_preds <- all_preds %>%
 #     filter(gear == "Trawl_Midwater_or_Unsp",
 #          length_category == "24-50m",
@@ -332,7 +343,7 @@ all_preds <- oos_preds %>%
 #   rast(., type = "xyz")
 # 
 # plot(test_preds) # ok looks a lot better when using flag specific models.
-
+# 
 # test_preds <- all_preds %>%
 #   dplyr::group_by(lon, lat) %>%
 #   summarise(eff_active_fishing_hours = sum(eff_active_fishing_hours, na.rm = TRUE)) %>%
@@ -341,8 +352,8 @@ all_preds <- oos_preds %>%
 # 
 # plot(log(test_preds+1)) # Cool!
 
-qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/predictions/model_preds_{flag}.qs")))
-
+qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/predictions/model_preds_{flag}.qs"))) # qs is smaller
+# write_parquet(all_preds, file.path(rdsi_dir, glue("prep/random_forest/predictions/model_preds_{flag}.parquet")))
 }
 
 
