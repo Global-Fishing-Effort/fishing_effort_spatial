@@ -1,0 +1,162 @@
+---
+title: "Create fishing access dataset"
+output: html_document
+date: "2024-12-11"
+---
+
+# Summary 
+
+Here we create a dataset that described for each flag country, the EEZs they are able to fish in for each year. We derive this data from Rousseau et al, who derived it from Watson et al, who used fishing access rights datasets. 
+
+The data will be formatted as year | flag country | eez (including high seas?) | fishing (1 or 0)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(here)
+library(countrycode)
+library(sf)
+
+source(here("R/dir.R"))
+```
+
+The data we need to access is located here: /home/ubuntu/gem/private/users/yannickr/effort_histsoc_1841_2017_EEZ_addFAO.csv
+
+```{r}
+effort_df <- read.csv("/home/ubuntu/gem/private/users/yannickr/effort_histsoc_1841_2017_EEZ_addFAO.csv")
+
+colnames(effort_df)
+
+eez_sf <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"), layer = 'eez_v12')
+
+eez_lookup_ids <- eez_sf %>% 
+      filter(POL_TYPE !=  "Overlapping claim") %>% 
+  st_drop_geometry() %>%
+  dplyr::distinct(eez_sovereign = ISO_SOV1, iso_ter = ISO_TER1) %>%
+        filter(eez_sovereign != "ATA")  %>% 
+  add_row(eez_sovereign = "High seas", iso_ter = "High seas") %>%
+  filter(!is.na(iso_ter))
+
+# read in our eez lookup 
+
+eez_lookup <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"))
+
+## need SAUP country codes they used
+saup_codes <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv")
+
+effort_access_df <- effort_df %>%
+  filter(NomActive > 0, 
+        Year >= 1950,
+        Sector == "Industrial") %>%
+  distinct(year = Year,  flag_id = SAUP, Gear, eez_country_name) %>% # maybe add gear here? Vessel length too? For as much detail as we can get? 
+  left_join(saup_codes, by = c("flag_id" = "SAUP")) %>%
+  dplyr::select(year, Gear, flag_fin = Country, eez_country_name) %>%
+  mutate(iso_ter = countrycode(eez_country_name, origin = "country.name", destination = "iso3c")) %>%
+  mutate(iso_ter = ifelse(eez_country_name == "High Seas", "High seas", iso_ter)) %>%
+  left_join(eez_lookup_ids) %>%
+    mutate(eez_country_name = ifelse(eez_country_name == "High Seas", "High seas", eez_country_name))  %>%
+    mutate(eez_sovereign = case_when(
+    eez_country_name == "Dominican Rp" ~ "DOM",
+    eez_country_name == "NethAntilles" ~ "NLD",
+    eez_country_name %in% c("US Virgin Is", "Amer Samoa") ~ "USA",
+    eez_country_name %in% c("Fr Guiana", "Kerguelen Is", "Fr Polynesia") ~ "FRA", 
+    eez_country_name %in% c("Channel Is", "Br Virgin Is", "Br Ind Oc Tr") ~ "GBR", 
+    eez_country_name == "Serbia Montenegro" ~ "MNE", # choosing montenegro here as serbia is landlocked
+    eez_country_name == "West Sahara" ~ "MAR", # this is technically not right? I guess it depends on the year 
+    eez_country_name == "Untd Arab Em" ~ "ARE", 
+    eez_country_name == "Micronesia" ~ "FSM",
+    TRUE ~ eez_sovereign
+  )) %>%
+    mutate(access = 1) %>%
+  mutate(eez_sovereign = case_when(
+    eez_country_name == "Falkland Is" ~ "ARG",
+    eez_country_name == "Gibraltar" ~ "GBR",
+    eez_country_name == "Mayotte" ~ "FRA", 
+    eez_country_name %in% c("Hong Kong", "Macau", "Taiwan") ~ "CHN", # contentious? 
+    eez_country_name == "Ukraine" ~ "RUS", # this isnt true... 
+    TRUE ~ eez_sovereign
+  )) %>%
+  distinct(year, flag_fin, gear = Gear, eez_sovereign, access) %>%
+  left_join(eez_lookup) %>%
+   mutate(gear = ifelse(gear %in% c("Falling_Gear", "Lift_Nets", "Lines_Unspecified", "Others_Multiple_Gears", "Others_Others", "Others_Support", "Others_Unknown"), "Other", gear))
+  
+qs::qsave(effort_access_df, here("data/int/prediction_historical_data/fishing_access.qs"))
+
+
+test <- effort_access_df %>%
+  filter(is.na(eez_sovereign)) %>%
+  distinct(eez_country_name, iso_ter, eez_sovereign)
+
+```
+
+Try with catch data instead? 
+
+```{r}
+catch_df <- read.csv("/home/ubuntu/gem/private/users/yannickr/catch_histsoc_1869_2017_EEZ_addFAO.csv") %>%
+  filter(Sector == "industrial")
+
+
+test_chn <- catch_df %>%
+  filter(Year == 1950,
+         FCountryName == "China")
+
+unique(test_chn$eez_country_name)
+
+ # [1] "High Seas"   "N Marianas"  "US (Alaska)" "China Main"  "Hong Kong"   "Macau"       "Viet Nam"    "Japan"      
+ # [9] "Finland"     "Greece"      "Australia"   "Indonesia"   "France"      "Albania"     "Italy"       "Guinea"   
+# only 16 locations in catch data
+
+test_chn_eff <- effort_access_df %>%
+  filter(year == 1950, 
+         flag_fin == "CHN")
+
+unique(test_chn_eff$eez_sovereign)
+#  [1] "High seas" "USA"       "FIN"       "SWE"       "ALB"       "EGY"       "FRA"       "GRC"       "ITA"       "LBY"      
+# [11] "ESP"       "TUR"       "GIN"       "GNB"       "DJI"       "IND"       "YEM"       "ERI"       "CHN"       "PHL"      
+# [21] "VNM"       "IDN"       "AUS"       "JPN"       "KOR"       "PRK"       "RUS"       "GBR"       "NZL"   
+# theres 29 in effort data??
+
+
+catch_access_df <- catch_df %>%
+  mutate(catch = Reported + IUU + Discards) %>%
+  filter(catch > 1, 
+        Year >= 1950,
+        SAUP != 999) %>%
+  distinct(year = Year,  flag_id = SAUP, FCountryName, eez_country_name) %>% # maybe add gear here? Vessel length too? For as much detail as we can get? 
+  left_join(saup_codes, by = c("flag_id" = "SAUP")) %>%
+  mutate(Country = ifelse(flag_id == 830, "GBR", Country)) %>%
+  dplyr::select(year, flag_fin = Country, eez_country_name) %>%
+  filter(!is.na(flag_fin)) %>%
+  mutate(iso_ter = countrycode(eez_country_name, origin = "country.name", destination = "iso3c")) %>%
+  mutate(iso_ter = ifelse(eez_country_name == "High Seas", "High seas", iso_ter)) %>%
+  left_join(eez_lookup_ids) %>%
+    mutate(eez_country_name = ifelse(eez_country_name == "High Seas", "High seas", eez_country_name))  %>%
+    mutate(eez_sovereign = case_when(
+    eez_country_name == "Dominican Rp" ~ "DOM",
+    eez_country_name == "NethAntilles" ~ "NLD",
+    eez_country_name %in% c("US Virgin Is", "Amer Samoa") ~ "USA",
+    eez_country_name %in% c("Fr Guiana", "Kerguelen Is", "Fr Polynesia") ~ "FRA", 
+    eez_country_name %in% c("Channel Is", "Br Virgin Is", "Br Ind Oc Tr") ~ "GBR", 
+    eez_country_name == "Serbia Montenegro" ~ "MNE", # choosing montenegro here as serbia is landlocked
+    eez_country_name == "West Sahara" ~ "MAR", # this is technically not right? I guess it depends on the year 
+    eez_country_name == "Untd Arab Em" ~ "ARE", 
+    eez_country_name == "Micronesia" ~ "FSM",
+    TRUE ~ eez_sovereign
+  )) %>%
+    mutate(access = 1) %>%
+  mutate(eez_sovereign = case_when(
+    eez_country_name == "Falkland Is" ~ "ARG",
+    eez_country_name == "Gibraltar" ~ "GBR",
+    eez_country_name == "Mayotte" ~ "FRA", 
+    eez_country_name %in% c("Hong Kong", "Macau", "Taiwan") ~ "CHN", # contentious? 
+    eez_country_name == "Ukraine" ~ "RUS", # this isnt true... 
+    TRUE ~ eez_sovereign
+  )) %>%
+  distinct(year, flag_fin, eez_sovereign, access) %>%
+  left_join(eez_lookup)
+
+qs::qsave(catch_access_df, here("data/int/prediction_historical_data/catch_fishing_access.qs"))
+```
+
+

@@ -50,8 +50,15 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
   ocean_data <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv")) %>%
   left_join(read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv")), by = c("pixel_id", "year")) %>% 
   left_join(read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv")), by = c("pixel_id", "year")) %>%
-  filter(year %in% c(2015:2017)) 
+  filter(year %in% c(2015:2017)) %>%
+  dplyr::select(-anom_sst_c_mean, -anom_sst_c_sd)
+  
+  ocean_data_historical <- qs::qread(here("data/int/prediction_historical_data/chl_yearly_1950_2014.qs")) %>%
+  left_join(qs::qread(here("data/int/prediction_historical_data/sst_yearly_1950_2014.qs")), by = c("pixel_id", "year")) %>% 
+  left_join(qs::qread(here("data/int/prediction_historical_data/wind_yearly_1950_2014.qs")) %>% mutate(year = as.numeric(year)), by = c("pixel_id", "year"))
 
+  ocean_data_all <- ocean_data %>%
+    rbind(ocean_data_historical)
 
   spatial_data <- global_grid %>%
     left_join(read.csv(here("data/model_features/deg_1_x_1/gfw_static_spatial_measures.csv")) %>% dplyr::select(-lat, -lon), by = "pixel_id") %>%
@@ -60,12 +67,11 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/fao/fao_fixed.csv")), by = "pixel_id") %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/oceans_fixed.csv")), by = "pixel_id") %>%
     left_join(read.csv(here("data/model_features/deg_1_x_1/seamounts.csv")), by = "pixel_id") %>% 
-   crossing(., year = c(2015:2017)) 
+   crossing(., year = c(1950:2017)) 
   
   
   env_data <- spatial_data %>%
-    left_join(ocean_data) %>% # cool.
-    dplyr::select(-geometry_wkt) %>%
+    left_join(ocean_data_all) %>% # cool.
     left_join(elnino) %>%
     left_join(pdo) %>%
     left_join(world_bank, by = c("eez_id" = "MRGID_SOV1")) %>%
@@ -102,12 +108,25 @@ get_historical_total_fishing_hours <- function(yr) {
 
 ```{r}
 
-hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
-    rbind(., get_historical_total_fishing_hours(2016)) %>%
-    rbind(., get_historical_total_fishing_hours(2017)) %>%
-    mutate(log_total_fishing_hours = log1p(total_fishing_hours)) %>%
-    filter(total_fishing_hours > 0) %>%
+# hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
+#     rbind(., get_historical_total_fishing_hours(2016)) %>%
+#     rbind(., get_historical_total_fishing_hours(2017)) %>%
+#     mutate(log_total_fishing_hours = log1p(total_fishing_hours)) %>%
+#     filter(total_fishing_hours > 0) %>%
+#   mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name"))
+
+  hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
+    ## remove artisanal
+    filter(sector == "I") %>%
+    group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
+    summarize(
+      total_fishing_hours = sum(nom_active_hours, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    dplyr::select(flag_fin, year, gear, length_category, total_fishing_hours) %>%
+        filter(total_fishing_hours > 0) %>%
   mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name"))
+
   
 flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 147 of them
 
@@ -180,6 +199,9 @@ After the models are fit, we make predictions on ALL DATA. So stage 1 is in samp
 
 ```{r}
 
+access_data <- qs::qread(here("data/int/prediction_historical_data/fishing_access.qs"))
+# access_data <- qs::qread(here("data/int/prediction_historical_data/catch_fishing_access.qs"))
+
 ## out of sample predictions for CHN 
 env_grid <- env_data %>% 
   dplyr::select(lon, lat) %>% distinct()
@@ -206,27 +228,36 @@ model_flags <- intersect(stage_1_flags, stage_2_flags)
 # 
 # model_flags <- setdiff(model_flags, preds_done_flags)
 
+years <- c(1950:2017)
+
 for(flag in model_flags){
+  for(yr in years){
 
 # flag = "AGO"
+#     yr = 2002
   
 model_data_flag <- model_data %>%
   dplyr::select(lon, lat, flag_fin, gear, length_category, year, prop_fishing_hours_cell) %>%
   filter(flag_fin == flag)
   
 distinct_cats <- model_data_flag %>%
-    distinct(year, flag_fin, gear, length_category)
+    distinct(flag_fin, gear, length_category)
   
-full_grid <- tidyr::crossing(env_grid, distinct_cats)
+full_grid <- tidyr::crossing(env_grid, distinct_cats) %>%
+  crossing(., year = yr)
   
 full_data <- full_grid %>%
   left_join(env_data, by = c("lon", "lat", "year")) %>%
-  left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
+  # left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
   dplyr::select(-pixel_id) %>%
   left_join(hist_fish_data) %>%
-  mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
-         log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours))
+  mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours))%>%
+  filter(total_fishing_hours > 0)
 
+if(nrow(full_data) == 0){
+    cat("skipping", flag, yr, "check to make sure this is right")
+  next()
+}
 
 # stage2_model <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/stage_2_models/pruning/stage_2_rf_train_CHN_19.qs")
 
@@ -251,7 +282,7 @@ oos_preds <- full_data %>%
 # rast_test <- oos_preds %>%
 #   filter(gear == "Trawl_Midwater_or_Unsp",
 #          length_category == "Over 50m",
-#          year == 2015) %>%
+#          year == 1950) %>%
 #   dplyr::select(lon, lat, pred_prop)  %>%
 #   rast(., type = "xyz")
 # 
@@ -280,37 +311,70 @@ if (length(matching_files) > 0) {
 stage1_preds <- full_data %>%
     mutate(pred_presence = predict(stage1_model, newdata = ., type="prob")[, "1"])
 
+# varImpPlot(stage1_model)
+# 
+# stage1_2015 <- stage1_preds %>% 
+#   filter(year == 2015)
+# plot(stage1_2015$distance_from_port_m, stage1_2015$pred_presence)
+# 
+# imp <- importance(stage1_model)
+# impvar <- rownames(imp)[order(imp[, 1], decreasing=TRUE)]
+# 
+# pdpdata <- partialPlot(stage1_model, model.frame(full_data %>% na.omit()), "distance_from_shore_m", xlab = "distance_from_shore_m", main = "Partial Dependence on distance from shore", which.class = 1)
+# 
+# pdpdata$y <- exp(pdpdata$y) / (1 + exp(pdpdata$y))  # Convert log-odds to probability
+# plot(pdpdata$x, pdpdata$y, type = "l")
+
+
 stage_1_preds_rescale <- stage1_preds %>%
-  mutate(pred_presence = ifelse(pred_presence  == 0, 0, 1))
+  group_by(flag_fin, gear, length_category) %>%
+  mutate(max_pred = max(pred_presence, na.rm = TRUE)) %>%
+  ungroup() %>%
+  left_join(eez_lookup) %>%
+  mutate(pred_presence = case_when( # adding this so that we will have predictions even if the maximum prob is < 0.5, but only assigning 1 in these cases when the flag country is fishing in their EEZ
+    max_pred < 0.5 & pred_presence > 0 & flag_fin == eez_sovereign ~ 1,
+    max_pred >= 0.5 & pred_presence >= 0.5 ~ 1,
+    TRUE ~ 0
+  )) %>%
+  dplyr::select(-max_pred)
+     #mutate(pred_presence = ifelse(pred_presence  < 0.5, 0, 1))
+   #  mutate(pred_presence = ifelse(pred_presence  == 0, 0, 1)) 
 
 
 # rast_test <- stage_1_preds_rescale %>%
 #   filter(gear == "Trawl_Midwater_or_Unsp",
 #          length_category == "Over 50m",
-#          year == 2015) %>%
+#          year == 1950) %>%
 #   dplyr::select(lon, lat, pred_presence)  %>%
 #   rast(., type = "xyz")
 # 
-# plot(rast_test) 
+# plot(rast_test)
 
 
 ## join stage 1 and 2 preds together and multiply 
 all_preds <- oos_preds %>%
   #dplyr::select(lat, lon, gear, length_category, year, flag_fin, pred_prop) %>% # probably select lat, lon, gear, length, year, flag here? 
   left_join(., stage_1_preds_rescale) %>%
-  mutate(pred_prop_final = pred_prop*pred_presence) %>%
+  left_join(access_data %>% dplyr::select(-eez_sovereign)) %>%
+  mutate(access = ifelse(is.na(access), 0, access)) %>%
+  mutate(pred_prop_final = pred_prop*pred_presence*access) %>%
   filter(pred_prop_final > 0) %>%
   filter(!is.na(pred_prop_final)) %>%
- group_by(year, flag_fin, flag_country_name, gear, length_category) %>%
+ group_by(year, flag_fin, gear, length_category) %>%
   mutate(prop_fishing_hours_cell_predict_rescaled = pred_prop_final / sum(pred_prop_final, na.rm = TRUE)) %>%
  ungroup() %>% # need to rescale the predictions to be between 0 and 1 here
   mutate(nom_active_fishing_hours = prop_fishing_hours_cell_predict_rescaled*total_fishing_hours) %>%
   left_join(global_grid) %>%
   left_join(fao_lookup) %>%
   left_join(eez_lookup) %>%
-    dplyr::select(pixel_id, lon, lat, year, flag_fin, flag_country_name, gear, length_category, pixel_area_m2, eez_sovereign, eez_country_name, fao_id, fao_major_fishing_area,  total_fishing_hours, prop_fishing_hours_cell_raw = prop_fishing_hours_cell, prop_fishing_hours_cell_predict_rescaled, nom_active_fishing_hours) %>%
+    dplyr::select(pixel_id, lon, lat, year, flag_fin, gear, length_category, pixel_area_m2, eez_sovereign, fao_id, fao_major_fishing_area,  total_fishing_hours, prop_fishing_hours_cell_predict_rescaled, nom_active_fishing_hours) %>%
   filter(nom_active_fishing_hours > 0) %>%
   mutate(sector = "Industrial")
+
+if(nrow(all_preds) == 0){
+    cat("skipping", flag, yr, "no predictions made...")
+  next()
+}
 
 ## some checking
 # test <- all_preds %>%
@@ -344,19 +408,22 @@ all_preds <- oos_preds %>%
 # 
 # plot(test_preds) # ok looks a lot better when using flag specific models.
 # 
+# 
 # test_preds <- all_preds %>%
+#   #filter(eez_sovereign != "High seas") %>%
 #   dplyr::group_by(lon, lat) %>%
-#   summarise(eff_active_fishing_hours = sum(eff_active_fishing_hours, na.rm = TRUE)) %>%
+#   summarise(nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
 #   ungroup() %>%
 #   rast(., type = "xyz")
 # 
+# plot(test_preds)
 # plot(log(test_preds+1)) # Cool!
 
-qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/predictions/model_preds_{flag}.qs"))) # qs is smaller
-# write_parquet(all_preds, file.path(rdsi_dir, glue("prep/random_forest/predictions/model_preds_{flag}.parquet")))
+qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/predictions/yearly/model_preds_{flag}_{yr}.qs"))) # qs is smaller
+
+  }
+
 }
-
-
 
 ```
 

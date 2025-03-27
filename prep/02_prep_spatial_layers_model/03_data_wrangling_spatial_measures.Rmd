@@ -336,7 +336,7 @@ elnino <-  read.table(url("https://psl.noaa.gov/data/correlation/oni.data"),skip
            date = lubridate::ymd(glue::glue("{year}-{month}-1")),
            year = lubridate::year(date)) %>%
     dplyr::select(year,enso_index = value) %>%
-    filter(year >= 2015,
+    filter(year >= 1950,
            year <= 2021)%>%
     group_by(year) %>%
     summarize(across(everything(),list(mean = ~mean(.,na.rm=TRUE),
@@ -364,7 +364,7 @@ wrangle_pdo_data <-
            date = lubridate::ymd(glue::glue("{year}-{month}-1")),
            year = lubridate::year(date)) %>%
     dplyr::select(year,pdo_index = value) %>%
-    filter(year >= 2015,
+    filter(year >= 1950,
            year <= 2021)%>%
     mutate(pdo_index = ifelse(pdo_index == -9.9,NA_real_,pdo_index))%>%
     group_by(year) %>%

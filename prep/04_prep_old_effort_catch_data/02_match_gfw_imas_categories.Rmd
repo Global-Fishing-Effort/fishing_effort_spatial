@@ -1,0 +1,29 @@
+---
+title: "Prep Rousseau et al. effort data to use in the shiny app"
+output: html_document
+date: "2024-07-02"
+---
+
+# Setup
+
+Load packages and directories
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(gfwr)
+library(terra)
+library(tidyverse)
+library(here)
+library(glue)
+library(data.table)
+library(janitor)
+library(sf)
+library(countrycode)
+library(raster)
+
+source(here("R/dir.R"))
+
+
+```
+

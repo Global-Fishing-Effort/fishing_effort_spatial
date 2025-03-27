@@ -177,11 +177,12 @@ temporally_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180
                                          run_parallel = TRUE,
                                          years_per_chunk = 5)
 
-old_sst <- read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv"))
+old_sst <- read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv")) %>%
+  filter(year != "2015")
 
 test <- old_sst %>% filter(year == 2016) # ok cool
 
-new_sst <- read.csv("data/model_features/deg_1_x_1/ncdcOisst21Agg_LonPM180/errdap_2015_2015.csv")
+new_sst <- read.csv("data/model_features/deg_1_x_1/ncdcOisst21Agg_LonPM180/errdap_2014_2015.csv")
 
 rewrite_sst <- rbind(new_sst, old_sst)
 
@@ -191,19 +192,18 @@ write.csv(rewrite_sst, here("data/model_features/deg_1_x_1/errdap_sst.csv"), row
 # Spatially aggregate chl data for 2015
 spatially_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
                                         spatial_aggregation = data_grid,
-                                        years = 2015, # choose years you want to run
-                                        run_parallel = FALSE)
+                                        years = 2014, # choose years you want to run
+                                        run_parallel = TRUE)
 
 temporally_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
                                          temporal_aggregation = "year",
                                          run_parallel = TRUE,
                                          years_per_chunk = 5)
+ 
+old_chl <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv")) %>%
+  filter(year != 2015)
 
-old_chl <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv"))
-
-new_chl <- read.csv("data/model_features/deg_1_x_1/erdMH1chlamday/errdap_2015_2015.csv")
-
-test <- old_chl %>% filter(year == 2016) # ok cool
+new_chl <- read.csv("data/model_features/deg_1_x_1/erdMH1chlamday/errdap_2014_2015.csv")
 
 
 rewrite_chl <- rbind(new_chl, old_chl)
@@ -213,7 +213,7 @@ write.csv(rewrite_chl, here("data/model_features/deg_1_x_1/errdap_chl.csv"), row
 
 ```
 
-Prep 2015 Wind data and append to data in model features folder 
+Prep 2014-2015 Wind data and append to data in model features folder 
 
 ```{r}
 ## now do wind for 2015
@@ -227,7 +227,7 @@ tmp_data_directory <- glue::glue("{data_directory}/remss/clean/spatially_aggrega
  if(!dir.exists(tmp_data_directory)) dir.create(tmp_data_directory)
  if(run_parallel) plan(multisession) else plan(sequential)
 
-years = 2015
+years = 2014
 
  pattern <- paste(years, collapse = "|")
  
@@ -296,7 +296,7 @@ tmp_data_directory <- glue::glue("{data_directory}/remss/clean/spatially_aggrega
 if(run_parallel) plan(multisession) else plan(sequential)
 
 # Create sequence of start years for each 5-year chunk
-start_years <- seq(2015, 2015, by = 5)
+start_years <- seq(2014, 2014, by = 5)
 
 # Process each 5-year chunk
 for(start_year in start_years) {
@@ -352,11 +352,10 @@ chunk_data <- chunk_files %>%
 }
 
 
-old_wind <- read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv"))
+old_wind <- read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv")) %>%
+  filter(year != 2015)
 
-new_wind <- read.csv("data/model_features/deg_1_x_1/remss_wind/wind_2015_2019.csv") # this is actually only 2015
-
-test <- old_wind %>% filter(year == 2016) # ok cool
+new_wind <- read.csv("data/model_features/deg_1_x_1/remss_wind/wind_2014_2018.csv") # this is actually only 2015
 
 rewrite_wind <- rbind(new_wind, old_wind)
 
@@ -370,63 +369,6 @@ Need to prep 1 by 1 EEZ, FAO, and mesopelagic data
 # Determine EEZ of each cell 
 
 Use Marine Region's [Maritime Boundaries Geodatabase: Maritime Boundaries and Exclusive Economic Zones (200NM), version 12]
-
-```{r}
-# global_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv"))
-# eezs <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"), layer = 'eez_v12') %>%
-#   filter(POL_TYPE != "Overlapping claim",
-#          ISO_SOV1 != "ATA")  
-#   
-# world_shp <- sf::st_as_sf(maps::map("world", plot = FALSE, fill = TRUE))
-# 
-# grid <- data_grid %>%
-#   st_drop_geometry() %>%
-#   dplyr::select(lon, lat, pixel_id) %>% 
-#   rast(., type = "xyz") 
-# 
-# eez_rast <- rast(fasterize::fasterize(eezs, raster(grid), field = "MRGID_SOV1"))
-# eez_rast
-# 
-# eez_rast[is.na(eez_rast)] <- 99999 # save a value high seas, not if sure necessary
-# eez_rast <- mask(eez_rast, vect(world_shp), inverse = TRUE) # mask out any land 
-# eez_rast[is.na(eez_rast)] <- 999999 # save a value for land, not sure if necessary
-# 
-# 
-# 
-# 
-# writeRaster(eez_rast, here("data/model_features/deg_1_x_1/eez/eez_id_rast_1.tif"), overwrite = TRUE)
-# 
-# ## get x, y lookup table so we can join to the raw mmsi data when saving and have the EEZ id already saved in the csv 
-# 
-# 
-# eez_lookup <- eez_rast %>%
-#   as.data.frame(xy = TRUE)
-# 
-# eez_check <- eez_lookup %>%
-#   mutate(x_int = floor(x), y_int = floor(y)) %>%  # extract integer part of x and y
-#   group_by(x_int, y_int) %>%
-#   summarise(x_unique_decimals = n_distinct(x),
-#             y_unique_decimals = n_distinct(y)) %>%
-#   ungroup()
-# 
-# eez_lookup_fin <- eez_lookup %>%
-#   dplyr::select(lon = x, lat = y, eez_id = layer) %>%
-#   left_join(global_grid) %>% 
-#   dplyr::select(pixel_id, eez_id)
-#   
-# 
-# write.csv(eez_lookup_fin, here("data/model_features/deg_1_x_1/eez/eez.csv"), row.names = FALSE)
-# 
-# eez_lookup_ids <- eezs %>% 
-#   st_drop_geometry() %>%
-#   dplyr::distinct(ISO_SOV1, MRGID_SOV1) %>%
-#   add_row(ISO_SOV1 = "Land", MRGID_SOV1 = 999999) %>%
-#   add_row(ISO_SOV1 = "High seas", MRGID_SOV1 = 99999)
-# 
-# write.csv(eez_lookup_ids, here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"), row.names = FALSE)
-
-```
-
 
 ```{r}
 
@@ -806,3 +748,446 @@ write.csv(ocean_df_fin, here("data/model_features/deg_1_x_1/oceans_fixed.csv"), 
 ```
 
 
+Let's download historical climate data from ISIMIP for surface wind, chl, and sst. We will need to make sure the units are the same and calculate standard deviations as above. 
+
+Chlorophyll: https://data.isimip.org/datasets/49dc048b-29e5-4cde-a89a-2fe448d86476/
+
+SST: https://data.isimip.org/datasets/9e8a4b3f-5a56-4f4c-9677-1737a9f952d7/
+
+Surface wind: https://data.isimip.org/datasets/dbcf73ba-878d-41d4-be7d-e28ce13121bc/ 
+
+
+SST first: 
+
+ - Read in data
+ - Resample to match our grid 
+ - bias correct with mean for 2014 (matching year)
+ - calculate yearly average and save
+
+```{r}
+## lets prep SST data. They provide monthly at 60 arc mins (1 degree). We want yearly average and sd. Will need to reproject to our projection likely. 
+
+sst_hist_raw <- rast(file.path(rdsi_raw_dir, "ISIMIP/sst/gfdl-esm4_r1i1p1f1_historical_tos_60arcmin_global_monthly_1850_2014.nc"))
+# ok 2219 = 1850, 2383 = 2014. 
+
+
+## BIAS CORRECTION
+sst_obs_2014 <- read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv")) %>%
+  filter(year == 2014) %>%
+  left_join(data_grid %>% st_drop_geometry()) %>%
+  dplyr::select(lon, lat, sst_c_mean) %>%
+  rast(., type = "xyz")
+
+sst_hist_2014 <- sst_hist_raw[[1980-11:1980]] %>%
+  resample(., sst_obs_2014, method = "bilinear")
+
+mean_obs_sst <- mean(sst_obs_2014$sst_c_mean, na.rm = TRUE)
+mean_isimip_sst <- mean(sst_hist_2014, na.rm = TRUE)
+
+bias_correction <- mean_obs_sst - mean_isimip_sst
+
+sst_hist_resampled <- resample(sst_hist_raw, sst_obs_2014, method = "bilinear") # this will take awhile probably? I wonder if i should do the bias correction AFTER I calculate the average sst annually? The chl and wind datasets are a lot bigger... and wind is daily
+
+sst_hist_corrected <- sst_hist_resampled + bias_correction
+
+# writeCDF(sst_hist_corrected, file.path(rdsi_raw_dir, "ISIMIP/sst/corrected_monthly_1850_2014.nc"))
+
+# test <- rast(file.path(rdsi_raw_dir, "ISIMIP/sst/corrected_monthly_1850_2014.nc"))
+
+# plot(mean(sst_hist_corrected[[1980-11:1980]], na.rm = TRUE))
+# plot(sst_obs_2014) # PERFECT
+
+# Define time range
+start_year <- 1850
+end_year <- 2014
+desired_start <- 1950
+
+# Compute indices
+time_steps_per_year <- 12  # Monthly data
+start_index <- (desired_start - start_year) * time_steps_per_year + 1
+end_index <- (end_year - start_year + 1) * time_steps_per_year
+
+ 
+# Subset raster
+sst_1950_2014_rast <- sst_hist_corrected[[start_index:end_index]]
+
+sst_1950_2014_monthly <- sst_1950_2014_rast %>%
+  as.data.frame(., xy=TRUE) %>% 
+    pivot_longer(cols = starts_with("tos_"), names_to = "time_index", values_to = "sst") %>%
+    mutate(
+    time_index = as.numeric(gsub("tos_", "", time_index)),  # Convert layer number to numeric
+    year = 1850 + (time_index - 1) %/% 12,  # Compute year
+    month = (time_index - 1) %% 12 + 1  # Compute month
+  ) %>%
+  dplyr::select(lon = x, lat = y, year, month, sst)
+
+
+
+qs::qsave(sst_1950_2014_monthly, file.path(rdsi_raw_dir, "ISIMIP/sst/sst_corrected_1950_2014_monthly.qs"))
+
+## Now we need to calcualte the yearly mean and sd per pixel 
+sst_1950_2014_yearly <- sst_1950_2014_monthly %>%
+  left_join(data_grid %>% st_drop_geometry()) %>%
+  group_by(pixel_id, year) %>%
+  summarise(sst_c_mean = mean(sst, na.rm = TRUE),
+            sst_c_sd = sd(sst, na.rm = TRUE)) %>% 
+  ungroup()
+
+qs::qsave(sst_1950_2014_yearly, here("data/int/prediction_historical_data/isimip_sst/sst_yearly_1950_2014.qs")) # NICE! Only 32 MB
+
+
+```
+
+CHL now: 
+
+ - Read in data
+ - Resample to match our grid 
+ - bias correct with mean for 2014 (matching year)
+ - calculate yearly average and save
+ 
+ - ERRDAP data is surface chlorophyll-a (mg/m3). The ISIMIP data is chlorophyll-a
+
+```{r}
+## lets prep chl data. They provide monthly at 60 arc mins (1 degree). We want yearly average and sd. Will need to reproject to our projection likely. 
+
+## why is there so much more data than SST???? Should only be 1980 layers... Is this chlorophyll at different depths?
+
+chl_obs_2014 <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv")) %>%
+  filter(year == 2014) %>%
+  left_join(data_grid %>% st_drop_geometry()) %>%
+  dplyr::select(lon, lat, chl_mg_per_m3_mean) %>%
+  rast(., type = "xyz")
+
+chl_hist_raw <- rast(file.path(rdsi_raw_dir, "ISIMIP/chl/gfdl-esm4_r1i1p1f1_historical_chl_60arcmin_global_monthly_1850_2014.nc"))
+# ok 2219 = 1850, 2383 = 2014. 
+# what units? kg/m3. Converted to mg per m3 below
+## what is the surface level? Looks like there are different depth levels. I see 2.5, 10, 20, etc; 35 of them? These represent different depths. We want the top depth? 
+
+unique(names(chl_hist_raw))
+
+# test_depths <- grep("_2$", names(chl_hist_raw), value = TRUE)  #I think this is the highest depth (i.e., surface depth?); need to check against the observation data i used
+# 35*1980 # 35 depths x 1980 layers. What do the layers represent? Layers are each time step. 1 = 1850 jan, 2 = 1850 feb
+# 
+# test <- chl_hist_raw[[test_depths]]
+
+
+surface_chl <- grep("chl_lev=2.5", names(chl_hist_raw), value = TRUE)  #I think this is the highest depth (i.e., surface depth?); need to check against the observation data i used
+chl_hist_surface <- chl_hist_raw[[surface_chl]]*1000000
+ 
+chl_hist_surface_resample <- resample(chl_hist_surface, chl_obs_2014, method = "bilinear")
+
+test <- global(chl_hist_surface_resample, "max", na.rm = TRUE)
+test <- global(chl_hist_surface_resample, "mean", na.rm = TRUE) # ok, the differences don't look that crazy actually.
+mean(test$mean)
+global(chl_obs_2014, "mean", na.rm = TRUE)
+
+writeRaster(chl_hist_surface_resample, file.path(rdsi_raw_dir, "ISIMIP/chl/", "resample_surface_chl_1850_2014_mg_m3.tif"), overwrite=TRUE)
+
+## BIAS CORRECTION
+chl_hist_2014 <- chl_hist_surface_resample[[1969:1980]]  # grab only 2014 
+
+mean_obs_chl <- mean(chl_obs_2014, na.rm = TRUE)
+mean_isimip_chl <- mean(chl_hist_2014, na.rm = TRUE)
+
+bias_correction <- mean_obs_chl - mean_isimip_chl
+
+chl_hist_corrected <- chl_hist_surface_resample + bias_correction
+
+# writeCDF(chl_hist_corrected, file.path(rdsi_raw_dir, "ISIMIP/chl/chl_surface_corrected_monthly_1850_2014.nc"))
+
+# plot(mean(chl_hist_corrected[[1969:1980]], na.rm = TRUE))
+# plot(chl_obs_2014) # PERFECT
+
+# Define time range
+start_year <- 1850
+end_year <- 2014
+desired_start <- 1950
+
+# Compute indices
+time_steps_per_year <- 12  # Monthly data
+start_index <- (desired_start - start_year) * time_steps_per_year + 1
+end_index <- (end_year - start_year + 1) * time_steps_per_year
+
+ 
+# Subset raster
+chl_1950_2014_rast <- chl_hist_corrected[[start_index:end_index]]
+
+chl_1950_2014_monthly <- chl_1950_2014_rast %>%
+  as.data.frame(., xy=TRUE) %>% 
+    pivot_longer(cols = starts_with("chl_"), names_to = "time_index", values_to = "chl") %>%
+    mutate(
+    time_index = as.numeric(strex::str_after_last(time_index, "_")),  # Convert layer number to numeric
+    year = 1850 + (time_index - 1) %/% 12,  # Compute year
+    month = (time_index - 1) %% 12 + 1  # Compute month
+  ) %>%
+  left_join(data_grid %>% st_drop_geometry, by = c("x" = "lon", "y" = "lat")) %>%
+  dplyr::select(pixel_id, lon = x, lat = y, year, month, chl) 
+
+# test <- chl_1950_2014_monthly %>%
+#   dplyr::select(lon, lat, chl) %>%
+#   rast(., type = "xyz")
+# plot(test)
+
+
+qs::qsave(chl_1950_2014_monthly, file.path(rdsi_raw_dir, "ISIMIP/chl/chl_corrected_1950_2014_monthly.qs"))
+
+## Now we need to calcualte the yearly mean and sd per pixel 
+chl_1950_2014_yearly <- chl_1950_2014_monthly %>%
+  group_by(pixel_id, year) %>%
+  summarise(chl_mg_per_m3_mean = mean(chl, na.rm = TRUE),
+            chl_mg_per_m3_sd = sd(chl, na.rm = TRUE)) %>% 
+  ungroup()
+
+qs::qsave(chl_1950_2014_yearly, here("data/int/prediction_historical_data/chl_yearly_1950_2014.qs")) # NICE! Only 32 MB
+
+
+```
+
+Now prep wind data 
+
+```{r}
+## lets prep chl data. They provide monthly at 60 arc mins (1 degree). We want yearly average and sd. Will need to reproject to our projection likely. 
+
+## why is there so much more data than SST???? Should only be 1980 layers... Is this chlorophyll at different depths?
+
+wind_obs_2014 <- read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv")) %>%
+  filter(year == 2014) %>%
+  left_join(data_grid %>% st_drop_geometry()) %>%
+  dplyr::select(lon, lat, wind_speed_ms_mean) %>%
+  rast(., type = "xyz")
+
+##  get old 0.5 deg data 
+data_grid_0.5 <- read.csv(here("data/model_features/global_grid.csv"))
+wind_obs_2014_0.5 <- read.csv(here("data/model_features/remss_wind/wind_2013_2017.csv")) %>%
+  filter(year == 2014) %>%
+  left_join(data_grid_0.5 %>% st_drop_geometry()) %>%
+  dplyr::select(lon, lat, wind_speed_ms_mean) %>%
+  rast(., type = "xyz")
+
+
+wind_hist_raw <- rast(list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), full.names = TRUE)) # shit.. its 0.5 by 0.5 degree... need to aggregate to 1x1 
+## resample to 0.5 raster
+# wind_hist_resample <- resample(wind_hist_raw, wind_obs_2014_0.5, method = "bilinear")
+#   
+# ## mask out any non ocean cells 
+# wind_hist_ocean <- mask(wind_hist_resample, wind_obs_2014_0.5)
+# 
+# ## save 
+# writeRaster(wind_hist_ocean, file.path(rdsi_raw_dir, "ISIMIP/wind/sfc_wind_ocean_resample_0.5.tif"))
+
+## resample so rasters match
+wind_obs_resample <- resample(wind_obs_2014_0.5, wind_hist_raw, method = "bilinear")
+
+raw_files <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), full.names = TRUE)
+
+test <- rast("/home/ubuntu/data_storage/raw_data/ISIMIP/wind/gfdl-esm4_r1i1p1f1_w5e5_historical_sfcwind_global_daily_1941_1950.nc_ocean.tif")
+plot(test[[1]])
+
+for(file in raw_files[3:8]){
+
+#  file <- raw_files[[1]]
+  wind_hist_raw_i <- rast(file)
+  
+  file_name <- basename(file)
+  
+## mask out any non ocean cells
+wind_hist_ocean <- mask(wind_hist_raw_i, wind_obs_resample)
+
+## save
+writeRaster(wind_hist_ocean, glue(file.path(rdsi_raw_dir, "ISIMIP/wind/{file_name}_ocean.tif")))
+
+}
+
+## now we need to compare and bias adjust; we can do this bias adjustment with the 0.5 data since we have 0.5 data from 1993-2014 that matches. 
+ # read in 1993-2014 observational data; resample this to match model data; calculate annual means for 0.5 model data; 
+wind_obs_1993_2014 <- read.csv(here("data/model_features/remss_wind/wind_2013_2017.csv")) %>%
+  #filter(year < 2015) %>%
+  rbind(., read.csv(here("data/model_features/remss_wind/wind_2008_2012.csv"))) %>%
+    rbind(., read.csv(here("data/model_features/remss_wind/wind_2003_2007.csv"))) %>%
+    rbind(., read.csv(here("data/model_features/remss_wind/wind_1998_2002.csv"))) %>%
+      rbind(., read.csv(here("data/model_features/remss_wind/wind_1993_1997.csv"))) %>% 
+  left_join(data_grid_0.5 %>% st_drop_geometry())
+
+wind_obs_stack <- c()
+
+for(yr in c(1993:2014)){
+  
+  # yr = 1993
+  df_year <- wind_obs_1993_2014 %>%
+    filter(year == yr) %>%
+    dplyr::select(lon, lat, wind_speed_ms_mean) %>%
+    rast(., type = "xyz")
+  
+  df_year_resample <- resample(df_year, wind_hist_raw, method = "bilinear")
+  
+  names(df_year_resample) <- glue("{yr}")
+  
+  wind_obs_stack <- c(wind_obs_stack, df_year_resample)
+  
+}
+
+wind_obs_stack <- rast(wind_obs_stack)
+
+writeRaster(wind_obs_stack, file.path(rdsi_raw_dir, "ISIMIP/wind/obs_wind_stack_1993_2014.tif"))
+
+hist_files <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "_ocean", full.names = TRUE)[5:7]
+for(file in hist_files[1:2]){
+ # file <- hist_files[1]
+  ocean_hist_wind <- rast(file)
+ 
+# Use regular expression to extract the start and end years
+years <- sub(".*_([0-9]{4})_([0-9]{4}).*.tif", "\\1-\\2", file)
+
+# Split the years into individual components
+year_split <- as.integer(strsplit(years, "-")[[1]])
+
+# Extract min and max years
+min_year <- min(year_split)
+max_year <- max(year_split)  
+days_per_year <- 365
+  
+yearly_avg_rasters <- c()
+   
+  # Loop through each year and calculate the yearly average
+for (i in seq_along(min_year:max_year)) {
+  # i = 1
+  # Extract the layers corresponding to the current year
+  start_layer <- (i - 1) * days_per_year + 1
+  end_layer <- i * days_per_year
+  year_layers <- ocean_hist_wind[[start_layer:end_layer]]
+  
+  # Calculate the yearly average for that year
+  yearly_avg_rasters[[i]] <- mean(year_layers, na.rm = TRUE)
+}
+
+# Stack the yearly averages into a single raster
+yearly_avg_raster_stack <- rast(yearly_avg_rasters)
+
+# Name the layers of the stacked raster by the year
+names(yearly_avg_raster_stack) <- paste0(min_year:max_year)
+
+# Save the raster stack to a file (optional)
+writeRaster(yearly_avg_raster_stack, file.path(rdsi_raw_dir, glue("ISIMIP/wind/yearly_wind_averages_{min_year}_{max_year}_0.5.tif")), overwrite=TRUE)
+
+}
+
+## now we need to read these in as a stack, and subtract from the observational data, and take a mean of those rasters to get our bias adjustment
+
+wind_hist_stack_1993_2014 <- rast(list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), full.names = TRUE, pattern = "yearly_wind_averages"))
+
+bias_yearly <- wind_obs_stack - wind_hist_stack_1993_2014[[3:24]]
+
+bias_mean <- mean(bias_yearly, na.rm = TRUE)
+
+writeRaster(bias_mean, file.path(rdsi_raw_dir, "ISIMIP/wind/mean_bias_rast.tif"))
+
+# then bias adjust daily ocean 0.5 data, aggregate daily bias adjust to 1 degree; calculate yearly averages, resample yearly averages, and extract as data frames to save 
+
+hist_files <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "_ocean", full.names = TRUE)
+
+for(file in hist_files[2:7]){
+ #  file = hist_files[1]
+  hist_rast <- rast(file) + bias_mean
+  
+  ocean_hist_wind_bias_agg <- aggregate(hist_rast, fact = 2, fun = "mean")
+  
+  filename <- strex::str_before_last(basename(file), "\\.tif")
+
+  writeRaster(ocean_hist_wind_bias_agg, file.path(rdsi_raw_dir, glue("ISIMIP/wind/{filename}_bias_1.tif")))
+}
+
+
+## now calculate yearly averages and resample to our raster format save rasters for those years 
+
+hist_files <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "_ocean_bias_1", full.names = TRUE)
+for(file in hist_files[1:7]){
+ # file <- hist_files[1]
+  ocean_hist_wind <- rast(file)
+ 
+# Use regular expression to extract the start and end years
+years <- sub(".*_([0-9]{4})_([0-9]{4}).*.tif", "\\1-\\2", file)
+
+# Split the years into individual components
+year_split <- as.integer(strsplit(years, "-")[[1]])
+
+# Extract min and max years
+min_year <- min(year_split)
+max_year <- max(year_split)  
+days_per_year <- 365
+  
+yearly_avg_rasters <- c()
+yearly_sd_rasters <- c()
+   
+  # Loop through each year and calculate the yearly average
+for (i in seq_along(min_year:max_year)) {
+  # i = 1
+  # Extract the layers corresponding to the current year
+  start_layer <- (i - 1) * days_per_year + 1
+  end_layer <- i * days_per_year
+  year_layers <- ocean_hist_wind[[start_layer:end_layer]]
+  
+  # Calculate the yearly average for that year
+  yearly_avg_rasters[[i]] <- mean(year_layers, na.rm = TRUE)
+  yearly_sd_rasters[[i]] <- app(year_layers, fun = sd, na.rm = TRUE)
+}
+
+# Stack the yearly averages into a single raster
+yearly_avg_raster_stack <- rast(yearly_avg_rasters)
+yearly_sd_raster_stack <- rast(yearly_sd_rasters)
+
+# resample to match our raster
+yearly_avg_raster_stack_resamp <- resample(yearly_avg_raster_stack, wind_obs_2014, method = "bilinear")
+
+yearly_sd_raster_stack_resamp <- resample(yearly_sd_raster_stack, wind_obs_2014, method = "bilinear")
+
+# Name the layers of the stacked raster by the year
+names(yearly_avg_raster_stack) <- paste0(min_year:max_year)
+names(yearly_sd_raster_stack) <- paste0(min_year:max_year)
+
+# Save the raster stack to a file (optional)
+writeRaster(yearly_avg_raster_stack, file.path(rdsi_raw_dir, glue("ISIMIP/wind/yearly_wind_averages_{min_year}_{max_year}_bias_corrected_1.tif")), overwrite=TRUE)
+
+writeRaster(yearly_sd_raster_stack, file.path(rdsi_raw_dir, glue("ISIMIP/wind/yearly_wind_sd_{min_year}_{max_year}_bias_corrected_1.tif")), overwrite=TRUE)
+
+}
+  
+
+## now save as.data.frame() for each year
+
+old_wind <- read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv"))
+hist_files_mean <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "bias_corrected_1", full.names = TRUE)[1:7]
+hist_files_sd <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "bias_corrected_1", full.names = TRUE)[8:14]
+
+  
+  hist_rast_df_mean <- rast(hist_files_mean) %>%
+    resample(., wind_obs_2014, method = "bilinear") %>%
+    as.data.frame(., xy = TRUE) %>%
+    pivot_longer(cols = 3:66,
+                 names_to = c("year"),
+                 values_to = c("wind_speed_ms_mean")) %>%
+    filter(year >= 1950) %>%
+    left_join(data_grid %>% st_drop_geometry(), by = c("x" = "lon", "y" = "lat")) %>%
+        dplyr::select(pixel_id, year, wind_speed_ms_mean) %>%
+    filter(!is.na(pixel_id))
+
+  
+  
+  hist_rast_df_sd <- rast(hist_files_sd) %>%
+    resample(., wind_obs_2014, method = "bilinear") %>%
+    as.data.frame(., xy = TRUE) %>%
+    pivot_longer(cols = 3:66,
+                 names_to = c("year"),
+                 values_to = c("wind_speed_ms_sd")) %>%
+    filter(year >= 1950) %>%
+    left_join(data_grid %>% st_drop_geometry(), by = c("x" = "lon", "y" = "lat")) %>%
+    dplyr::select(pixel_id, year, wind_speed_ms_sd) %>%
+    filter(!is.na(pixel_id))
+
+
+  
+  hist_rast_all <- hist_rast_df_mean %>%
+    left_join(hist_rast_df_sd)
+  
+  qs::qsave(hist_rast_all, here("data/int/prediction_historical_data/wind_yearly_1950_2014.qs"))
+  
+```
