@@ -90,6 +90,29 @@ test <- effort_access_df %>%
 
 ```
 
+Create access mask for high seas areas and use FAO areas as access areas for those 
+
+```{r}
+effort_access_df_highseas <- effort_df %>%
+  filter(NomActive > 0, 
+        Year >= 1950,
+        Sector == "Industrial",
+        eez_country_name == "High Seas") %>%
+  distinct(year = Year,  flag_id = SAUP, Gear, eez_country_name, fao_area) %>% # maybe add gear here? Vessel length too? For as much detail as we can get? 
+  left_join(saup_codes, by = c("flag_id" = "SAUP")) %>%
+  dplyr::select(year, Gear, flag_fin = Country, eez_country_name, fao_area) %>%
+    mutate(eez_country_name = ifelse(eez_country_name == "High Seas", "High seas", eez_country_name))  %>%
+    mutate(access_fao = 1) %>%
+  distinct(year, flag_fin, gear = Gear, eez_sovereign = eez_country_name, fao_area, access_fao) %>%
+  left_join(eez_lookup) %>%
+   mutate(gear = ifelse(gear %in% c("Falling_Gear", "Lift_Nets", "Lines_Unspecified", "Others_Multiple_Gears", "Others_Others", "Others_Support", "Others_Unknown"), "Other", gear))
+
+qs::qsave(effort_access_df_highseas, here("data/int/prediction_historical_data/high_seas_fao_fishing_access.qs"))
+
+
+```
+
+
 Try with catch data instead? 
 
 ```{r}

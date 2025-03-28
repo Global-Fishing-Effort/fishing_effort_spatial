@@ -92,72 +92,15 @@ data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_
 
 ```{r}
 
-chl_df <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv"))
-unique(chl_df$year) # only have 2016-2021
-
-# test <- chl_df %>% filter(year == 2017) 
-# 
-# missing_pixels <- data_grid %>%
-#   st_drop_geometry() %>%
-#   filter(!(pixel_id %in% unique(test$pixel_id)))
-# 
-# ## look at iceland full_data file that we feed into the model
-# isl_full_data <- qs::qread(file.path(rdsi_dir, "prep/test_isl_full_data.qs")) %>%
-#   left_join(., data_grid)
-# 
-# test_isl <- isl_full_data %>%
-#   filter(pixel_id %in% unique(missing_pixels$pixel_id)) %>%
-#   filter(year == 2017) ## so i guess there are just cells that don't have chl data. We took the 2017 chl data straight from McDonald et al. 
-
-sst_df <- read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv"))
-unique(sst_df$year) # only have 2016-2021
-
-test <- sst_df %>% filter(year == 2017) %>%
-  filter(!is.na(sst_c_mean))
-
-wind_df <- read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv"))
-unique(wind_df$year) # only have 2016-2021
-
-test <- wind_df %>% filter(year == 2017) %>%
-  filter(!is.na(wind_speed_ms_mean)) # yep all missing some info
-
-rec_df <- read.csv(here("data/model_features/deg_1_x_1/gfw_reception_quality.csv")) # static layer
-
 spatial_df <- read.csv(here("data/model_features/deg_1_x_1/gfw_static_spatial_measures.csv")) # static layers depth, distance to shore, distance to port. 
 
 grid_df <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv")) # 1 by 1 grid
 
 oceans_df <- read.csv(here("data/model_features/deg_1_x_1/oceans.csv")) 
-unique(oceans_df$ocean) # i guess this is just what ocean it is? Is this the mesopelagic data? No 
-#  [1] "Southern Ocean"                           ""                                         "Arctic Ocean"                            
-#  [4] "South Pacific Ocean"                      "South Atlantic Ocean"                     "Indian Ocean"                            
-#  [7] "South China and Easter Archipelagic Seas" "North Atlantic Ocean"                     "North Pacific Ocean"                     
-# [10] "Mediterranean Region"                     "Baltic Sea"    
 
-## some pixels with ocean == " "; but no NAs. So that is good I guess. 
-
-# test <- isl_full_data %>% 
-#   filter(year == 2017,
-#          is.na(ocean)) # 0 good.
 
 ```
 
-
-Need to grab 2015 data for non-static data (sst, wind, chl). 
-
-```{r}
-test_sst <- read.csv(file.path(data_directory, "erddap/ncdcOisst21Agg_LonPM180/ncdcOisst21Agg_LonPM180_2023-12-31.csv")) %>%
-  dplyr::select(longitude, latitude, sst) %>%
-  rast(., type = "xyz") # ok we downloaded it in 0.25 by 0.25 degrees
-
-
-test_chl <- read.csv(file.path(data_directory, "erddap/erdMH1chlamday/erdMH1chlamday_2013-06-16.csv")) %>%
-  dplyr::select(longitude, latitude, chlorophyll) %>%
-  rast(., type = "xyz") # not sure of download resolution, but it is smaller than 1 by 1 
-
-test_wind <- rast(file.path(data_directory, "remss/wind-ccmp/wind_2024-08-31.nc")) # downloaded it in like ~0.25 degrees
-
-```
 
 Prep 2015 SST, CHL, data and append to data in model features folder 
 
@@ -965,7 +908,7 @@ wind_obs_2014_0.5 <- read.csv(here("data/model_features/remss_wind/wind_2013_201
   rast(., type = "xyz")
 
 
-wind_hist_raw <- rast(list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), full.names = TRUE)) # shit.. its 0.5 by 0.5 degree... need to aggregate to 1x1 
+wind_hist_raw <- rast(list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/raw"), full.names = TRUE)) # shit.. its 0.5 by 0.5 degree... need to aggregate to 1x1 
 ## resample to 0.5 raster
 # wind_hist_resample <- resample(wind_hist_raw, wind_obs_2014_0.5, method = "bilinear")
 #   
@@ -978,12 +921,12 @@ wind_hist_raw <- rast(list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), full.n
 ## resample so rasters match
 wind_obs_resample <- resample(wind_obs_2014_0.5, wind_hist_raw, method = "bilinear")
 
-raw_files <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), full.names = TRUE)
+raw_files <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/raw"), full.names = TRUE)
 
 test <- rast("/home/ubuntu/data_storage/raw_data/ISIMIP/wind/gfdl-esm4_r1i1p1f1_w5e5_historical_sfcwind_global_daily_1941_1950.nc_ocean.tif")
 plot(test[[1]])
 
-for(file in raw_files[3:8]){
+for(file in raw_files[3]){
 
 #  file <- raw_files[[1]]
   wind_hist_raw_i <- rast(file)
@@ -994,7 +937,7 @@ for(file in raw_files[3:8]){
 wind_hist_ocean <- mask(wind_hist_raw_i, wind_obs_resample)
 
 ## save
-writeRaster(wind_hist_ocean, glue(file.path(rdsi_raw_dir, "ISIMIP/wind/{file_name}_ocean.tif")))
+writeRaster(wind_hist_ocean, glue(file.path(rdsi_raw_dir, "ISIMIP/wind/ocean/{file_name}_ocean.tif")))
 
 }
 
@@ -1030,8 +973,8 @@ wind_obs_stack <- rast(wind_obs_stack)
 
 writeRaster(wind_obs_stack, file.path(rdsi_raw_dir, "ISIMIP/wind/obs_wind_stack_1993_2014.tif"))
 
-hist_files <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "_ocean", full.names = TRUE)[5:7]
-for(file in hist_files[1:2]){
+hist_files <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/ocean"), pattern = "_ocean", full.names = TRUE)
+for(file in hist_files){
  # file <- hist_files[1]
   ocean_hist_wind <- rast(file)
  
@@ -1081,11 +1024,13 @@ bias_mean <- mean(bias_yearly, na.rm = TRUE)
 
 writeRaster(bias_mean, file.path(rdsi_raw_dir, "ISIMIP/wind/mean_bias_rast.tif"))
 
+bias_mean <- rast(file.path(rdsi_raw_dir, "ISIMIP/wind/mean_bias_rast.tif"))
+
 # then bias adjust daily ocean 0.5 data, aggregate daily bias adjust to 1 degree; calculate yearly averages, resample yearly averages, and extract as data frames to save 
 
-hist_files <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "_ocean", full.names = TRUE)
+hist_files <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/ocean"), pattern = "_ocean", full.names = TRUE)
 
-for(file in hist_files[2:7]){
+for(file in hist_files){
  #  file = hist_files[1]
   hist_rast <- rast(file) + bias_mean
   
@@ -1093,14 +1038,14 @@ for(file in hist_files[2:7]){
   
   filename <- strex::str_before_last(basename(file), "\\.tif")
 
-  writeRaster(ocean_hist_wind_bias_agg, file.path(rdsi_raw_dir, glue("ISIMIP/wind/{filename}_bias_1.tif")))
+  writeRaster(ocean_hist_wind_bias_agg, file.path(rdsi_raw_dir, glue("ISIMIP/wind/bias_1/{filename}_bias_1.tif")))
 }
 
 
 ## now calculate yearly averages and resample to our raster format save rasters for those years 
 
-hist_files <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "_ocean_bias_1", full.names = TRUE)
-for(file in hist_files[1:7]){
+hist_files <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/bias_1"), pattern = "_ocean_bias_1", full.names = TRUE)
+for(file in hist_files){
  # file <- hist_files[1]
   ocean_hist_wind <- rast(file)
  
@@ -1152,17 +1097,19 @@ writeRaster(yearly_sd_raster_stack, file.path(rdsi_raw_dir, glue("ISIMIP/wind/ye
 }
   
 
+test <- rast(hist_files[7])
+
 ## now save as.data.frame() for each year
 
 old_wind <- read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv"))
-hist_files_mean <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "bias_corrected_1", full.names = TRUE)[1:7]
-hist_files_sd <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "bias_corrected_1", full.names = TRUE)[8:14]
+hist_files_mean <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "bias_corrected_1", full.names = TRUE)[1:8]
+hist_files_sd <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "bias_corrected_1", full.names = TRUE)[9:16]
 
   
   hist_rast_df_mean <- rast(hist_files_mean) %>%
     resample(., wind_obs_2014, method = "bilinear") %>%
     as.data.frame(., xy = TRUE) %>%
-    pivot_longer(cols = 3:66,
+    pivot_longer(cols = 3:76,
                  names_to = c("year"),
                  values_to = c("wind_speed_ms_mean")) %>%
     filter(year >= 1950) %>%
@@ -1175,7 +1122,7 @@ hist_files_sd <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "
   hist_rast_df_sd <- rast(hist_files_sd) %>%
     resample(., wind_obs_2014, method = "bilinear") %>%
     as.data.frame(., xy = TRUE) %>%
-    pivot_longer(cols = 3:66,
+    pivot_longer(cols = 3:76,
                  names_to = c("year"),
                  values_to = c("wind_speed_ms_sd")) %>%
     filter(year >= 1950) %>%
