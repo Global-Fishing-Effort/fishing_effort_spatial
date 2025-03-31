@@ -207,10 +207,10 @@ foreach(flag = model_flags, .packages = c("dplyr", "tidyverse", "randomForest", 
   # flag = "LTU"
   for(yr in years) {
     
-   if(file.exists(file.path(rdsi_dir, glue("prep/random_forest/predictions/yearly/model_preds_{flag}_{yr}.qs")))){
-     cat("skipping", "exists")
-     next()
-   }
+   # if(file.exists(file.path(rdsi_dir, glue("prep/random_forest/predictions/yearly/model_preds_{flag}_{yr}.qs")))){
+   #   cat("skipping", "exists")
+   #   next()
+   # }
 
 # flag = "BGR"
 # yr = 1990
