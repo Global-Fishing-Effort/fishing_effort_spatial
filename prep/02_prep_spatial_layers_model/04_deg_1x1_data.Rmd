@@ -1138,3 +1138,44 @@ hist_files_sd <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "
   qs::qsave(hist_rast_all, here("data/int/prediction_historical_data/wind_yearly_1950_2014.qs"))
   
 ```
+
+Aggregate days at sea to fishing hours conversion factors from Rousseau et al. to 1x1 degree: https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/ConversionFishingHours.csv
+
+```{r}
+
+conversion_0.5 <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/ConversionFishingHours.csv") %>%
+  clean_names() %>%
+    dplyr::select(lon, lat, mean, length_category)
+
+data_grid_rast <- data_grid %>%
+  st_drop_geometry() %>% 
+  dplyr::select(lon, lat) %>%
+  rast(., type = "xyz")
+  
+
+conversion_1_df <- data.frame(x = NA, y = NA, mean = NA, length_category = NA)
+
+for(l in unique(conversion_0.5$length_category)){
+  
+  # l = "Over 50m"
+  
+  conversion_l <- conversion_0.5 %>%
+    filter(length_category == l) %>%
+    dplyr::select(-length_category) %>%
+    rast(.) %>%
+    aggregate(., fact = 2, fun = "mean") %>%
+    resample(., data_grid_rast, method = "bilinear") %>%
+    as.data.frame(., xy = TRUE) %>%
+    mutate(length_category = l)
+  
+  conversion_1_df <- rbind(conversion_1_df, conversion_l)
+  
+}
+
+conversion_1_df <- conversion_1_df %>%
+  filter(!is.na(x))
+
+qs::qsave(conversion_1_df, here("data/int/hours_to_days_conversion.qs"))
+
+```
+

@@ -5,37 +5,17 @@ Repository for spatialising country-level fishing effort data from
 2024](https://metadata.imas.utas.edu.au/geonetwork/srv/eng/catalog.search#/metadata/1241a51d-c8c2-4432-aa68-3d2bae142794)
 to grid cells, based on [observed Global Fishing Watch
 data](https://globalfishingwatch.org/data-download/datasets/public-fishing-effort)
-(a top-down approach).
+(a top-down approach). We apply a similar methodology to that of [McDonald et al. 2024](https://www.pnas.org/doi/10.1073/pnas.2400592121)
 
 
 In this repository we spatialise country-level fishing effort data to
-grid cells, based on real data from Global Fishing Watch. To do this, we
-will explore two approaches, and **ultimately choose the methodology of
-approach 2**.
+grid cells, based on real data from Global Fishing Watch. 
 
 Please read this file before trying to reproduce the output from this research project. Below you will find information on the publication associated with this repository, contact information for the lead author, and a description of the repository structure with each section explained.
 
-## Approach one
+## Approach
 
-Allocate country-level fishing effort to cells based on proportion of
-fishing effort represented in each cell in global fishing watch data. -
-We have IMAS country data with effort for year (1950-2017), flag
-country, gear type, and vessel length -We have Global fishing watch
-spatialised effort for year (2012-2023), flag country, gear type, and
-vessel length - Group by year, flag country, gear type, and vessel
-length and calculate in each cell the proportion of that categories
-effort represented - Join the grouped global fishing watch data to the
-IMAS effort data - Multiply the total effort from IMAS by the
-proportions in each cell from GFW - This results in a dataframe that
-shows the effort from IMAS allocated to GFW cells, proportionally.
-
-However, this methodology does not comprehensively map the IMAS effort
-data. There are some country, gear, and vessel length categories that
-are represented in the IMAS data that are not in the GFW data, so these aren't 
-represented in this allocation. 
-
-## Approach two
-
+We use two-stage hurdle random forest models to predict fishing effort. The first stage predicts whether any fishing occurs in a pixel, and the second stage predicts the intensity of fishing if it occurred.
 This model predicts the spatial distribution of fishing effort globally,
 using environmental, spatial, and fleet-specific predictors to
 distribute country-level fishing effort data across a global grid, using
@@ -57,30 +37,33 @@ cell based on:
     2017](<https://www.sciencedirect.com/science/article/pii/S0967063717301437>))
 -   Exclusive Economic Zone (EEZ)
 -   FAO major fishing area
+- Ocean (e.g., Pacific, Atlantic, etc)
+- World Bank Development Indicators regions
 
 #### Continuous Predictors
 
--   Total fishing hours (log-transformed?) for each
-    flag/gear/sector/length combination
 -   Location (longitude, latitude)
 -   Distance measures:
     -   Distance from port (m)
     -   Distance from shore (m)
+    - Distance to nearest seamount (m)
 -   Environmental variables:
     -   Chlorophyll-A concentration (mean, sd) in mg/m³
     -   Sea surface temperature (mean, sd) in °C
     -   Wind speed (mean, sd) in m/s
+    - El Niño Souther Oscillation index (mean and sd)
+    - Pacific Decadal Oscillation Index
 -   Bathymetry (depth in m)
+- Global Fishing Index governance capacity
 -   Year (ideally 1950-2017, however GFW data is only reliable from
-    2015-2017, so we will train the model on that)
+    2015-2017, so we train the model on that)
 
 We estimate the amount of fishing effort in each cell by multplying the
-total amount (per flag, gear, sector, and vessel length) by the
+total known amount (per flag, gear, sector, and vessel length) (from Rousseau et al. 2019) by the
 proportion in each cell (per those same categories).
 
 ### **Historical Predictions**
 
-\
 The model can be used to predict historical fishing effort distributions
 under the following assumptions:
 
@@ -109,7 +92,7 @@ under the following assumptions:
     -   Maintains the learned relationships between predictors and
         effort distribution
 
--   The total amount of fishing effort in each flag country is allocated
+    -   The total amount of fishing effort in each flag country is allocated
     to the proportional contribution as modeled. I.e., we estimate the
     amount of fishing effort in each cell by multiplying the total
     amount by the proportion value in each cell.
@@ -136,8 +119,7 @@ generate the spatialised fishing effort data.
 
 All scripts are numbered by the order in which they should be run.
 Within the prep folder, there are multiple folders, which have their own
-descriptions. Note: you can skip `02_approach_1_proportions` if you
-don't want to run approach 1.
+descriptions.
 
 ### 'R' folder
 

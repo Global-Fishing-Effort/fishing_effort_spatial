@@ -359,6 +359,11 @@ stopCluster(cl)
 Combine all years for flag and save 
 
 ```{r}
+
+days_to_hours_conversion <- qs::qread(here("data/int/hours_to_days_conversion.qs")) %>%
+  rename(lon = x, lat = y) %>%
+  left_join(global_grid)
+
 cl <- makeCluster(20)  # could probably increase this? 
 registerDoParallel(cl)
 
@@ -375,7 +380,12 @@ foreach(flag = model_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "c
     bind_rows() %>%
     left_join(eez_lookup) %>%
     mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name")) %>%
-    dplyr::select(pixel_id, lon, lat, year, flag_fin, flag_country_name, gear, length_category, eez_sovereign, eez_country_name, fao_id, fao_major_fishing_area, nom_active_fishing_hours, eff_active_fishing_hours, sector)
+    dplyr::select(pixel_id, lon, lat, year, flag_fin, flag_country_name, gear, length_category, eez_sovereign, eez_country_name, fao_id, fao_major_fishing_area, nom_active_fishing_hours, eff_active_fishing_hours, sector) %>%
+    left_join(., days_to_hours_conversion) %>%
+    mutate(nom_active_fishing_days = nom_active_fishing_hours/mean,
+           eff_active_fishing_days = eff_active_fishing_hours/mean) %>%
+    dplyr::select(-mean) %>%
+        rename(flag_country_iso3c = flag_fin, eez_sovereign_iso3c = eez_sovereign, eez_sovereign_name = eez_country_name, fao_fishing_id = fao_id)
   
   
   qs::qsave(all_data_flag, file.path(rdsi_dir, glue("prep/random_forest/predictions/model_preds_1950_2017_{flag}.qs")))
@@ -385,12 +395,129 @@ stopCluster(cl)
 
 ```
 
+Save csv files to upload to Zenodo
+
+```{r}
+```{r}
+
+days_to_hours_conversion <- qs::qread(here("data/int/hours_to_days_conversion.qs")) %>%
+  rename(lon = x, lat = y) %>%
+  left_join(global_grid)
+
+cl <- makeCluster(20)  # could probably increase this? 
+registerDoParallel(cl)
+
+foreach(flag = model_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
+  # flag = "USA"
+  
+  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions/yearly/"), pattern = flag, full.names = TRUE)
+  
+    # Skip iteration if no files are found
+  if (length(all_files_flag) == 0) next
+  
+
+  all_data_flag <- lapply(all_files_flag, qread) %>%
+    bind_rows() %>%
+    left_join(eez_lookup) %>%
+    mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name")) %>%
+    dplyr::select(pixel_id, lon, lat, year, flag_fin, flag_country_name, gear, length_category, eez_sovereign, eez_country_name, fao_id, fao_major_fishing_area, nom_active_fishing_hours, eff_active_fishing_hours, sector) %>%
+    left_join(., days_to_hours_conversion) %>%
+    mutate(nom_active_fishing_days = nom_active_fishing_hours/mean,
+           eff_active_fishing_days = eff_active_fishing_hours/mean) %>%
+    dplyr::select(-mean, -pixel_id) %>%
+        rename(flag_country_iso3c = flag_fin, eez_sovereign_iso3c = eez_sovereign, eez_sovereign_name = eez_country_name, fao_fishing_id = fao_id)
+  
+  
+  write.csv(all_data_flag, file.path(rdsi_dir, glue("prep/random_forest/zenodo_data/by_flag_country/model_preds_1950_2017_{flag}.csv")), row.names = FALSE)
+}
+
+stopCluster(cl)
+
+## save as one large csv
+
+  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_by_flag_country/"), full.names = TRUE)
+
+    all_data <- lapply(all_files_flag, read.csv) %>%
+      bind_rows()
+    
+    
+write.csv(all_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_industrial_effort_predictions_1950_2017.csv"), row.names = FALSE)
+
+all_data_grouped <- all_data %>% 
+  group_by(year, flag_country_iso3c, flag_country_name, gear, length_category, eez_sovereign_iso3c, eez_sovereign_name, fao_fishing_id, fao_major_fishing_area, sector) %>%
+  summarise(eff_active_fishing_hours = sum(eff_active_fishing_hours, na.rm = TRUE), 
+            eff_active_fishing_days = sum(eff_active_fishing_days, na.rm = TRUE), 
+            nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE), 
+            nom_active_fishing_days = sum(nom_active_fishing_days, na.rm = TRUE)) %>%
+  ungroup()
+
+
+write.csv(all_data_grouped, file.path(rdsi_dir, "prep/random_forest/zenodo_data/industrial_effort_predictions_by_flag_eez_fao_gear_length_1950_2017.csv"), row.names = FALSE)
+
+all_data_grouped_2 <- all_data_grouped %>% 
+  group_by(year, flag_country_iso3c, flag_country_name, gear, length_category) %>%
+    summarise(modeled_eff_active_fishing_hours = sum(eff_active_fishing_hours, na.rm = TRUE), 
+            modeled_eff_active_fishing_days = sum(eff_active_fishing_days, na.rm = TRUE), 
+            modeled_nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE), 
+            modeled_nom_active_fishing_days = sum(nom_active_fishing_days, na.rm = TRUE)) %>%
+  ungroup()
+
+hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
+    ## remove artisanal
+    filter(sector == "I") %>%
+    group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
+    summarize(
+      total_nominal_fishing_hours = sum(nom_active_hours, na.rm = TRUE),
+      total_effective_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
+      total_nominal_fishing_days = sum(nom_active, na.rm = TRUE),
+      total_effective_fishing_days = sum(eff_active, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    dplyr::select(flag_country_iso3c = flag_fin, year, gear, length_category, total_nominal_fishing_hours, total_effective_fishing_hours, total_nominal_fishing_days, total_effective_fishing_days) %>%
+        filter(total_nominal_fishing_hours > 0) %>%
+  mutate(flag_country_name = countrycode(flag_country_iso3c, origin = "iso3c", destination = "country.name")) %>%
+  left_join(all_data_grouped_2) %>%
+  mutate(modeled_eff_active_fishing_hours = ifelse(is.na(modeled_eff_active_fishing_hours), 0, modeled_eff_active_fishing_hours),
+         modeled_eff_active_fishing_days = ifelse(is.na(modeled_eff_active_fishing_days), 0, modeled_eff_active_fishing_days), 
+         modeled_nom_active_fishing_hours = ifelse(is.na(modeled_nom_active_fishing_hours), 0, modeled_nom_active_fishing_hours),
+         modeled_nom_active_fishing_days = ifelse(is.na(modeled_nom_active_fishing_days), 0, modeled_nom_active_fishing_days)) 
+
+write.csv(hist_fish_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/known_industrial_effort_rousseau.csv"), row.names = FALSE)
+
+```
+```
+
 
 Actual CHN, trawlers, 12-24m, 2015 data
 
 ```{r}
 
+saup <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv") %>%
+  dplyr::select(-X)
+test <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FishingCountry_LengthBoat_Gear_Sector.csv") %>%
+  filter(Sector == "I", 
+         Gear == "Trawl_Midwater_or_Unsp") %>%
+  dplyr::select(-X) %>%
+  left_join(saup) %>%
+  filter(Country == "IRN", 
+         Year == 2017)
+ 
 
+
+test <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FishingCountry_LengthBoat_Gear_Sector.csv") %>%
+  filter(Sector == "I") %>%
+  dplyr::select(-X) %>%
+  group_by(Year) %>%
+  summarise(NomActive = sum(NomActive, na.rm = TRUE), 
+            EffActive = sum(EffActive, na.rm = TRUE)) %>%
+  ungroup()
+
+ggplot(test, aes(x = Year, y = NomActive)) + 
+        geom_line()
+
+ggplot(test, aes(x = Year, y = EffActive)) + 
+        geom_line()
+ 
 
     test_gfw_raw <- qs::qread(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v2_aggregated/all_effort_2015.qs")) %>%
       filter(flag_gfw == "CHN", 

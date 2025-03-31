@@ -1,0 +1,34 @@
+## Description of the data files
+
+`mapped_industrial_effort_predictions_1950_2017.csv`: Predicted industrial fishing effort from new spatial modelling method using AIS data.
+lat:			Latitude of the centre of 1 degree cell in which fishing takes place
+lon:			Longitudeof the centre of 1 degree cell in which fishing takes place
+year: 			The year of the fishing effort event
+flag_country_iso3c: Fishing Country Code (in ISO3C format)
+flag_country_name:		Fishing Country Name
+gear:			Gear used in fishing
+length_category:	Length of the fishing vessels (less than 6, 6-12m, 12-24m, 24-50m, over 50m)	
+sector:			Fishing Sector. We have only modelled industrial. 
+eff_active_fishing_hours/days: Modeled effective active fishing effort, in kW x hours at sea or kW x days at sea.
+nom_active_fishing_hours/days: Modeled nominal active fishing effort, in kW x hours at sea or kW x days at sea. 
+
+`known_industrial_effort_rousseau.csv`: Industrial fishing capacity and effort data from 1950-2017, by country containing the following elements:
+year: 			The year of the fishing effort event
+flag_country_iso3c:			Fishing Country Code (in ISO3C format).
+flag_country_name:		Fishing Country Name
+length_category:	Length of the fishing vessels (less than 6, 6-12m, 12-24m, 24-50m, over 50m)	
+gear:			Gear used in fishing
+total_effective_fishing_hours/days: Known effective fishing effort, in kW x hours at sea or kW x days at sea. Only active vessels considered.
+total_nominal_fishing_hours/days:	Known nominal fishing effort, in kW x hours at sea or kW x days at sea. Only active vessels considered.
+modeled_eff_active_fishing_hours/days: Modeled effective fishing effort, in kW x hours at sea or kW x days at sea. There are some cases in which we were unable to model fishing effort due to a lack of input data.
+modeled_nom_active_fishing_hours/days: Modeled nominal fishing effort, in kW x hours at sea or kW x days at sea. There are some cases in which we were unable to model fishing effort due to a lack of input data.
+
+
+`industrial_effort_predictions_by_flag_eez_fao_gear_length_1950_2017.csv`: This file contains the same information as `mapped_industrial_effort_predictions_1950_2017`, but it does not include latitude and longitude points.
+
+## Folder "mapped_by_flag_country"
+Contains country tables for the gridded (1 degree cell) effort. Years span 1950-2017, as appropriate.
+Filenames as follow: model_preds_1950_2017_{flag_country_iso3c}.csv
+flag_country_iso3c is the ISO3 Country Code. 
+Each row is one fishing effort event (effort by fishing country, vessel length category, gear type, year, and sector)
+The effort is in kW x days at sea and kW x hours at sea. 
