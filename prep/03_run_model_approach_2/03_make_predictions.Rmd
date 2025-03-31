@@ -198,31 +198,41 @@ diff_flags_2 <- setdiff(stage_2_flags, stage_1_flags)
 model_flags <- intersect(stage_1_flags, stage_2_flags)
 
 
-# there are some flags for which no predictions were made that should've been... check Honduras 2017; WLF, CIV, among others
-# check what is happening to taiwan? Should be much more dispersed than is
-
 years <- c(1950:2017)
 
-cl <- makeCluster(10)  # could probably increase this? 
+cl <- makeCluster(15)  # could probably increase this? It takes ~1 hour with 10 cores
 registerDoParallel(cl)
 
 foreach(flag = model_flags, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue")) %dopar% {
+  # flag = "LTU"
   for(yr in years) {
     
-   # if(file.exists(file.path(rdsi_dir, glue("prep/random_forest/predictions/yearly/model_preds_{flag}_{yr}.qs")))){
-   #   cat("skipping", "exists")
-   #   next()
-   # }
+   if(file.exists(file.path(rdsi_dir, glue("prep/random_forest/predictions/yearly/model_preds_{flag}_{yr}.qs")))){
+     cat("skipping", "exists")
+     next()
+   }
 
-# flag = "USA"
-# yr = 2017
+# flag = "BGR"
+# yr = 1990
+
+    ## test out AGO, 2017, Lines_Longlines, 12-24m; see if the prediction will work? 
   
-model_data_flag <- model_data %>%
-  dplyr::select(lon, lat, flag_fin, gear, length_category, year, prop_fishing_hours_cell) %>%
-  filter(flag_fin == flag)
+# model_data_flag <- model_data %>%
+#   dplyr::select(lon, lat, flag_fin, gear, length_category, year, prop_fishing_hours_cell) %>%
+#   filter(flag_fin == flag, year == yr)
+#   
+# distinct_cats <- model_data_flag %>%
+#     distinct(flag_fin, gear, length_category) 
+
+# get combination of categories we need to run through our models
+model_data_flag <- hist_fish_data %>%
+  dplyr::select(flag_fin, gear, length_category, year, total_nominal_fishing_hours ) %>%
+  filter(flag_fin == flag, year == yr)
   
 distinct_cats <- model_data_flag %>%
     distinct(flag_fin, gear, length_category) 
+
+# distinct_cats <- data.frame(flag_fin = "AGO", gear = "Lines_Longlines", length_category = "12-24m")
   
 full_grid <- tidyr::crossing(env_grid, distinct_cats) %>%
   crossing(., year = yr)
@@ -312,14 +322,15 @@ all_preds <- oos_preds %>%
   left_join(access_data %>% dplyr::select(-eez_sovereign)) %>%
   left_join(access_data_high_seas) %>%
   mutate(access = ifelse(is.na(access), 0, access),
-         access_fao = ifelse(is.na(access_fao), 0, access_fao)) %>%
-  mutate(access_fin = ifelse(eez_country_name == "High seas", access_fao, access)) %>%
+         access_fao = ifelse(is.na(access_fao), 0, access_fao)) %>% # only allow fishing where Rousseau says they can fish
+  mutate(access = ifelse(eez_sovereign == flag, 1, access)) %>% # always allow a country to fish in its own EEZ
+  mutate(access_fin = ifelse(eez_country_name == "High seas", access_fao, access)) %>% # only allow fishing in fao areas where Rousseau they can fish in the high seas
   mutate(pred_prop_final = pred_prop*pred_presence*access_fin) %>%
   filter(pred_prop_final > 0) %>%
   filter(!is.na(pred_prop_final)) %>%
  group_by(year, flag_fin, gear, length_category) %>%
   mutate(prop_fishing_hours_cell_predict_rescaled = pred_prop_final / sum(pred_prop_final, na.rm = TRUE)) %>%
- ungroup() %>% # need to rescale the predictions to be between 0 and 1 here
+ ungroup() %>% # need to rescale the predictions to be between 0 and 1 here so that we can allocate effort
   left_join(hist_fish_data) %>%
   mutate(nom_active_fishing_hours = prop_fishing_hours_cell_predict_rescaled*total_nominal_fishing_hours,
          eff_active_fishing_hours = prop_fishing_hours_cell_predict_rescaled*total_effective_fishing_hours) %>%
@@ -336,6 +347,7 @@ if(nrow(all_preds) == 0){
 }
 
 # test_preds <- all_preds %>%
+#   filter(gear == "Dredges") %>%
 #   #filter(eez_sovereign != "High seas") %>%
 #   dplyr::group_by(lon, lat) %>%
 #   summarise(nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
@@ -344,6 +356,12 @@ if(nrow(all_preds) == 0){
 # 
 # plot(test_preds)
 # plot(log(test_preds+1)) # Cool!
+
+# test <- all_preds %>% 
+#    group_by(year, flag_fin, gear, length_category) %>%
+#   mutate(total_nom =  sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
+#   ungroup() %>%
+#   right_join(hist_fish_data)
 
 qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/predictions/yearly/model_preds_{flag}_{yr}.qs"))) # qs is smaller
 
@@ -368,7 +386,7 @@ cl <- makeCluster(20)  # could probably increase this?
 registerDoParallel(cl)
 
 foreach(flag = model_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
-  # flag = "USA"
+  # flag = "ARG"
   
   all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions/yearly/"), pattern = flag, full.names = TRUE)
   
@@ -397,7 +415,6 @@ stopCluster(cl)
 
 Save csv files to upload to Zenodo
 
-```{r}
 ```{r}
 
 days_to_hours_conversion <- qs::qread(here("data/int/hours_to_days_conversion.qs")) %>%
@@ -428,7 +445,7 @@ foreach(flag = model_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "c
         rename(flag_country_iso3c = flag_fin, eez_sovereign_iso3c = eez_sovereign, eez_sovereign_name = eez_country_name, fao_fishing_id = fao_id)
   
   
-  write.csv(all_data_flag, file.path(rdsi_dir, glue("prep/random_forest/zenodo_data/by_flag_country/model_preds_1950_2017_{flag}.csv")), row.names = FALSE)
+  write.csv(all_data_flag, file.path(rdsi_dir, glue("prep/random_forest/zenodo_data/mapped_by_flag_country/model_preds_1950_2017_{flag}.csv")), row.names = FALSE)
 }
 
 stopCluster(cl)
@@ -442,6 +459,9 @@ stopCluster(cl)
     
     
 write.csv(all_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_industrial_effort_predictions_1950_2017.csv"), row.names = FALSE)
+
+test <- all_data %>% 
+  filter(flag_country_iso3c == "BGR", year == 1990)
 
 all_data_grouped <- all_data %>% 
   group_by(year, flag_country_iso3c, flag_country_name, gear, length_category, eez_sovereign_iso3c, eez_sovereign_name, fao_fishing_id, fao_major_fishing_area, sector) %>%
@@ -470,9 +490,9 @@ hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
       total_nominal_fishing_hours = sum(nom_active_hours, na.rm = TRUE),
       total_effective_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
       total_nominal_fishing_days = sum(nom_active, na.rm = TRUE),
-      total_effective_fishing_days = sum(eff_active, na.rm = TRUE),
-      .groups = 'drop'
+      total_effective_fishing_days = sum(eff_active, na.rm = TRUE)
     ) %>%
+  ungroup() %>%
     dplyr::select(flag_country_iso3c = flag_fin, year, gear, length_category, total_nominal_fishing_hours, total_effective_fishing_hours, total_nominal_fishing_days, total_effective_fishing_days) %>%
         filter(total_nominal_fishing_hours > 0) %>%
   mutate(flag_country_name = countrycode(flag_country_iso3c, origin = "iso3c", destination = "country.name")) %>%
@@ -480,12 +500,20 @@ hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
   mutate(modeled_eff_active_fishing_hours = ifelse(is.na(modeled_eff_active_fishing_hours), 0, modeled_eff_active_fishing_hours),
          modeled_eff_active_fishing_days = ifelse(is.na(modeled_eff_active_fishing_days), 0, modeled_eff_active_fishing_days), 
          modeled_nom_active_fishing_hours = ifelse(is.na(modeled_nom_active_fishing_hours), 0, modeled_nom_active_fishing_hours),
-         modeled_nom_active_fishing_days = ifelse(is.na(modeled_nom_active_fishing_days), 0, modeled_nom_active_fishing_days)) 
+         modeled_nom_active_fishing_days = ifelse(is.na(modeled_nom_active_fishing_days), 0, modeled_nom_active_fishing_days)) %>%
+  mutate(proportion_hours_modeled = modeled_nom_active_fishing_hours/total_nominal_fishing_hours)
+
+
+missing_data <- hist_fish_data %>%
+  filter(proportion_hours_modeled == 0)
 
 write.csv(hist_fish_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/known_industrial_effort_rousseau.csv"), row.names = FALSE)
 
+
+write.csv(missing_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/effort_not_modelled.csv"), row.names = FALSE)
+
 ```
-```
+
 
 
 Actual CHN, trawlers, 12-24m, 2015 data
