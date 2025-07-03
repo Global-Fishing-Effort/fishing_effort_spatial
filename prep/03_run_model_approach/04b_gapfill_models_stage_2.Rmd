@@ -1,0 +1,469 @@
+---
+title: "Regional models for gapfilling"
+output: html_document
+date: "2024-12-11"
+---
+
+# Summary
+
+Here we fit stage 1 larger regional models which will be used for gapfilling missing flag countries in the GFW data. We fit regional models for these 12 regions: 
+
+ - sub continental reported in Rousseau data (SAUPtoCountry.csv)? E.g., [1] "SubAfrica"      "Europe"         "LatinAmerica"   "AustraliaNZ"    "IndianP"        "Caribbean"      "SouthEastAsia" 
+ [8] "NorthAmerica"   "NorthEastAsia"  "IslandsNations" "NWAfrica"       "MidEast"     
+ 
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list = ls())
+
+library(tidyverse)
+library("qs")
+library(foreach)
+library(doParallel)
+library(here)
+library(mgcv)
+library(tictoc)
+library(progress)
+library(terra)
+library(glue)
+library(arrow)
+library(strex)
+library(broom)
+library(randomForest)
+library(PRROC)
+library(janitor)
+
+source(here("R/dir.R"))
+
+```
+ 
+## Functions to prepare enviro and effort data  
+```{r}
+
+elnino <- read.csv(here("data/model_features/enso_index.csv"))
+
+pdo <- read.csv(here("data/model_features/pdo_index.csv"))
+
+world_bank <- read.csv(here("data/model_features/world_bank_regions.csv")) %>%
+  filter(ISO_SOV1 != "GIB") # filter out gibralter bc it is duplicating the UK for some reason
+
+gfi_df <- read.csv(here("data/model_features/global_fishing_index_governance.csv"))
+
+  
+# Load prepared data
+model_data <- readRDS(here("data/model_features/prepared_regional_data_1deg.rds")) %>%
+  mutate(year = as.numeric(year))
+
+
+## read in environmental variables
+
+  global_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv"))
+  
+  ocean_data <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv")) %>%
+  left_join(read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv")), by = c("pixel_id", "year")) %>% 
+  left_join(read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv")), by = c("pixel_id", "year")) %>%
+  filter(year %in% c(2015:2017)) 
+
+
+  spatial_data <- global_grid %>%
+    left_join(read.csv(here("data/model_features/deg_1_x_1/gfw_static_spatial_measures.csv")) %>% dplyr::select(-lat, -lon), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/deg_1_x_1/mesopelagiczones/mesopelagiczones_fixed.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/deg_1_x_1/eez/eez.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/deg_1_x_1/fao/fao_fixed.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/deg_1_x_1/oceans_fixed.csv")), by = "pixel_id") %>%
+    left_join(read.csv(here("data/model_features/deg_1_x_1/seamounts.csv")), by = "pixel_id") %>% 
+   crossing(., year = c(2015:2017)) 
+  
+  
+  env_data <- spatial_data %>%
+    left_join(ocean_data) %>% # cool.
+    dplyr::select(-geometry_wkt) %>%
+    left_join(elnino) %>%
+    left_join(pdo) %>%
+    left_join(world_bank, by = c("eez_id" = "MRGID_SOV1")) %>%
+    mutate(eez_region_world_bank_7 = ifelse(ISO_SOV1 %in% c("High seas", "Land"), "High seas", eez_region_world_bank_7)) %>% 
+    left_join(gfi_df, by = c("ISO_SOV1" = "flag_fin")) %>% # add in global fishing index data here
+    mutate(gov_score = ifelse(eez_id >= 99999 & is.na(gov_score), "high_seas", gov_score)) %>%
+        mutate(gov_score = ifelse(eez_id < 99999 & is.na(gov_score), "no_data", gov_score)) %>%
+    dplyr::select(-ISO_SOV1, -nearest_seamount_id) %>% 
+    distinct() 
+
+
+# Get total fishing hours for a specific year from IMAS data
+get_historical_total_fishing_hours <- function(yr) {
+  # This function would load and process the IMAS data for the given year
+  # Note: Implement based on your IMAS data structure
+  imas_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
+    
+    ## remove artisanal
+    filter(sector == "I") %>%
+    
+    group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
+    summarize(
+      total_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    filter(year == yr) %>%
+    dplyr::select(flag_fin, year, gear, length_category, total_fishing_hours)
+  
+  
+  return(imas_data)
+}
+
+
+``` 
+ 
+## Specify model formula and regions to run 
+
+```{r}
+
+# Prepare model formula
+# apply model on train 
+model_formula_rf <- formula(
+  prop_fishing_hours_cell ~ 
+    # Categorical/factor predictors
+    gear  + 
+    length_category +
+    meso_id +
+    eez_id +
+    fao_id +
+    ocean +  # Spatial categorical variables
+   # eez_region_world_bank_7 + # world bank regions; exclude for regional models because these are what we split the data by here, instead of flag country. 
+    gov_score + # global fishing index; make sure this is categorical and not a numeric variable
+    # Continuous predictors
+    lon + lat + 
+    elevation_m + # depth
+    distance_from_port_m + 
+    distance_from_shore_m +
+    chl_mg_per_m3_mean + 
+    chl_mg_per_m3_sd +
+    sst_c_mean + 
+    sst_c_sd +
+    wind_speed_ms_mean + 
+    wind_speed_ms_sd +
+    enso_index_mean + # el nino data 
+    enso_index_sd + # pacific decadal oscillation
+    pdo_index_mean +  
+    pdo_index_sd + 
+    nearest_seamount_distance_m + 
+    year
+)
+  
+env_grid <- env_data %>% 
+  dplyr::select(lon, lat) %>% distinct()
+
+## Use the regions as described in Rousseau et al, and assigning any landlocked countries to their continent:
+
+rousseau_regions <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv") %>%
+  dplyr::select(-X) %>%
+  rename(region = Region) 
+
+fix_landlocked <- rousseau_regions %>%
+  filter(region == "Landlocked") %>%
+  mutate(region = case_when(
+    Country == "AFG" ~ "MidEast",
+    Country == "AND" ~ "Europe",
+    Country == "AZE" ~ "MidEast",
+    Country == "AUT" ~ "Europe",
+    Country == "ARM" ~ "MidEast",
+    Country == "BTN" ~ "SouthEastAsia",
+    Country == "BOL" ~ "LatinAmerica",
+    Country == "BWA" ~ "SubAfrica",
+    Country == "BDI" ~ "SubAfrica",
+    Country == "BLR" ~ "Europe",
+    Country == "CAF" ~ "SubAfrica",
+    Country == "TCD" ~ "NWAfrica",
+    Country == "CSK" ~ "Europe",   # Historical, treat as Europe if included
+    Country == "CZE" ~ "Europe",
+    Country == "ETH" ~ "SubAfrica",
+    Country == "HUN" ~ "Europe",
+    Country == "KAZ" ~ "MidEast",
+    Country == "KGZ" ~ "MidEast",
+    Country == "LAO" ~ "SouthEastAsia",
+    Country == "LSO" ~ "SubAfrica",
+    Country == "LIE" ~ "Europe",
+    Country == "LUX" ~ "Europe",
+    Country == "MWI" ~ "SubAfrica",
+    Country == "MLI" ~ "NWAfrica",
+    Country == "MNG" ~ "NorthEastAsia",
+    Country == "MDA" ~ "Europe",
+    Country == "NPL" ~ "SouthEastAsia",
+    Country == "NER" ~ "NWAfrica",
+    Country == "PRY" ~ "LatinAmerica",
+    Country == "RWA" ~ "SubAfrica",
+    Country == "SMR" ~ "Europe",
+    Country == "SVK" ~ "Europe",
+    Country == "SWZ" ~ "SubAfrica",
+    Country == "CHE" ~ "Europe",
+    Country == "TJK" ~ "MidEast",
+    Country == "TKM" ~ "MidEast",
+    Country == "UGA" ~ "SubAfrica",
+    Country == "MKD" ~ "Europe",
+    Country == "BFA" ~ "NWAfrica",
+    Country == "UZB" ~ "MidEast",
+    Country == "SRB" ~ "Europe",
+    Country == "ZMB" ~ "SubAfrica",
+    TRUE ~ region
+  ))
+
+rousseau_fix <- rousseau_regions %>%
+  filter(region != "Landlocked") %>%
+  rbind(fix_landlocked) %>%
+  dplyr::select(-SAUP) %>%
+  filter(region  != "Unknown")
+
+## ok we could use the world bank regions
+hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
+    rbind(., get_historical_total_fishing_hours(2016)) %>%
+    rbind(., get_historical_total_fishing_hours(2017)) %>%
+    mutate(log_total_fishing_hours = log1p(total_fishing_hours)) %>%
+    filter(total_fishing_hours > 0) %>%
+  left_join(rousseau_fix, by = c("flag_fin" = "Country"))
+
+missing <- hist_fish_data %>%
+  filter(is.na(region)) %>%
+  distinct(flag_fin, region) # 0 good
+
+
+regions_to_run <- unique(hist_fish_data$region) # get the regions we want to run
+
+unique_combinations <- hist_fish_data %>%
+  distinct(year, region, gear, length_category) %>% # we only want to make models for these combinations since these are what is in the IMAS/FAO data 
+  mutate(row_n = row_number())
+
+```
+
+## Run models and variable selection for every region
+
+ - calculate the "full" model using all variables available per region (24 variables)
+ - calculate variable importance metrics and root mean squared error (RMSE)
+ - Set a threshold of the 10th quantile of the variable importance (RMSE for regression) and remove any variables with variable importance less than that
+ - Rerun model with new variables and calculate model importance metrics and RMSE again
+ - If the RMSE doesn't DECREASE at all, we stop the model pruning, if it does, we continue, hoping that the RMSE will improve even more in the next iteration. 
+ - If the threshold doesn't remove any variables, we increase the threshold by 1% until a variable is removed, and rerun the process
+ - We loop through this until the RMSE does not improve at all (improvement being a decrease in RMSE)
+ 
+ NOTE: Lower RMSE is better
+
+Save full models first 
+
+
+```{r}
+regions_to_run <- unique(hist_fish_data$region) # get the regions we want to run
+
+model_data_loop <- model_data %>% 
+  filter(!is.na(region)) # filter out the unknown flags 
+
+# Set up parallel backend
+num_cores <- 3 # Use one less than the total available cores
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+# Run the loop in parallel
+foreach(region_loop = regions_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc")) %dopar% {
+ 
+  # region_loop = "NorthEastAsia"
+  
+  model_data_region <- model_data_loop %>%
+  dplyr::select(lon, lat, region, gear, length_category, year, prop_fishing_hours_cell) %>%
+  filter(region == region_loop) %>% # only 2419 rows for new zealand - could be problematic! 
+  left_join(env_data) %>%
+  na.omit() # this removes the categories which are not in the Rousseau data.
+
+if(nrow(model_data_region) == 1){
+  next()
+}
+  
+  
+  
+set.seed(123)
+samp <- sample(nrow(model_data_region), 0.6 * nrow(model_data_region))  # do 60/40 split since this data is mostly small
+
+train <- model_data_region[samp, ]
+
+test <- model_data_region[-samp, ]
+
+tic()
+model <- randomForest(model_formula_rf, data = train, type = "regression", proximity = FALSE, ntree = 100, importance = TRUE) 
+toc() 
+
+# Initialize tracking
+var_imp_i <- importance(model)
+n_vars <- nrow(var_imp_i)
+
+  qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models_regional/pruning/stage_2_rf_train_{region_loop}_{n_vars}.qs")))
+   
+}
+stopCluster(cl)
+
+```
+
+Now apply variable selection methods 
+
+
+```{r}
+
+for(region_loop in regions_to_run){
+rmse_values <- c()
+
+  # region_loop = "IndianP"
+  model_data_region <- model_data_loop %>%
+    dplyr::select(lon, lat, region, gear, length_category, year, prop_fishing_hours_cell) %>%
+    filter(region == region_loop) %>%
+      left_join(env_data) %>%
+    na.omit()
+
+if(nrow(model_data_region) == 1){
+  next()
+}
+  
+  
+set.seed(123)
+samp <- sample(nrow(model_data_region), 0.6 * nrow(model_data_region))  # do 60/40 split since this data is mostly small
+
+train <- model_data_region[samp, ]
+
+test <- model_data_region[-samp, ]
+  
+if(!file.exists(glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models_regional/pruning/stage_2_rf_train_{region_loop}_24.qs")))){
+tic()
+model <- randomForest(full_model_formula, data = train, type = "regression", proximity = FALSE, ntree = 100, importance = TRUE) 
+toc() 
+}else{
+  
+  model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models_regional/pruning/stage_2_rf_train_{region_loop}_24.qs")))
+  
+}
+
+# Initialize tracking
+var_imp_i <- importance(model)
+num_vars <- c(nrow(var_imp_i))
+threshold_i <- quantile(var_imp_i[, 2], 0.10)  # Use the 10th percentile instead of a fixed multiplier
+n_vars <- nrow(var_imp_i)
+
+  if (threshold_i == 0) {
+    threshold_i <- 0.0000001
+  }
+
+pred_props <- predict(model, newdata = test, type = "response")  # Probability of class 1
+rmse <- sqrt(mean((test$prop_fishing_hours_cell - pred_props)^2)) # use RMSE for probabilities instead?
+
+rmse_values <- c(rmse_values, rmse)
+
+
+# Iteratively remove low-importance variables
+iteration <- 1
+  max_iterations <- 50  # Safety cap to prevent infinite loops
+while (TRUE) {
+  
+  # Select variables above threshold
+  selected_vars <- names(var_imp_i[, 2][var_imp_i[, 2] > threshold_i])
+  
+  # Stop if too few variables remain
+  if (length(selected_vars) < 6) break  # Avoid over-pruning. We can change this to any number of variables. Maybe 10 would be better computationally? 
+  
+          # Increase the threshold iteratively until at least one variable is removed
+    while (length(selected_vars) == num_vars[length(num_vars)]) {
+        threshold_i <- threshold_i * 1.01  # Increase threshold by 1%
+        selected_vars <- names(var_imp_i[, 2][var_imp_i[, 2] > threshold_i])
+    }
+
+  # Refit model with selected variables
+  model_i <- randomForest(prop_fishing_hours_cell ~ ., data = train[, c("prop_fishing_hours_cell", selected_vars)], 
+                        type = "regression", proximity = FALSE, 
+                        ntree = 100, importance = TRUE)
+
+  
+  # Get new variable importance
+  var_imp_i <- importance(model_i)
+
+  threshold_i <- quantile(var_imp_i[, 2], 0.1) # calculate new threshold since variable importance metric will change
+  
+  # Compute new RMSE
+  pred_props_i <- predict(model_i, newdata = test, type = "response") 
+  rmse_i <- sqrt(mean(test$prop_fishing_hours_cell - pred_props_i)^2)
+  
+  # Store metrics
+  rmse_values <- c(rmse_values, rmse_i)
+  num_vars <- c(num_vars, length(selected_vars))
+  
+  n_vars <- length(selected_vars)
+  file_path <-   glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models_regional/pruning/stage_2_rf_train_{region_loop}_{n_vars}.qs"))
+  
+  if(!file.exists(file_path)){
+    # save model here? Put number of variables (length(selected_vars)) in model save name so we know which one to pick for best predictions? 
+  qs::qsave(model_i, file_path)
+  }
+
+  # Check RMSE stability: Stop if no improvement
+  if (length(rmse_values) > 1) {
+    
+    rmse_improvement <- (rmse_values[length(rmse_values) - 1] - rmse_values[length(rmse_values)]) / rmse_values[length(rmse_values) - 1]
+    
+    if (rmse_improvement <= 0) break  # Stop if RMSE stabilizes
+    
+  }
+
+
+  iteration <- iteration + 1
+  
+      if (iteration > max_iterations) {
+      cat(region_loop, " - Reached max iterations. Stopping.\n")
+      break
+      }
+}
+
+}
+
+
+
+```
+
+Now write code to select the "best" model per the variable selection from above. We will rerun the model with just those variables on the FULL dataset to leverage all of the data from GFW and save
+
+```{r}
+# grab the flags that were run in the folder
+stage_2_path <- file.path(rdsi_dir, "prep/random_forest/stage_2_models_regional/pruning")
+stage_2_files <- list.files(stage_2_path, full.names = TRUE)
+stage_2_regions <- unique(sub(".*stage_2_rf_train_([^_]+).*", "\\1", stage_2_files))
+
+
+for(region_loop in stage_2_regions) {
+
+#  region_loop = "IndianP"
+  region_files <- list.files(stage_2_path, pattern = glue("_{region_loop}_"))
+  # select the model with the next to lowest number of variables. E.g., if the final model run for ZAF is 17, then we want to grab the model with the next to lowest number of variables, which is 19. 
+  n_variables <- as.numeric(str_before_first(str_after_last(region_files, "_"), "\\."))
+  
+  if(length(n_variables) > 1){
+  best_model_n <- as.character(sort(n_variables[2]))
+  }else{
+    best_model_n <- as.character(n_variables[1])
+  }
+  
+  best_train_model <- qs::qread(file.path(stage_2_path, glue("stage_2_rf_train_{region_loop}_{best_model_n}.qs")))
+  
+  rf_formula <- as.formula(deparse(formula(best_train_model)) |> paste(collapse = " "))
+  
+model_data_flag <- model_data %>%
+  dplyr::select(lon, lat, region, gear, length_category, year, prop_fishing_hours_cell) %>%
+  filter(region == region_loop) %>% 
+  left_join(env_data) %>%
+  na.omit() # this removes the categories which are not in the Rousseau data. For example, Rousseau does not have data for NZL, Lines_Longlines, 24-50m, 2015, but GFW does. 
+
+if(nrow(model_data_flag) == 1){
+  next()
+} # skip if not enough data, I don't think this is a worry here but just in case.
+
+
+tic()
+model <- randomForest(rf_formula, data = model_data_flag, type = "regression", proximity = FALSE, ntree = 100, importance = TRUE) 
+toc() 
+
+
+qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models_regional/stage_2_rf_model_full_data_{region_loop}_{best_model_n}.qs")))
+}
+
+
+```
+
