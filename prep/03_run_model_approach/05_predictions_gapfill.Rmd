@@ -239,13 +239,12 @@ global_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv")) %
   dplyr::select(lon, lat, pixel_id)
 
 ```
-
-
-After the models are fit, we make predictions on ALL DATA. So stage 1 is in sample predictions (since we fit the stage one model on all data), and stage two will contain out of sample predictions (since we fit the model on only data with fishing effort in it!)
-
- - This gapfilling fills ~10% of global production 
+Load access data 
 
 ```{r}
+
+missing_data <- read.csv(file.path(rdsi_dir, "prep/random_forest/zenodo_data/effort_not_modelled.csv")) %>%
+  filter(flag_country_iso3c != "UKR")
 
 access_data_loop <- qs::qread(here("data/int/prediction_historical_data/catch_fishing_access.qs")) %>%
   rbind(data.frame(
@@ -261,9 +260,38 @@ access_data_loop <- qs::qread(here("data/int/prediction_historical_data/catch_fi
   eez_sovereign = "PRT",
   access = 1,
   eez_id = 2243
-))
+)) %>%
+    rbind(data.frame(
+  year = 1950:2017,
+  flag_fin = "UKR",
+  eez_sovereign = "UKR",
+  access = 1,
+  eez_id = 2196
+)) %>%
+  distinct()
 
 
+# fix faroe islands data 
+fro_access_1951 <- access_data_loop %>%
+  filter(flag_fin == "FRO", 
+         year == 1952) %>%
+  mutate(year = 1951)
+fro_access_1950 <- access_data_loop %>%
+  filter(flag_fin == "FRO", 
+         year == 1952) %>%
+  mutate(year = 1950)
+
+access_data_loop <- access_data_loop %>%
+  rbind(fro_access_1950, fro_access_1951)
+
+```
+
+
+After the models are fit, we make predictions on ALL DATA. So stage 1 is in sample predictions (since we fit the stage one model on all data), and stage two will contain out of sample predictions (since we fit the model on only data with fishing effort in it!)
+
+ - This gapfilling fills ~10% of global production 
+ 
+```{r}
 access_data_high_seas_loop <- qs::qread(here("data/int/prediction_historical_data/catch_fishing_access_high_seas.qs")) %>%
   rename(fao_id = fao_area) # Watson access data is missing RAA and RAM. Let's use the Rousseau data for those 2
  
@@ -272,19 +300,23 @@ env_grid <- env_data %>%
 
 years <- c(1950:2017)
 
+flags <- unique(missing_data$flag_country_iso3c)
+
 cl <- makeCluster(15)  # could probably increase this? It takes ~1 hour with 10 cores
 registerDoParallel(cl)
-
 foreach(flag = flags, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue")) %dopar% {
-  for(yr in years) {
+  
+# foreach(yr = years, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue")) %dopar% {
 
-# flag = "USA"
-# yr = 2017
+for(yr in years) {
+
+# flag = "RAA"
+# yr = 1950
     
-    if(file.exists(file.path(glue("/home/ubuntu/data_storage/prep/random_forest/predictions_regional/yearly/model_preds_{flag}_{yr}.qs")))){
-      cat("skipping... exists")
-      next()
-    }
+    # if(file.exists(file.path(glue("/home/ubuntu/data_storage/prep/random_forest/predictions_regional/yearly/model_preds_{flag}_{yr}.qs")))){
+    #   cat("skipping... exists")
+    #   next()
+    # }
     
 # get combination of categories we need to run through our models
 model_data_flag <- hist_fish_data %>%
@@ -305,7 +337,6 @@ if(nrow(full_data) == 0){
     cat("skipping", flag, yr, "check to make sure this is right")
   next()
 }
-
 
 region_loop <- model_data_flag %>%
   pull(region) %>%
@@ -351,7 +382,6 @@ stage1_preds <- full_data %>%
     mutate(pred_presence = predict(stage1_model, newdata = ., type="prob")[, "1"]) %>% 
   mutate(pred_presence = ifelse(is.na(pred_presence), 0, pred_presence)) %>%
   left_join(eez_lookup) %>%
-   # dplyr::select(lon, lat, flag_fin, gear, length_category, year, fao_id, eez_id, eez_sovereign, pred_presence) %>% 
   left_join(access_data_loop %>% dplyr::select(-eez_sovereign)) %>%
   left_join(access_data_high_seas_loop) %>%
   mutate(access = ifelse(is.na(access), 0, access),
@@ -366,13 +396,14 @@ stage1_preds <- full_data %>%
   mutate(max_pred = max(pred_presence_access, na.rm = TRUE)) %>%
   ungroup() %>%
   left_join(eez_lookup) %>%
-  mutate(pred_presence_rescale = case_when( # adding this so that we will have predictions even if the maximum prob is < 0.5, but only assigning 1 in these cases when the flag country is fishing in their EEZ
-    max_pred < 0.5 & pred_presence_access > 0 & flag_fin == eez_sovereign | max_pred < 0.5 & pred_presence_access > 0 & flag_fin == "TWN" & eez_sovereign == "CHN" ~ 1,
-    max_pred >= 0.5 & pred_presence_access >= 0.5 ~ 1,
-    TRUE ~ 0
-  )) %>%
+  # mutate(pred_presence_rescale = case_when( # adding this so that we will have predictions even if the maximum prob is < 0.5, but only assigning 1 in these cases when the flag country is fishing in their EEZ
+  #   max_pred < 0.5 & pred_presence_access > 0 & flag_fin == eez_sovereign | max_pred < 0.5 & pred_presence_access > 0 & flag_fin == "TWN" & eez_sovereign == "CHN" ~ 1,
+  #   max_pred >= 0.5 & pred_presence_access >= 0.5 ~ 1,
+  #   TRUE ~ 0
+  # )) %>% 
+    mutate(pred_presence_rescale = ifelse(pred_presence_access > 0, 1, 0)) %>%
   dplyr::select(-max_pred) %>%
-  mutate(pred_presence_rescale = ifelse(flag_fin == eez_sovereign & pred_presence_access > 0, 1, pred_presence_rescale)) # make any predictions > 0 when flag country and EEZ match to be presence = 1, even if less than 0.5. This works, but still doesn't cover all bases for CRI for example. Maybe for the combinations we are still missing, predict only by gear type and/or length category? So we would make the same predictions for midwater trawls >50m and 24-50m? 
+  mutate(pred_presence_rescale = ifelse(flag_fin == eez_sovereign & pred_presence_access > 0, 1, pred_presence_rescale)) # make any predictions > 0 to be presence = 1, even if less than 0.5. This should work in almost all cases, but if it doesn't, then we apply the below methods:
   
 #### Now fill any remaining gaps (should be very rare) by using the same predictions per gear or length category
 ## We predict fishing presence probabilities for each combination of flag state, gear type, and vessel length category using the stage-one model. Following this, we applied a rescaling step to convert predicted probabilities to binary presence–absence, incorporating additional assumptions to account for potential fishing within national EEZs, including cases where predicted probabilities were low but domestic fishing activity was expected. To account for potential underprediction of fishing presence in specific flag–gear–length category combinations where no presence was predicted, but there is effort reported, we applied a hierarchical gap-filling procedure based on broader gear-level patterns within the flag country's fishing fleet. In cases where all predicted presence values for a given flag–gear–length category combination were zero, but other length categories within the same flag–gear combination exhibited predicted presence, we reassigned the presence predictions from the flag-gear combination with the most predictions to the all-zero category. This approach assumes that when fishing is predicted for a given gear type and flag state, similar spatial patterns are likely for other vessel size classes using the same gear, even if direct predictions were absent. If there were still flag-gear-length combinations with no predicted presence, we appleid the same approach, but focusing on length categories, rather than gear. That is, we assume that when fishing is predicted for a given vessel length and flag state, similar spatial patters are liekly for other vessel sizes, regardless of gear type. 
@@ -487,7 +518,8 @@ if(nrow(all_preds) == 0){
 }
 
 # test_preds <- all_preds %>%
-#   filter(gear == "Trawl_Midwater_or_Unsp") %>%
+#    filter(gear == "Trawl_Midwater_or_Unsp") %>%
+#   # filter(eez_sovereign == "USA") %>%
 #   dplyr::group_by(lon, lat) %>%
 #   summarise(nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
 #   ungroup() %>%
@@ -495,6 +527,10 @@ if(nrow(all_preds) == 0){
 # 
 # plot(test_preds)
 # plot(log(test_preds+1)) # Cool!
+
+# test <- all_preds %>% 
+#   group_by(flag_fin, gear, length_category, year) %>%
+#   summarise(total_effort = sum(nom_active_fishing_hours, na.rm = TRUE))
 
 qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/predictions_regional/yearly/model_preds_{flag}_{yr}.qs"))) # qs is smaller
 
@@ -522,7 +558,7 @@ cl <- makeCluster(20)  # could probably increase this?
 registerDoParallel(cl)
 
 foreach(flag = flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
-  # flag = "WLF"
+  # flag = "UKR"
   
   all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_regional/yearly/"), pattern = flag, full.names = TRUE)
   

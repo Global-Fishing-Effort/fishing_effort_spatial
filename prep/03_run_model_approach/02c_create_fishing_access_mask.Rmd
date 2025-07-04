@@ -4,11 +4,11 @@ output: html_document
 date: "2024-12-11"
 ---
 
-# Summary 
+# Summary
 
-Here we create a dataset that described for each flag country, the EEZs they are able to fish in for each year. We derive this data from Rousseau et al, who derived it from Watson et al, who used fishing access rights datasets. 
+Here we create a dataset that described for each flag country, the EEZs they are able to fish in for each year. We derive this data from Rousseau et al, who derived it from Watson et al, who used fishing access rights datasets.
 
-The data will be formatted as year | flag country | eez (including high seas?) | fishing (1 or 0)
+The data will be formatted as year \| flag country \| eez (including high seas?) \| fishing (1 or 0)
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -17,6 +17,7 @@ library(tidyverse)
 library(here)
 library(countrycode)
 library(sf)
+library(qs)
 
 source(here("R/dir.R"))
 ```
@@ -44,6 +45,7 @@ eez_lookup <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"))
 
 ## need SAUP country codes they used
 saup_codes <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv")
+
 
 effort_access_df <- effort_df %>%
   filter(NomActive > 0, 
@@ -84,7 +86,7 @@ qs::qsave(effort_access_df, here("data/int/prediction_historical_data/fishing_ac
 
 ```
 
-Create access mask for high seas areas and use FAO areas as access areas for those 
+Create access mask for high seas areas and use FAO areas as access areas for those
 
 ```{r}
 effort_access_df_highseas <- effort_df %>%
@@ -111,8 +113,7 @@ antartica_access <- effort_access_df_highseas %>%
   filter(str_detect(name_en, "Antarctic"))
 ```
 
-
-Try with catch data instead? 
+Try with catch data instead?
 
 ```{r}
 catch_df <- read.csv("/home/ubuntu/gem/private/users/yannickr/catch_histsoc_1869_2017_EEZ_addFAO.csv") %>%
@@ -123,7 +124,7 @@ catch_access_df <- catch_df %>%
   filter(catch > 1, 
         Year >= 1950,
         SAUP != 999) %>%
-  distinct(year = Year, SAUP, FCountryName, eez_country_name) %>% # maybe add gear here? Vessel length too? For as much detail as we can get? 
+  distinct(year = Year, SAUP, FCountryName, eez_country_name) %>%
   left_join(saup_codes, by = c("SAUP")) %>%
   mutate(Country = ifelse(SAUP == 830, "GBR", Country)) %>%
   dplyr::select(year, flag_fin = Country, eez_country_name) %>%
@@ -156,7 +157,65 @@ catch_access_df <- catch_df %>%
   distinct(year, flag_fin, eez_sovereign, access) %>%
   left_join(eez_lookup)
 
-qs::qsave(catch_access_df, here("data/int/prediction_historical_data/catch_fishing_access.qs"))
+```
+
+Fix Ukraine access data: It is not in the Watson data before 1988, so we will use the Rousseau effort data for those years
+ - filter for hours of effort > 100 
+ - create a master list of countries where Ukraine fishes in from the Watson data from 1990-2000
+ - Only include countries in the rousseau data if they are in the watson data 
+
+```{r}
+
+ukraine_watson <- catch_access_df %>%
+  filter(year %in% c(1990:2000),
+         flag_fin == "UKR") %>%
+  distinct(flag_fin, eez_sovereign, access, eez_id)
+
+rousseau_access <- qread(here("data/int/prediction_historical_data/fishing_access.qs"))
+
+ukr_rousseau_access <- effort_df %>% 
+    mutate(iso_ter = countrycode(eez_country_name, origin = "country.name", destination = "iso3c")) %>%
+  mutate(iso_ter = ifelse(eez_country_name == "High Seas", "High seas", iso_ter)) %>%
+  left_join(eez_lookup_ids) %>%
+    mutate(eez_country_name = ifelse(eez_country_name == "High Seas", "High seas", eez_country_name))  %>%
+    mutate(eez_sovereign = case_when(
+    eez_country_name == "Dominican Rp" ~ "DOM",
+    eez_country_name == "NethAntilles" ~ "NLD",
+    eez_country_name %in% c("US Virgin Is", "Amer Samoa") ~ "USA",
+    eez_country_name %in% c("Fr Guiana", "Kerguelen Is", "Fr Polynesia") ~ "FRA", 
+    eez_country_name %in% c("Channel Is", "Br Virgin Is", "Br Ind Oc Tr") ~ "GBR", 
+    eez_country_name == "Serbia Montenegro" ~ "MNE", # choosing montenegro here as serbia is landlocked
+    eez_country_name == "West Sahara" ~ "MAR", # this is technically not right? I guess it depends on the year 
+    eez_country_name == "Untd Arab Em" ~ "ARE", 
+    eez_country_name == "Micronesia" ~ "FSM",
+    TRUE ~ eez_sovereign
+  ))  %>%
+  filter(NomActive > 0, 
+        Year >= 1950,
+        Sector == "Industrial") %>%
+  rename(year = Year,  flag_id = SAUP) %>% 
+  left_join(saup_codes, by = c("flag_id" = "SAUP")) %>%
+  group_by(year, Country, eez_sovereign) %>%
+  summarise(NomActive = sum(NomActive, na.rm = TRUE)) %>%
+  ungroup() %>%
+  dplyr::select(year, flag_fin = Country, eez_sovereign, NomActive) %>%
+  filter(flag_fin == "UKR",
+         NomActive > 100) %>% # maybe filter for >1000 hours when we have to use this? 
+  distinct(year, flag_fin, eez_sovereign) %>%
+  mutate(access = 1) %>%
+  filter(year < 1988) 
+
+
+ukr_access_1950_1987 <- ukr_rousseau_access %>%
+  filter(eez_sovereign %in% unique(ukraine_watson$eez_sovereign)) %>%
+  left_join(eez_lookup)
+
+
+catch_access_fin <- catch_access_df %>%
+  rbind(ukr_access_1950_1987)
+
+qs::qsave(catch_access_fin, here("data/int/prediction_historical_data/catch_fishing_access.qs"))
+
 ```
 
 ```{r}
@@ -172,10 +231,38 @@ catch_access_df_highseas <- catch_df %>%
   left_join(fao_lookup, by = c("fao_area" = "fao_id")) %>%
   distinct(year = Year, flag_fin = Country, fao_area, fao_area_name = name_en, eez_country_name, access_fao)
 
+ukraine_watson <- catch_access_df_highseas %>%
+  filter(year %in% c(1990:2000),
+         flag_fin == "UKR") %>%
+  distinct(flag_fin, eez_country_name, fao_area, fao_area_name, access_fao)
 
-qs::qsave(catch_access_df_highseas, here("data/int/prediction_historical_data/catch_fishing_access_high_seas.qs"))
+# fix ukraine 
+ukraine_effort_highseas <- effort_df %>%
+  filter(NomActive > 0, 
+        Year >= 1950,
+        Sector == "Industrial",
+        eez_country_name == "High Seas") %>%
+  rename(year = Year,  flag_id = SAUP) %>%
+  left_join(saup_codes, by = c("flag_id" = "SAUP")) %>%
+  dplyr::select(year, flag_fin = Country, eez_country_name, fao_area, NomActive) %>%
+    mutate(eez_country_name = ifelse(eez_country_name == "High Seas", "High seas", eez_country_name))  %>%
+  group_by(year, flag_fin, eez_country_name, fao_area) %>%
+  summarise(NomActive = sum(NomActive, na.rm = TRUE)) %>%
+  ungroup() %>%
+  dplyr::select(year, flag_fin, eez_country_name, fao_area, NomActive) %>%
+  filter(flag_fin == "UKR",
+         NomActive > 100) %>% # maybe filter for >1000 hours when we have to use this? 
+  distinct(year, flag_fin, eez_country_name, fao_area) %>%
+  mutate(access_fao = 1) %>%
+  filter(year < 1988) %>%
+  filter(fao_area %in% c(unique(ukraine_watson$fao_area))) %>%
+  left_join(fao_lookup, by = c("fao_area" = "fao_id")) %>%
+  rename(fao_area_name = name_en) %>%
+  dplyr::select(-ocean)
+  
+catch_access_df_highseas_fin <- catch_access_df_highseas %>%
+  rbind(ukraine_effort_highseas)
+
+qs::qsave(catch_access_df_highseas_fin, here("data/int/prediction_historical_data/catch_fishing_access_high_seas.qs"))
 
 ```
-
-
-

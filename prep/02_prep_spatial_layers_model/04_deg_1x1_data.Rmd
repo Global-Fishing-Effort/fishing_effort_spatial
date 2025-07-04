@@ -318,6 +318,9 @@ Use Marine Region's [Maritime Boundaries Geodatabase: Maritime Boundaries and Ex
 analysis_projection <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
 eez <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"), layer = 'eez_v12')
 
+# test <- eez %>% 
+#   st_drop_geometry()
+
 eez_lookup_ids <- eez %>% 
       filter(POL_TYPE !=  "Overlapping claim") %>% 
   st_drop_geometry() %>%
@@ -327,6 +330,7 @@ eez_lookup_ids <- eez %>%
 
 write.csv(eez_lookup_ids, here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"), row.names = FALSE)
 
+test <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"))
 
   eez <- eez %>%
     filter(POL_TYPE !=  "Overlapping claim") %>%
