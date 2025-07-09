@@ -21,10 +21,9 @@ library(janitor)
 library(sf)
 library(countrycode)
 library(raster)
+library(qs)
 
 source(here("R/dir.R"))
-
-
 ```
 
 # Summary
@@ -37,9 +36,12 @@ In this script we match gear types (aside from trawling gears, which we do in 03
 
 **Reference**: Global Datasets of AIS-based Fishing Effort and Vessel Presence. Version 3.0. 
 
-**Downloaded**: October 10, 2024
+**Downloaded**: July 8, 2025
 
-**Native resolution**: 0.01 and 0.1 degree 
+**Native resolution**: 0.1 degree 
+
+Global Fishing Watch. 2025. Global Apparent Fishing Effort Dataset, Version 3.0. doi:10.5281/zenodo.14982712
+
 
 ## IMAS effort data
 
@@ -62,8 +64,6 @@ rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c
   dplyr::select(-X) %>%
   clean_names()
 
-
-
 ```
 
 
@@ -77,9 +77,6 @@ Get country level trawling proportions from Rousseau et al. We want to know the 
 ```{r}
 
 ## filter rousseau data for trawlers 
-
-unique(rousseau_eff$gear)
-
 trawling_eff <- rousseau_eff %>% 
   filter(gear %in% c("Trawl_Bottom", "Trawl_Midwater_or_Unsp")) %>%
   pivot_wider(names_from = "gear", values_from = "nv") %>%
@@ -101,8 +98,7 @@ Group gfw data by cell, year, flag, gear (after resolving gear issues i.e., grou
 
 ```{r}
 
-
-vessel_info <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/fishing-vessels-v2.csv")) # unfortunately have to use v2 vessel info right now, as I can't find v3 on the API
+vessel_info <- qs::qread(here("data/raw/v3_gfw_mmsi_vessel_info.qs"))
 
 ## fix rousseau gear categories. Put ones that don't match into an "Other" category 
 ## "Falling_Gear", "Lift_Nets", "Lines_Unspecified", "Others_Multiple_Gears", "Others_Others", "Others_Support", "Others_Unknown" ~ "Other"
@@ -197,7 +193,8 @@ missing_lengths <- gfw_fix %>%
 
 gfw_fix_fin <- gfw_fix %>%
   filter(!is.na(length_category)) %>%
-  rbind(missing_lengths)
+  rbind(missing_lengths) %>%
+  distinct()
   
   
 qs::qsave(gfw_fix_fin, here("data/int/gfw_vessel_registry_fix.qs")) # now save this file so we can read back in later and join to gfw data

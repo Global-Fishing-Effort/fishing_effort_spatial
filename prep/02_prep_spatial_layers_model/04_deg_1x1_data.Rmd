@@ -109,7 +109,7 @@ Prep 2015 SST, CHL, data and append to data in model features folder
 # Spatially aggregate SST and SST anomaly data
 spatially_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
                                         spatial_aggregation = data_grid,
-                                        years = 2014, # choose years you want to run
+                                        years = 2016:2024, # choose years you want to run
                                         run_parallel = TRUE)
 
 

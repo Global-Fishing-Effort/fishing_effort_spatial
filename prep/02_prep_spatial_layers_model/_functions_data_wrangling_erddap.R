@@ -66,7 +66,7 @@ download_errdap_data <- function(dataset_name,
                                  missing_dates = NULL,
                                  run_parallel = TRUE){
   
-  # dataset_name = "erdMH1chlamday"
+  # dataset_name = "ncdcOisst21Agg_LonPM180"
   
   tmp_data_directory <- glue::glue("{data_directory}/erddap/{dataset_name}")
   
@@ -76,8 +76,8 @@ download_errdap_data <- function(dataset_name,
   # Get spatial boundary for pulling data, based on the max extent of the data and our data_grid
   dataset_spatial_range <- get_spatial_boundaries(dataset_name, data_grid)
   
-  # date_start = "2022-01-01"
-  # date_end = "2022-05-16"
+  # date_start = "2024-01-01"
+  # date_end = "2024-12-31"
   # temporal_resolution = "month"
   # missing_dates = missing_dates_2$date
 
@@ -177,9 +177,16 @@ spatially_aggregate_errdap_data_wrapper <- function(dataset_name,
   tmp_data_directory <- glue::glue("{tmp_data_base}/spatially_aggregated_{pixel_size}_degree")
   if(!dir.exists(tmp_data_directory)) dir.create(tmp_data_directory)
   
-  if(run_parallel) plan(multisession) else plan(sequential)
+  if (run_parallel & dataset_name == "erdMH1chlamday") {
+    plan(multisession, workers = 3) # can probably up this to like 10?
+  }else if (run_parallel & dataset_name == "ncdcOisst21Agg_LonPM180") {
+    plan(multisession)
+  } else {
+    plan(sequential)
+  }
+  
   # Create tibble of all files in raw directory
-  list.files(glue("{data_directory}/erddap/{dataset_name}"), pattern = pattern) %>%
+  setdiff(list.files(glue("{data_directory}/erddap/{dataset_name}"), pattern = pattern), list.files(glue("{tmp_data_directory}"), pattern = pattern)) %>% # only run files that we haven't already run
     future_map_dfr(function(file_temp){
       
       # file_temp <- "ncdcOisst21Agg_LonPM180_1984-05-27.csv"
@@ -230,8 +237,8 @@ temporally_aggregate_errdap_data_wrapper <- function(dataset_name,
                                                      run_parallel = TRUE,
                                                      years_per_chunk = 5){
   
-  # dataset_name = "ncdcOisst21Agg_LonPM180"
-  # years_per_chunk = 1 
+  # dataset_name = "erdMH1chlamday"
+  # years_per_chunk = 5
   
   # Read in spatially aggregated data
   tmp_data_directory <- glue::glue("{data_directory}/erddap/clean/{dataset_name}/spatially_aggregated_{pixel_size}_degree")
@@ -240,9 +247,11 @@ temporally_aggregate_errdap_data_wrapper <- function(dataset_name,
   # Extract years from file names
   years <- unique(lubridate::year(basename(files)))
   
+  # years <- c(2018:2024)
+  
   # Process data in 5-year chunks
   for (i in seq(min(years), max(years), by = years_per_chunk)) {
-    # i = 1981
+    # i = 2021
     chunk_start <- i
     chunk_end <- min(i + years_per_chunk - 1, max(years))
     message(glue::glue("Processing chunk: {chunk_start}-{chunk_end}"))
@@ -255,7 +264,7 @@ temporally_aggregate_errdap_data_wrapper <- function(dataset_name,
     
     result <- future_map_dfr(chunk_files, function(file_temp){
       data.table::fread(file_temp) %>%
-        collapse::ftransform(date = lubridate::floor_date(date, temporal_aggregation)) %>%
+        collapse::ftransform(date = lubridate::floor_date(date, "year")) %>%
         dplyr::rename_with(~ gsub('mean.', '', .x)) %>%
         dplyr::rename_with(~ gsub('sst', 'sst_c', .x)) %>%
         dplyr::rename_with(~ gsub('vgos', 'surface_current_v_m_s', .x)) %>%
@@ -266,14 +275,6 @@ temporally_aggregate_errdap_data_wrapper <- function(dataset_name,
         dplyr::rename_with(~ gsub('.ncdcOisst_c21Agg_LonPM180', '', .x)) %>%
         dplyr::select(-one_of("zlev"))
     }, .options = furrr_options(globals = c("data_directory", "dataset_name"), seed = 101), .progress = TRUE)
-    
-    # Aggregate temporally over the aggregated date
-    # result <- result %>%
-    #   collapse::fgroup_by(pixel_id, date) %>%
-    #   collapse::add_vars(
-    #     collapse::add_stub(collapse::fmean(., keep.group_vars = TRUE), "_mean", pre = FALSE, cols = -c(1, 2)),
-    #     collapse::add_stub(collapse::fsd(., keep.group_vars = FALSE), "_sd", pre = FALSE)
-    #   )
     
     # Aggregate the mean and standard deviation separately and then merge
     mean_result <- result %>%
@@ -294,6 +295,8 @@ temporally_aggregate_errdap_data_wrapper <- function(dataset_name,
       collapse::ftransform(year = lubridate::year(date)) %>%
       dplyr::select(-date)
     
+    dataset_type <- str_before_first(colnames(result)[[2]], "_")
+    
     if(pixel_size == 1){
       
       tmp_filepath <- here::here(glue::glue("data/model_features/deg_1_x_1/{dataset_name}/"))
@@ -311,14 +314,14 @@ temporally_aggregate_errdap_data_wrapper <- function(dataset_name,
     if(pixel_size == 1){
       
       # Write intermediate result to disk
-      data.table::fwrite(result, here::here(glue::glue("data/model_features/deg_1_x_1/{dataset_name}/errdap_{chunk_start}_{chunk_end}.csv")))   
+      data.table::fwrite(result, here::here(glue::glue("data/model_features/deg_1_x_1/{dataset_name}/errdap_{dataset_type}_{chunk_start}_{chunk_end}.csv")))   
       
     }else if(pixel_size == 0.5){
       
       
       
       # Write intermediate result to disk
-      data.table::fwrite(result, here::here(glue::glue("data/model_features/{dataset_name}/errdap_{chunk_start}_{chunk_end}.csv")))      
+      data.table::fwrite(result, here::here(glue::glue("data/model_features/{dataset_name}/errdap_{dataset_type}_{chunk_start}_{chunk_end}.csv")))      
     }
     
     

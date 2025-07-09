@@ -1,0 +1,257 @@
+---
+title: "Download global fishing watch fishing effort: MMSI"
+output: html_document
+date: "2024-05-14"
+---
+
+# Setup
+
+Load packages and directories
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# remotes::install_github("GlobalFishingWatch/gfwr") #install GFW api package
+
+library(gfwr)
+library(terra)
+library(tidyverse)
+library(here)
+library(glue)
+library(data.table)
+library(sf)
+library(fasterize)
+library(raster)
+library(qs)
+library(strex)
+
+source(here("R/dir.R"))
+
+
+# Save API token information to an object every time you need to extract the token and pass it to `gfwr` functions
+# The use of gfwr requires a GFW API token, which users can request from the GFW API Portal. Save this token to your .Renviron file (using usethis::edit_r_environ()) by adding a variable named GFW_TOKEN to the file (GFW_TOKEN = "PASTE_YOUR_TOKEN_HERE"). Save the .Renviron file and restart the R session to make the edit effective.
+gages_key <- gfw_api_key <- read.delim(file.path(rdsi_raw_dir, "global_fishing_watch/gfw_api_key.txt")) %>%
+  colnames() %>%
+  unique() # now add this to usethis::edit_r_environ() and restart R. Only need to do this once? 
+
+# gage's key is saved to gage's .Renviron file, which is read by this function
+key <- gfw_auth()
+
+```
+
+# Summary
+
+In this script we download spatialized apparent fishing effort from global fishing watch for all years (2012 - 2024), with vessel identifiers (MMSI) using their API: https://globalfishingwatch.org/data-download/datasets/public-fishing-effort
+
+
+# Data Sources 
+
+## Global Fishing Watch Apparent Fishing Effort per MMSI
+
+**Reference**:
+1. Global Fishing Watch. [2025]. www.globalfishingwatch.org\
+2. [`gfwr` API](https://github.com/GlobalFishingWatch/gfwr)
+
+**Downloaded**: July 8, 2025
+
+**Description**: API to extract apparent fishing effort per MMSI (vessel id)
+
+**Native data resolution**: 0.1 degree 
+
+**Time range**: 2012 - 2024
+
+**Format**: version 3
+
+Global Fishing Watch. 2025. Global Apparent Fishing Effort Dataset, Version 3.0. doi:10.5281/zenodo.14982712
+
+
+# Methods 
+
+Pull apparent fishing effort data for all EEZs for 2012-2023 from the GFW MMSI data and save.
+
+## Get list of regions to pull info for
+
+```{r}
+## read in fishing vessels info
+
+vessel_info <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/fishing-vessels-v3.csv")) %>%
+  dplyr::select(-active_hours) %>%
+    mutate(flag_gfw = ifelse(str_detect(flag_gfw, "UNKNOWN"), str_after_first(flag_gfw, "-"), flag_gfw)) %>%
+  distinct() %>%
+  dplyr::select(-flag_ais, -flag_registry, vessel_class_registry, -length_m_registry, -engine_power_kw_registry, -tonnage_gt_registry, -registries_listed)
+ 
+## some mmsis have multiple flags. We only want one flag per mmsi. We will pick the flag with the highest amount of fishing hours, unless that flag is NA. In those cases, we will assign the flag with the highest amount of fishing hours unless it is NA. 
+multiple_flags <- vessel_info %>%
+  group_by(mmsi) %>%
+  summarise(n_flags = n_distinct(flag_gfw)) %>%
+  ungroup() %>%
+  filter(n_flags > 1)
+
+test2 <- vessel_info %>%
+  filter(mmsi == 100902573)
+
+
+# Step 1: Calculate total fishing hours per mmsi and flag_gfw
+flag_priority <- vessel_info %>%
+  group_by(mmsi, flag_gfw) %>%
+  summarise(total_fishing_hours = sum(fishing_hours, na.rm = TRUE), .groups = "drop")
+
+# Step 2: Filter out NA flags temporarily to prioritize non-NA flags
+flag_priority_non_na <- flag_priority %>%
+  filter(!is.na(flag_gfw))
+
+# Step 3: Get top flag per mmsi from non-NA flags
+top_flag_non_na <- flag_priority_non_na %>%
+  group_by(mmsi) %>%
+  slice_max(order_by = total_fishing_hours, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# Step 4: Handle mmsi values that only had NA flags
+mmsi_all_na <- setdiff(flag_priority$mmsi, top_flag_non_na$mmsi)
+
+top_flag_na_only <- flag_priority %>%
+  filter(mmsi %in% mmsi_all_na) %>%
+  group_by(mmsi) %>%
+  slice_max(order_by = total_fishing_hours, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# Step 5: Combine both
+top_flag_by_mmsi <- bind_rows(top_flag_non_na, top_flag_na_only)
+
+# Step 6: Join back to the original data
+vessel_info_clean <- vessel_info %>%
+  dplyr::select(-flag_gfw) %>%
+  left_join(top_flag_by_mmsi %>% dplyr::select(mmsi, flag_gfw), by = "mmsi") 
+#%>%
+ # distinct(mmsi, flag_gfw, vessel_class_gfw, length_m_gfw, engine_power_kw_gfw, tonnage_gt_gfw)
+
+## ok now there are also some with multiple gears. They are almost all "drifting_longlines" and "set_longlines", which will both be classified as "Lines_Longlines" in our data anyways. But we will fix it the same way. 
+# Step 1: Calculate total fishing hours per mmsi and flag_gfw
+gear_priority <- vessel_info_clean %>%
+  group_by(mmsi, vessel_class_gfw) %>%
+  summarise(total_fishing_hours = sum(fishing_hours, na.rm = TRUE), .groups = "drop")
+
+# Step 2: Filter out NA flags temporarily to prioritize non-NA flags
+gear_priority_non_fishing <- gear_priority %>%
+  filter(vessel_class_gfw != "fishing")
+
+# Step 3: Get top flag per mmsi from non-NA flags
+top_gear_non_na <- gear_priority_non_fishing %>%
+  group_by(mmsi) %>%
+  slice_max(order_by = total_fishing_hours, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# Step 4: Handle mmsi values that only had NA flags
+mmsi_all_na <- setdiff(gear_priority$mmsi, top_gear_non_na$mmsi)
+
+top_gear_fishing_only <- gear_priority %>%
+  filter(mmsi %in% mmsi_all_na) %>%
+  group_by(mmsi) %>%
+  slice_max(order_by = total_fishing_hours, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# Step 5: Combine both
+top_gear_by_mmsi <- bind_rows(top_gear_non_na, top_gear_fishing_only)
+
+# Step 6: Join back to the original data
+vessel_info_clean_2 <- vessel_info_clean %>%
+  dplyr::select(-vessel_class_gfw) %>%
+  left_join(top_gear_by_mmsi %>% dplyr::select(mmsi, vessel_class_gfw), by = "mmsi") %>%
+  distinct(mmsi, flag_gfw, vessel_class_gfw, length_m_gfw, engine_power_kw_gfw, tonnage_gt_gfw)
+
+
+multiple_flags <- vessel_info_clean_2 %>%
+  group_by(mmsi) %>%
+  summarise(n_flags = n_distinct(flag_gfw)) %>%
+  ungroup() %>%
+  filter(n_flags > 1) # 0 good
+
+# ok there are some reporting multiple gears
+multiple_gears <- vessel_info_clean_2 %>%
+  group_by(mmsi) %>%
+  summarise(n_gears = n_distinct(vessel_class_gfw)) %>%
+  ungroup() %>%
+  filter(n_gears > 1) #0 good
+
+length(unique(vessel_info_clean$mmsi)) == nrow(vessel_info_clean_2) # TRUE good 
+
+
+qs::qsave(vessel_info_clean, here("data/raw/v3_gfw_mmsi_vessel_info.qs"))
+
+vessel_info_v2 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/fishing-vessels-v2.csv"))
+
+
+## can we pull by flag country? 
+
+rgn_list <- vessel_info_clean %>%
+  distinct(flag_gfw) %>%
+  pull() %>%
+  unique() # 235 flag countries
+
+imas_effort <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/CapacityCountryLevel_Detailed.csv")
+
+imas_rgns <- imas_effort %>%
+  distinct(SAUP) # 167 regions in IMAS data
+```
+
+Let's prep the v3 data we downloaded [directly from GFW](https://globalfishingwatch.org/data-download/datasets/public-fishing-effort), rather than using the API.
+
+
+Unzip the files 
+```{r}
+years <- 2013:2024
+
+for(yr in years){
+  # yr = 2013
+# Set the path to the zip file
+zip_file <- glue("/home/ubuntu/data_storage/raw_data/global_fishing_watch/apparent_fishing_hours_mmsi/v3/mmsi-daily-csvs-10-v3-{yr}.zip")
+
+# Set the directory to extract the files into (you can customize this)
+output_dir <- glue("/home/ubuntu/data_storage/raw_data/global_fishing_watch/apparent_fishing_hours_mmsi/v3/mmsi-daily-csvs-10-v3-{yr}")
+
+# Create the output directory if it doesn't exist
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+# Unzip the file
+unzip(zipfile = zip_file, exdir = output_dir)
+
+}
+
+```
+
+
+```{r}
+
+for(year in 2012:2024){
+  # year = 2012
+  this_year_files <- list.files(glue("/home/ubuntu/data_storage/raw_data/global_fishing_watch/apparent_fishing_hours_mmsi/v3/mmsi-daily-csvs-10-v3-{year}"), full.names = TRUE)
+  
+  
+  this_year_df <- lapply(this_year_files, fread) %>% 
+    bind_rows() 
+
+  this_year_df_prep <- this_year_df %>%
+    mutate(year = year) %>%
+    dplyr::select(-date) %>%
+    group_by(cell_ll_lat, cell_ll_lon, year, mmsi) %>%
+    summarise(hours = sum(hours, na.rm = TRUE),
+              fishing_hours = sum(fishing_hours, na.rm = TRUE)) %>%
+    ungroup() %>%
+    left_join(vessel_info_clean_2, by = "mmsi") 
+  
+  
+  qs::qsave(this_year_df_prep, file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent_fishing_hours_mmsi/v3_aggregated/all_effort_{year}.qs")))
+  
+}
+
+
+gfw_2020 <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v3_aggregated/all_effort_2020.csv"))
+
+test <- gfw_2020 %>%
+  filter(flag_gfw == "USA") # ok there actually isn't any data in IDN until 2014... so this is a technology adoption problem probably 
+
+sum(test$fishing_hours) # 2183481
+
+```

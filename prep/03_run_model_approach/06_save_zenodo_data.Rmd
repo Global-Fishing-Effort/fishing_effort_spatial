@@ -40,12 +40,13 @@ flags_to_gapfill <- setdiff(modelled_flags_regional, modelled_flags_original)
 
 all_flags <- c(modelled_flags_original, flags_to_gapfill)
 
+all_flags <- c("RAA", "RAM")
 
-cl <- makeCluster(20)  # could probably increase this? 
+cl <- makeCluster(2)  # could probably increase this? 
 registerDoParallel(cl)
 
 foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
-  # flag = "UKR"
+  # flag = "RAA"
   
   
   all_files_flag_original <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions/"), pattern = flag, full.names = TRUE)
@@ -91,7 +92,12 @@ foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "cou
   
   all_data_fin <- all_data_flag_original %>%
     filter(nom_active_fishing_hours > 0) %>%
-    rbind(data_to_add)
+    rbind(data_to_add) %>%
+    mutate(flag_country_name = case_when(
+      flag_country_iso3c == "RAA" ~ "Azores", 
+      flag_country_iso3c == "RAM" ~ "Madeira", 
+      TRUE ~ flag_country_name
+    ))
   
   # test <- all_data_fin %>%
   #   # filter(year >= 1988) %>%
@@ -179,6 +185,9 @@ write.csv(hist_fish_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/kn
 
 
 write.csv(missing_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/effort_not_modelled.csv"), row.names = FALSE)
+
+test <- read.csv(file.path(rdsi_dir, "prep/random_forest/zenodo_data/effort_not_modelled.csv"))
+
 
 
 test <- hist_fish_data %>% filter(flag_country_iso3c == "UKR", year == 1950)

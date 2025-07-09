@@ -1,5 +1,5 @@
 ---
-title: "Aggregate GFW data to 0.5 degrees cells"
+title: "Aggregate GFW data to 1 degrees cells"
 output: html_document
 date: "2024-12-12"
 ---
@@ -22,6 +22,8 @@ library(sf)
 library(countrycode)
 library(raster)
 library(qs)
+library(doParallel)
+library(foreach)
 
 source(here("R/dir.R"))
 
@@ -37,9 +39,9 @@ We aggregate the GFW data from 0.1 to 1 degree cells. To do this, we have to run
 
 **Reference**: Global Datasets of AIS-based Fishing Effort and Vessel Presence. Version 2.0 and 3.0. 
 
-**Downloaded**: October 10, 2024
+**Downloaded**: July 8, 2025
 
-**Native resolution**: 0.01 and 0.1 degree 
+**Native resolution**: 0.1 degree 
 
 ## IMAS effort data
 
@@ -53,9 +55,20 @@ We aggregate the GFW data from 0.1 to 1 degree cells. To do this, we have to run
 Load GFW vessel data with new gear types and load Rousseau trawling proportions
 
 ```{r}
-
 gfw_vessel_registry <- qread(here("data/int/gfw_vessel_registry_fix.qs")) %>%
-  dplyr::select(mmsi, flag_gfw, vessel_class_gfw, length_m_gfw, length_category, gear, tonnage_gt_gfw, engine_power_kw_gfw)
+  dplyr::distinct(mmsi, flag_gfw, length_category, gear, tonnage_gt_gfw, engine_power_kw_gfw)
+
+duplicates <- gfw_vessel_registry %>%
+  count(mmsi) %>%
+  filter(n > 1)
+
+fix_dups <- gfw_vessel_registry %>%
+  filter(mmsi %in% c(unique(duplicates$mmsi))) %>%
+  filter(gear == "Lines_Handlines_and_poles") # only filter for the Lines_Handlines_and_poles ones, since all these duplicates are either "other" or that
+
+gfw_vessel_registry_fix <- gfw_vessel_registry %>%
+  filter(!(mmsi %in% c(duplicates$mmsi))) %>%
+  rbind(., fix_dups)
 
 saup_table <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv") %>% clean_names()
 
@@ -77,34 +90,55 @@ Group gfw data by cell, year, flag, gear (after resolving gear issues i.e., grou
 
 ```{r}
 
-test_lengths <- gfw_vessel_registry %>%
+most_common_lengths <- gfw_vessel_registry_fix %>%
   group_by(flag_gfw, length_category) %>%
   summarise(count = n()) %>%
     group_by(flag_gfw) %>%
   filter(count == max(count)) %>%
   ungroup() %>%
-  dplyr::select(flag_gfw, most_common_length = length_category)
+  dplyr::select(flag_fin = flag_gfw, most_common_length = length_category)
 
+
+gear_lengths_iso3c <- gfw_vessel_registry_fix %>%
+  group_by(flag_gfw, gear, length_category) %>%
+  summarise(count = n()) %>%
+    group_by(flag_gfw, length_category) %>%
+  filter(count == max(count)) %>%
+  ungroup() %>%
+  dplyr::select(flag_fin = flag_gfw, length_category, most_common_gear_l_flag = gear)
+
+gear_iso3c <- gfw_vessel_registry_fix %>%
+  group_by(flag_gfw, gear) %>%
+  summarise(count = n()) %>%
+    group_by(flag_gfw) %>%
+  filter(count == max(count)) %>%
+  ungroup() %>%
+  dplyr::select(flag_fin = flag_gfw, most_common_gear_flag = gear)
   
-for(yr in 2013:2017){
+
+cl <- makeCluster(8)
+registerDoParallel(cl)
+
+foreach(yr = 2013:2024, .packages = c(
+  "qs", "here", "dplyr", "tidyr", "glue", "terra", "countrycode"
+)) %dopar% {
 
  #  yr = 2012
     
 eez_rgns <- qread(here("data/raw/spatial/eez_rast_csv_0.1.qs"))
 
-gfw_year <- read.csv(file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent_fishing_hours_mmsi/v2_aggregated/all_effort_{yr}.csv"))) %>%
-  rename(flag = flag_gfw) %>%
-    rename(x = cell_ll_lon, y = cell_ll_lat) %>%
-  left_join(gfw_vessel_registry) %>%
-  mutate(flag_fin = ifelse(is.na(flag), flag_gfw, flag)) %>% # fix missing flags... use API flag, and if there is no API flag, use flag from vessel registry... if it is still missing, we'll fix it later on based on where the fishing is actually happening
-  group_by(x, y, flag_fin, vessel_class_gfw, length_m_gfw) %>%
+gfw_year <- qread(file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent_fishing_hours_mmsi/v3_aggregated/all_effort_{yr}.qs"))) %>%
+  dplyr::select(x = cell_ll_lon, y = cell_ll_lat,  mmsi, hours, fishing_hours) %>%
+  left_join(gfw_vessel_registry_fix) %>%
+  distinct() %>%
+  rename(flag_fin = flag_gfw) %>%
+  group_by(x, y, flag_fin, gear, length_category) %>%
   summarise(fishing_hours = sum(fishing_hours, na.rm = TRUE),
             hours = sum(hours, na.rm = TRUE), 
             engine_power_kw_gfw = sum(engine_power_kw_gfw, na.rm = TRUE),
             tonnage_gt_gfw = sum(tonnage_gt_gfw, na.rm = TRUE),
             nv = n_distinct(mmsi)) %>% 
   ungroup()
-
 
 # Aggregate from 0.1 to 0.5 degree cells
 gfw_year_aggregated <- gfw_year %>%
@@ -114,7 +148,7 @@ gfw_year_aggregated <- gfw_year %>%
     y_1 = round(y)
   ) %>%
   # Group by rounded coordinates and existing grouping variables
-  group_by(x_1, y_1, flag_fin, vessel_class_gfw, length_m_gfw) %>%
+  group_by(x_1, y_1, flag_fin, gear, length_category) %>%
   # Aggregate numeric columns
   summarise(
     fishing_hours = sum(fishing_hours, na.rm = TRUE),
@@ -125,68 +159,30 @@ gfw_year_aggregated <- gfw_year %>%
   ) %>%
   ungroup() %>%
   # Rename coordinates back to original names if needed
-  rename(x = x_1, y = y_1)
+  rename(x = x_1, y = y_1) %>%
+  filter(fishing_hours > 0)
     
-
 # test <- gfw_year_aggregated %>%
 #   group_by(x, y) %>%
 #   summarise(fishing_hours = sum(fishing_hours, na.rm = TRUE)) %>%
 #   ungroup() %>%
 #   rast(., type ="xyz") # cool that worked!
 
-gfw_year_new_gears <-  gfw_year_aggregated %>% 
-  mutate(length_category = case_when(
-    length_m_gfw < 6  ~ "Less than 6m",
-    length_m_gfw >= 6 & length_m_gfw < 12 ~ "6-12m",
-    length_m_gfw >= 12 & length_m_gfw < 24 ~ "12-24m",
-    length_m_gfw >= 24 & length_m_gfw <= 50 ~ "24-50m",
-    length_m_gfw > 50 ~ "Over 50m",
-    TRUE ~ NA
-  )) %>%
-  mutate(gear = case_when(
-    vessel_class_gfw %in% c("dredge_fishing") ~ "Dredges",
-    vessel_class_gfw %in% c("set_gillnets") ~ "Gillnets",
-    vessel_class_gfw %in% c("pole_and_line", "squid_jigger", "trollers") ~ "Lines_Handlines_and_poles",
-    vessel_class_gfw %in% c("drifting_longlines", "set_longlines") ~ "Lines_Longlines",
-    vessel_class_gfw %in% c("fishing", "fixed_gear") ~ "Other",
-    vessel_class_gfw %in% c("pots_and_traps") ~ "Pots_and_Traps",
-    vessel_class_gfw %in% c("other_seines") ~ "Seine_Danish_and_Other",
-    vessel_class_gfw %in% c("other_purse_seines", "purse_seines", "tuna_purse_seines", "seiners") ~ "Seine_Purse_Seine",
-    TRUE ~ vessel_class_gfw
-   ))
 
   ## lets fix the NA lengths by filling them in with the most common length in that country
 
-
-missing_lengths <- gfw_year_new_gears %>%
+missing_lengths <- gfw_year_aggregated %>%
   filter(is.na(length_category)) %>%
-  left_join(test_lengths, by = c("flag_fin" = "flag_gfw")) %>%
+  left_join(most_common_lengths, by = c("flag_fin")) %>%
   mutate(length_category = ifelse(is.na(length_category), most_common_length, length_category)) %>%
   dplyr::select(-most_common_length)
 
 ## now join back together and group by new gear and length categories (after making sure there are no NAs)
-gfw_length_fix <- gfw_year_new_gears %>%
+gfw_length_fix <- gfw_year_aggregated %>%
   filter(!is.na(length_category)) %>%
   rbind(missing_lengths) 
 
   ## lets fix the missing gears by filling them in with the most common gear type within the country and length category
-
-gear_lengths_iso3c <- gfw_vessel_registry %>%
-  group_by(flag_gfw, gear, length_category) %>%
-  summarise(count = n()) %>%
-    group_by(flag_gfw, length_category) %>%
-  filter(count == max(count)) %>%
-  ungroup() %>%
-  dplyr::select(flag_fin = flag_gfw, length_category, most_common_gear_l_flag = gear)
-
-gear_iso3c <- gfw_vessel_registry %>%
-  group_by(flag_gfw, gear) %>%
-  summarise(count = n()) %>%
-    group_by(flag_gfw) %>%
-  filter(count == max(count)) %>%
-  ungroup() %>%
-  dplyr::select(flag_fin = flag_gfw, most_common_gear_flag = gear)
-
 
 missing_gears <- gfw_length_fix %>%
   filter(is.na(gear)) %>%
@@ -283,31 +279,29 @@ gfw_fix_props <- gfw_fix %>%
   # filter(fishing_hours > 0) # if you filter out 0 fishing hours, there are no NAs. I'll keep 0's in for now
   dplyr::select(-mrgid_sov1, -iso_ter1, -geoname, -fishing_hours_global, -nv_global, -engine_power_kw_gfw_global, -tonnage_gt_gfw_global) %>%
   dplyr::select(x, y, everything()) %>%
-  mutate(year = yr)
+  mutate(year = yr) %>%
+  filter(fishing_hours > 0)
 
-# sum(gfw_year$fishing_hours) - sum(gfw_fix_props$fishing_hours) # 2012 is off by ~86k hours??
-
+# sum(gfw_fix_props$fishing_hours)
 
 qs::qsave(gfw_fix_props, file.path(rdsi_dir, glue("prep/gfw_props/deg_one/all_effort_gear_length_props_{yr}.qs")))
 
   }
 
+stopCluster(cl)
 
 
 test_5 <- qread( file.path(rdsi_dir, glue("prep/gfw_props/deg_half/all_effort_gear_length_props_2012.qs")))
-
 test_10 <-  qread(file.path(rdsi_dir, glue("prep/gfw_props/deg_10/all_effort_gear_length_props_2012.qs")))
+test_1 <-  qread(file.path(rdsi_dir, glue("prep/gfw_props/deg_one/all_effort_gear_length_props_2012.qs")))
 
-test_100 <-  qread(file.path(rdsi_dir, glue("prep/gfw_props/deg_100/all_effort_gear_length_props_2012.qs")))
+sum(test_1$fishing_hours) # 7638755
 
+sum(test_5$fishing_hours) # 7638755
 
-sum(test_5$fishing_hours) # 8386403
+sum(test_10$fishing_hours) # 7638976
 
-sum(test_10$fishing_hours) # 8386403
-
-sum(test_100$fishing_hours) # 6461973
-
-## well, half degree and 0.1 degree match so that's good! We don't use 0.01 degree for our analysis anyways. 
+#close enough! 
 
 ```
 

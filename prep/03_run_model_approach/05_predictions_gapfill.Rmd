@@ -244,45 +244,18 @@ Load access data
 ```{r}
 
 missing_data <- read.csv(file.path(rdsi_dir, "prep/random_forest/zenodo_data/effort_not_modelled.csv")) %>%
-  filter(flag_country_iso3c != "UKR")
+  filter(flag_country_iso3c != "SVN")
 
 access_data_loop <- qs::qread(here("data/int/prediction_historical_data/catch_fishing_access.qs")) %>%
-  rbind(data.frame(
-  year = 1950:2017,
-  flag_fin = "RAA",
-  eez_sovereign = "PRT",
-  access = 1,
-  eez_id = 2243
-)) %>%
-  rbind(data.frame(
-  year = 1950:2017,
-  flag_fin = "RAM",
-  eez_sovereign = "PRT",
-  access = 1,
-  eez_id = 2243
-)) %>%
     rbind(data.frame(
   year = 1950:2017,
   flag_fin = "UKR",
   eez_sovereign = "UKR",
   access = 1,
   eez_id = 2196
-)) %>%
+)) %>% # not sure if this is necessary 
   distinct()
 
-
-# fix faroe islands data 
-fro_access_1951 <- access_data_loop %>%
-  filter(flag_fin == "FRO", 
-         year == 1952) %>%
-  mutate(year = 1951)
-fro_access_1950 <- access_data_loop %>%
-  filter(flag_fin == "FRO", 
-         year == 1952) %>%
-  mutate(year = 1950)
-
-access_data_loop <- access_data_loop %>%
-  rbind(fro_access_1950, fro_access_1951)
 
 ```
 
@@ -310,8 +283,8 @@ foreach(flag = flags, .packages = c("dplyr", "tidyverse", "randomForest", "qs", 
 
 for(yr in years) {
 
-# flag = "RAA"
-# yr = 1950
+# flag = "MMR"
+# yr = 2015
     
     # if(file.exists(file.path(glue("/home/ubuntu/data_storage/prep/random_forest/predictions_regional/yearly/model_preds_{flag}_{yr}.qs")))){
     #   cat("skipping... exists")
@@ -517,16 +490,16 @@ if(nrow(all_preds) == 0){
   next()
 }
 
-# test_preds <- all_preds %>%
-#    filter(gear == "Trawl_Midwater_or_Unsp") %>%
-#   # filter(eez_sovereign == "USA") %>%
-#   dplyr::group_by(lon, lat) %>%
-#   summarise(nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
-#   ungroup() %>%
-#   rast(., type = "xyz")
-# 
-# plot(test_preds)
-# plot(log(test_preds+1)) # Cool!
+test_preds <- all_preds %>%
+  # filter(gear == "Trawl_Midwater_or_Unsp") %>%
+  # filter(eez_sovereign == "USA") %>%
+  dplyr::group_by(lon, lat) %>%
+  summarise(nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  rast(., type = "xyz")
+
+plot(test_preds)
+plot(log(test_preds+1)) # Cool!
 
 # test <- all_preds %>% 
 #   group_by(flag_fin, gear, length_category, year) %>%

@@ -1,5 +1,5 @@
 ---
-title: "FAO fishing effort project - Data wrangling - RSS wind data"
+title: "FAO fishing effort project - Data wrangling - REMSS wind data"
 author: "Gage Clawson (IMAS)"
 date: '`r format(Sys.time(), "%m/%d/%Y")`'
 output: 
@@ -64,7 +64,7 @@ Data come from the [CCMP Wind Vector Analysis Product](https://www.remss.com/mea
 Data are downloaded from this [http server](https://data.remss.com/ccmp/).
 
 ```{r eval = params$download_data}
-v31_dates <- tibble(date = seq(date("1993-01-02"),date("2024-08-31"),by="1 day")) %>%
+v31_dates <- tibble(date = seq(date("2024-09-01"),date("2024-12-31"),by="1 day")) %>%
   mutate(file_path = glue("https://data.remss.com/ccmp/v03.1/Y{year(date)}/M{ifelse(nchar(month(date))==1,paste0(0,month(date)),month(date))}/CCMP_Wind_Analysis_{str_remove_all(date,'-')}_V03.1_L4.nc"))
 
 
@@ -140,9 +140,10 @@ run_parallel <- TRUE
 
 tmp_data_directory <- glue::glue("{data_directory}/remss/clean/spatially_aggregated_{pixel_size}_degree")
  if(!dir.exists(tmp_data_directory)) dir.create(tmp_data_directory)
+
  if(run_parallel) plan(multisession) else plan(sequential)
  
-list.files(glue("{data_directory}/remss/wind-ccmp")) %>%
+list.files(glue("{data_directory}/remss/wind-ccmp"), pattern = "2024") %>%
    future_map_dfr(function(tmp_file_name){
          tryCatch({
      
@@ -212,7 +213,7 @@ tmp_data_directory <- glue::glue("{data_directory}/remss/clean/spatially_aggrega
 if(run_parallel) plan(multisession) else plan(sequential)
 
 # Create sequence of start years for each 5-year chunk
-start_years <- seq(1993, 2024, by = 5)
+start_years <- seq(2023, 2024, by = 5)
 
 # Process each 5-year chunk
 for(start_year in start_years) {

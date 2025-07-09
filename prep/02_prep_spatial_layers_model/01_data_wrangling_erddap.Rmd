@@ -31,7 +31,11 @@ library(glue)
 library(scico)
 library(lubridate)
 library(furrr)
-source(here::here("prep/03_prep_spatial_layers_model/_functions_data_wrangling_erddap.R"))
+library(here)
+library(terra)
+library(ncdf4)
+library(strex)
+source(here::here("prep/02_prep_spatial_layers_model/_functions_data_wrangling_erddap.R"))
 source(here("R/dir.R"))
 
 # Set the data directory. This specifies the folder in our drive where the data can be found. 
@@ -77,18 +81,11 @@ global_polygon_sf <-
   st_sfc(crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
   st_as_sf()
 
-# global_polygon_sf_small <- tibble(lon = c(-5,-5,5,5,-5),
-#                                   lat = c(-5,5,5,-5,-5))%>%
-#   as.matrix() %>%
-#   list(.) %>%
-#   st_polygon() %>%
-#   st_sfc(crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
-#   st_as_sf()
-
 # Start with global ocean
 starting_shape <- ocean
-#starting_shape <- global_polygon_sf_small
 ```
+
+Only need to run once: 
 
 ```{r eval = params$download_data}
 # Make a grid using desired pixel size
@@ -120,8 +117,9 @@ data_grid <- data.table::fread(here::here("data/model_features/global_grid.csv")
            crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
 
 # test <- data_grid %>%
+#   st_drop_geometry() %>%
 #   dplyr::select(lon, lat, pixel_id) %>%
-#   rast(., type = "xyz") # 0.5 by 0.5.. cool it worked. 
+#   rast(., type = "xyz") # 0.5 by 0.5.. cool it worked.
 # plot(test)
 
 ```
@@ -137,12 +135,13 @@ We use 0.25 degree data from [SST, Daily Optimum Interpolation (OI), AVHRR Only,
 Preferably we could use a data set that goes back to 1950.. but perhaps we just gapfill back to 1950 with climate projections instead of real satellite data like this? 
 
 ```{r eval = params$download_data}
+
 # Download all global SST and SST anomaly data
 download_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
                              variables = c("sst","anom"),
                              temporal_resolution = "day",
-                             date_start = "1981-09-02",
-                             date_end = "2023-12-31",
+                             date_start = "2024-01-01",
+                             date_end = "2024-12-31",
                              data_grid = data_grid,
                              missing_dates = missing_dates_2,
                              run_parallel = TRUE)
@@ -154,16 +153,173 @@ download_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
 missing_dates <- determine_missing_dates(dataset_name = "ncdcOisst21Agg_LonPM180",
                                          temporal_resolution = "day",
                                          date_start = "1981-09-02",
-                                         date_end = "2023-12-31")
+                                         date_end = "2024-12-31")
 
 missing_dates_2 <- missing_dates[[1]]$date
 ```
+
+Unfortunately, this SST data does not appear to be available to download through rerrdap as of July 9, 2025 (thanks Trump...). Here is code I will run to update the data for the remaining years we need to download (just 2024): https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-interpolation/v2.1/access/avhrr/
+
+First, download the data:
+
+```{r}
+# R script to download NOAA OISST data for 2024 (January to December)
+# Downloads daily files from NCEI AVHRR dataset
+
+library(lubridate)
+
+# Base URL for OISST AVHRR data
+base_url <- "https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-interpolation/v2.1/access/avhrr/"
+
+
+# Function to download a single file
+download_oisst_file <- function(date, base_url, data_dir = "data") {
+ 
+  # date <- as.Date("2024-01-01")
+  
+# Format date as YYYYMMDD
+date_str <- format(date, format = "%Y%m%d")
+
+# Format year-month for folder structure (YYYYMM)
+year_month <- format(date, "%Y%m")
+  
+  # Construct filename
+  filename <- paste0("oisst-avhrr-v02r01.", date_str, ".nc")
+  
+  # Construct full URL with monthly folder structure
+  file_url <- paste0(base_url, year_month, "/", filename)
+  
+  # Local file path
+  local_path <- file.path(data_directory, "erddap/ncdcOisst21Agg_LonPM180_raw", filename)
+  
+  # Check if file already exists
+  if (file.exists(local_path)) {
+    cat(sprintf("File already exists: %s\n", filename))
+    return(TRUE)
+  }
+  
+  # Attempt to download
+  cat(sprintf("Downloading from %s/: %s\n", year_month, filename))
+  
+  tryCatch({
+    download.file(file_url, local_path, mode = "wb", quiet = FALSE)
+    
+  }, error = function(e) {
+    cat(sprintf("Error downloading %s: %s\n", filename, e$message))
+    if (file.exists(local_path)) file.remove(local_path)
+    return(FALSE)
+  })
+}
+
+# Generate date sequence for 2024
+start_date <- as.Date("2024-01-01")
+end_date <- as.Date("2024-12-31")
+dates <- seq(start_date, end_date, by = "day")
+
+cat(sprintf("Date range: %s to %s\n", start_date, end_date))
+
+# Download files
+successful_downloads <- 0
+failed_downloads <- 0
+start_time <- Sys.time()
+
+for (i in seq_along(dates)) {
+#  i = 2
+  date <- dates[i]
+  
+  # Progress indicator
+  if (i %% 10 == 0 || i == 1) {
+    cat(sprintf("Progress: %d/%d (%.1f%%)\n", i, length(dates), (i/length(dates))*100))
+  }
+  
+  # Download file
+  success <- download_oisst_file(date, base_url)
+  
+  if (success) {
+    successful_downloads <- successful_downloads + 1
+  } else {
+    failed_downloads <- failed_downloads + 1
+  }
+  
+  # Small delay to be respectful to the server
+  Sys.sleep(0.5)
+}
+
+end_time <- Sys.time()
+duration <- end_time - start_time
+
+
+# List downloaded files
+downloaded_files <- list.files(file.path(data_directory, "erddap/ncdcOisst21Agg_LonPM180_raw"), pattern = "oisst-avhrr-v02r01\\.2024.*\\.nc$", full.names = FALSE)
+cat(sprintf("Files in data directory: %d\n", length(downloaded_files)))
+# should be 366? 
+
+```
+
+
+```{r}
+# we need to prep the netcdf data to be a csv with zlev, latitude, longitude, sst, and anom. 
+files_to_run <- list.files(file.path(data_directory, "erddap/ncdcOisst21Agg_LonPM180_raw"), full.names = TRUE)
+
+for(i in 1:length(files_to_run)){
+# Open the NetCDF file
+
+#   i = 2
+  file_path <- files_to_run[[i]]
+  nc_data <- nc_open(file_path)
+
+# Extract coordinate variables
+lon <- ncvar_get(nc_data, "lon")
+lat <- ncvar_get(nc_data, "lat")
+zlev <- ncvar_get(nc_data, "zlev")
+time <- ncvar_get(nc_data, "time")
+
+# Convert longitude from 0-360 to -180-180
+lon[lon > 180] <- lon[lon > 180] - 360
+
+# Extract data variables
+sst_data <- ncvar_get(nc_data, "sst")
+anom_data <- ncvar_get(nc_data, "anom")
+
+# Close the NetCDF file
+nc_close(nc_data)
+
+# Create a data frame with all combinations of coordinates
+# Note: NetCDF arrays are in [lon, lat] order
+cat("\nCreating coordinate grid...\n")
+
+# Create coordinate grids using expand.grid for proper pairing
+coord_grid <- expand.grid(longitude = lon, latitude = lat)
+
+# Flatten the data arrays (they are 2D: [lon, lat])
+# as.vector reads column-wise, which matches expand.grid order
+sst_flat <- as.vector(sst_data)
+anom_flat <- as.vector(anom_data)
+
+# Create the data frame
+df <- data.frame(
+  zlev = zlev[1],  # Single z-level value for all points
+  latitude = coord_grid$latitude,
+  longitude = coord_grid$longitude,
+  sst = sst_flat,
+  anom = anom_flat
+)
+
+# Write to CSV
+file_date <- as.Date(str_after_last(str_before_last(basename(file_path), "\\.nc"), "\\."), format = "%Y%m%d")
+output_file <- glue("ncdcOisst21Agg_LonPM180_{file_date}.csv")
+write.csv(df, file.path(data_directory, "erddap/ncdcOisst21Agg_LonPM180", output_file), row.names = FALSE)
+
+}
+
+```
+
 
 ```{r eval = params$aggregate_data}
 # Spatially aggregate SST and SST anomaly data
 spatially_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
                                         spatial_aggregation = data_grid,
-                                        years = 1981:2023, 
+                                        years = 2024:2024, 
                                         run_parallel = TRUE)
 ```
 
@@ -210,16 +366,71 @@ missing_dates_2 <- missing_dates[[1]]$date
 
 ```
 
-```{r eval = params$aggregate_data}
-knitr::kable(missing_dates$missing_dates_summary)
+Similar to the SST data, this CHL data does not appear to be available to download through rerrdap as of July 9, 2025 (thanks Trump...). Here is code I will run to update the data for the remaining years we need to download (just 2024):
+
+First, download the data manually from the NASA Ocean Color website, for L3 browser: https://oceandata.sci.gsfc.nasa.gov/l3/
+You can give it a date range to download. For us, we will download monthly files from June 2022 to December 2024. Our old data stops in May 2022. You must have an account with Earthdata to do this. 
+
+Once downloaded, we will read in the netcdf files and save as a csv, in the same format as what we did for when we could download directly from ERRDAP...
+
+```{r}
+# we need to prep the netcdf data to be a csv with zlev, latitude, longitude, sst, and anom. 
+
+# we need to prep the netcdf data to be a csv with zlev, latitude, longitude, sst, and anom. 
+files_to_run <- list.files(file.path(data_directory, "erddap/erdMH1chlamday_raw"), full.names = TRUE)
+
+for(i in 2:length(files_to_run)){
+# Open the NetCDF file
+
+#   i = 1
+  file_path <- files_to_run[[i]]
+  
+# Open the NetCDF file
+nc_data <- ncdf4::nc_open(file_path)
+
+# Extract coordinate variables
+lon <- ncvar_get(nc_data, "lon")
+lat <- ncvar_get(nc_data, "lat")
+
+# Extract data variables
+chl_data <- ncvar_get(nc_data, "chlor_a")
+
+# Close the NetCDF file
+nc_close(nc_data)
+
+# Create a data frame with all combinations of coordinates
+# Note: NetCDF arrays are in [lon, lat] order
+cat("\nCreating coordinate grid...\n")
+
+# Create coordinate grids using expand.grid for proper pairing
+coord_grid <- expand.grid(longitude = lon, latitude = lat)
+
+# Flatten the data arrays (they are 2D: [lon, lat])
+# as.vector reads column-wise, which matches expand.grid order
+chl_flat <- as.vector(chl_data)
+
+# Create the data frame
+df <- data.frame(
+  latitude = coord_grid$latitude,
+  longitude = coord_grid$longitude,
+  chlorophyll = chl_flat) %>%
+  filter(!is.na(chlorophyll))
+
+# Write to CSV
+#AQUA_MODIS.20241201_20241231.L3m.MO.CHL.chlor_a.4km.nc
+file_date <- as.Date(str_after_last(str_before_nth(basename(file_path), "_", 2), "\\."), format = "%Y%m%d")
+output_file <- glue("erdMH1chlamday_{file_date}.csv")
+write.csv(df, file.path(data_directory, "erddap/erdMH1chlamday", output_file), row.names = FALSE)
+}
+
 ```
 
 ```{r eval = params$aggregate_data}
 # Spatially aggregate chl data
 spatially_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
                                         spatial_aggregation = data_grid,
-                                        years = 2003:2022,
-                                        run_parallel = FALSE)
+                                        years = 2022:2024,
+                                        run_parallel = TRUE)
 ```
 
 ```{r eval = params$aggregate_data}
@@ -230,4 +441,5 @@ temporally_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
                                          temporal_aggregation = "year",
                                          run_parallel = TRUE,
                                          years_per_chunk = 5)
+
 ```
