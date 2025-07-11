@@ -31,6 +31,8 @@ library(terra)
 library(fasterize)
 library(raster)
 library(janitor)
+library(strex)
+library(qs)
 
 source(here::here("prep/02_prep_spatial_layers_model/_functions_data_wrangling_erddap.R"))
 source(here("R/dir.R"))
@@ -90,19 +92,7 @@ data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_
 ```
 
 
-```{r}
-
-spatial_df <- read.csv(here("data/model_features/deg_1_x_1/gfw_static_spatial_measures.csv")) # static layers depth, distance to shore, distance to port. 
-
-grid_df <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv")) # 1 by 1 grid
-
-oceans_df <- read.csv(here("data/model_features/deg_1_x_1/oceans.csv")) 
-
-
-```
-
-
-Prep 2015 SST, CHL, data and append to data in model features folder 
+Prep 2015-2024 SST, CHL, data, and save
 
 ```{r}
 ## start with prepping 1 by 1 sst data for 2015 only. Then we will appead it onto the existing data downloaded from the paper
@@ -120,43 +110,39 @@ temporally_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180
                                          run_parallel = TRUE,
                                          years_per_chunk = 5)
 
-old_sst <- read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv")) %>%
-  filter(year != "2015")
+## now lets merge them all together
+files <- list.files(here("data/model_features/deg_1_x_1/ncdcOisst21Agg_LonPM180/"), full.names = TRUE)
 
-test <- old_sst %>% filter(year == 2016) # ok cool
+all_sst <- lapply(files, read.csv) %>%
+  bind_rows() %>%
+  filter(year != 2014) # we only run models for 2015-2024
 
-new_sst <- read.csv("data/model_features/deg_1_x_1/ncdcOisst21Agg_LonPM180/errdap_2014_2015.csv")
-
-rewrite_sst <- rbind(new_sst, old_sst)
-
-write.csv(rewrite_sst, here("data/model_features/deg_1_x_1/errdap_sst.csv"), row.names = FALSE)
+write.csv(all_sst, here("data/model_features/deg_1_x_1/errdap_sst.csv"), row.names = FALSE)
 
 
 # Spatially aggregate chl data for 2015
 spatially_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
                                         spatial_aggregation = data_grid,
-                                        years = 2014, # choose years you want to run
+                                        years = 2016:2024, # choose years you want to run
                                         run_parallel = TRUE)
 
 temporally_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
                                          temporal_aggregation = "year",
                                          run_parallel = TRUE,
                                          years_per_chunk = 5)
- 
-old_chl <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv")) %>%
-  filter(year != 2015)
+## now lets merge them all together
+files <- list.files(here("data/model_features/deg_1_x_1/erdMH1chlamday/"), full.names = TRUE)
 
-new_chl <- read.csv("data/model_features/deg_1_x_1/erdMH1chlamday/errdap_2014_2015.csv")
+all_chl <- lapply(files, read.csv) %>%
+  bind_rows() %>%
+  filter(year != 2014) # we only run models for 2015-2024
 
-
-rewrite_chl <- rbind(new_chl, old_chl)
-
-write.csv(rewrite_chl, here("data/model_features/deg_1_x_1/errdap_chl.csv"), row.names = FALSE)
+write.csv(all_chl, here("data/model_features/deg_1_x_1/errdap_chl.csv"), row.names = FALSE)
 
 
 ```
 
-Prep 2014-2015 Wind data and append to data in model features folder 
+Prep 2014-2024 Wind data and save
 
 ```{r}
 ## now do wind for 2015
@@ -170,7 +156,7 @@ tmp_data_directory <- glue::glue("{data_directory}/remss/clean/spatially_aggrega
  if(!dir.exists(tmp_data_directory)) dir.create(tmp_data_directory)
  if(run_parallel) plan(multisession) else plan(sequential)
 
-years = 2014
+years = 2016:2024
 
  pattern <- paste(years, collapse = "|")
  
@@ -239,7 +225,7 @@ tmp_data_directory <- glue::glue("{data_directory}/remss/clean/spatially_aggrega
 if(run_parallel) plan(multisession) else plan(sequential)
 
 # Create sequence of start years for each 5-year chunk
-start_years <- seq(2014, 2014, by = 5)
+start_years <- seq(2014, 2024, by = 5)
 
 # Process each 5-year chunk
 for(start_year in start_years) {
@@ -295,14 +281,14 @@ chunk_data <- chunk_files %>%
 }
 
 
-old_wind <- read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv")) %>%
-  filter(year != 2015)
+## now lets merge them all together
+files <- list.files(here("data/model_features/deg_1_x_1/remss_wind/"), full.names = TRUE)
 
-new_wind <- read.csv("data/model_features/deg_1_x_1/remss_wind/wind_2014_2018.csv") # this is actually only 2015
+all_wind <- lapply(files, read.csv) %>%
+  bind_rows() %>%
+  filter(year != 2014) # we only run models for 2015-2024
 
-rewrite_wind <- rbind(new_wind, old_wind)
-
-write.csv(rewrite_wind, here("data/model_features/deg_1_x_1/remss_wind.csv"), row.names = FALSE)
+write.csv(all_wind, here("data/model_features/deg_1_x_1/remss_wind.csv"), row.names = FALSE)
 
 ```
 
@@ -314,12 +300,25 @@ Need to prep 1 by 1 EEZ, FAO, and mesopelagic data
 Use Marine Region's [Maritime Boundaries Geodatabase: Maritime Boundaries and Exclusive Economic Zones (200NM), version 12]
 
 ```{r}
-
 analysis_projection <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
 eez <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"), layer = 'eez_v12')
 
-# test <- eez %>% 
-#   st_drop_geometry()
+  hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
+    ## remove artisanal
+    filter(sector == "I") %>%
+    group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
+    summarize(
+      total_nominal_fishing_hours = sum(nom_active_hours, na.rm = TRUE),
+      total_effective_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    dplyr::select(flag_fin, year, gear, length_category, total_nominal_fishing_hours, total_effective_fishing_hours) %>%
+        filter(total_nominal_fishing_hours > 0) 
+
+rousseau_eezs <- unique(hist_fish_data$flag_fin) #151
+  
+test <- eez %>%
+  st_drop_geometry() 
 
 eez_lookup_ids <- eez %>% 
       filter(POL_TYPE !=  "Overlapping claim") %>% 
@@ -328,27 +327,62 @@ eez_lookup_ids <- eez %>%
         filter(eez_sovereign != "ATA")  %>% 
   add_row(eez_sovereign = "High seas", eez_id = 99999)
 
-write.csv(eez_lookup_ids, here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"), row.names = FALSE)
+sort(setdiff(rousseau_eezs, eez_lookup_ids$eez_sovereign)) # [1] "COK" "FRO" "GLP" "GRL" "GUF" "HKG" "MYT" "NCL" "PYF" "RAA" "RAM" "REU" "TWN" "UKR" "WLF"; # missing these 
 
-test <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"))
+# ok I think we will need to go one by one...
 
-  eez <- eez %>%
+# cook islands, faeroe, guadeloupe, greenland, french guiana, mayotte, new calednia, french polynesia, azores, madeira, reunion, Taiwan
+eez_terr_fix <- eez %>%
+  st_drop_geometry() %>%
+  filter(ISO_TER1 %in% c("COK", "FRO", "GLP", "GRL", "GUF", "MYT", "NCL", "PYF", "REU", "TWN", "UKR", "WLF") | MRGID_TER1 %in% c(8672, 3297, 8654, 2260, 8683, 8606, 2261, 8656, 2454, 4956, 8609, 2177, 2196, 8680)) %>%
+  distinct(eez_sovereign = ISO_TER1, eez_id = MRGID_TER1) %>% # cool, just missing hong kong
+  mutate(eez_id = as.character(eez_id)) %>%
+  mutate(eez_sovereign = case_when(
+    eez_id == 2454 ~ "RAA", 
+    eez_id == 4956 ~ "RAM",
+    TRUE ~ eez_sovereign 
+  )) %>%
+  mutate(eez_id = as.numeric(eez_id))
+
+eez_lookup_fix <- eez_lookup_ids %>% 
+  rbind(., eez_terr_fix)
+
+sort(setdiff(rousseau_eezs, eez_lookup_fix$eez_sovereign))  # just hong kong, good
+
+write.csv(eez_lookup_fix, here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"), row.names = FALSE)
+
+  eez_sovereign_nations <- eez %>%
     filter(POL_TYPE !=  "Overlapping claim") %>%
-    dplyr::select(eez_sovereign = ISO_SOV1) %>%
+    filter(!str_detect(GEONAME, "Greenland|Faeroe|Cook Islands|Guadeloupe|French Guiana|French Polynesia|New Caledonia|Réunion|Wallis and Futuna|Azores|Madeira")) %>%
+   dplyr::select(eez_sovereign = ISO_SOV1) %>%
     # Don't include Antarctica - classify it as high seas instead
-    filter(eez_sovereign != "ATA")  %>% 
-    sf::st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% 
+    filter(eez_sovereign != "ATA")  
+
+    eez_territory <- eez %>%
+  filter(ISO_TER1 %in% c("COK", "FRO", "GLP", "GRL", "GUF", "MYT", "NCL", "PYF", "REU", "TWN", "UKR", "WLF") | MRGID_TER1 %in% c(8672, 3297, 8654, 2260, 8683, 8606, 2261, 8656, 2454, 4956, 8609, 2177, 2196, 8680)) %>%
+      filter(GEONAME != "Joint regime area: Iceland / Denmark (Faeroe Islands)") %>% 
+  dplyr::select(eez_sovereign = ISO_TER1, eez_id = MRGID_TER1) %>% # cool, just missing hong kong
+  mutate(eez_id = as.character(eez_id)) %>%
+  mutate(eez_sovereign = case_when(
+    eez_id == 2454 ~ "RAA", 
+    eez_id == 4956 ~ "RAM",
+    TRUE ~ eez_sovereign 
+  )) %>%
+  mutate(eez_id = as.numeric(eez_id)) %>%
+  dplyr::select(eez_sovereign) 
+
+    
+eez_all <- rbind(eez_sovereign_nations, eez_territory) %>% 
+    sf::st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>%
     sf::st_transform(analysis_projection) %>%
     sf::st_make_valid() %>%
     mutate(eez_area_m2 = sf::st_area(geometry)%>%
              units::drop_units())
-  
-
 
   # Now intersect our grids with EEZs, calculate fraction each grid overlaps with EEZ
   # And only pick one EEZ per grid
   data_grid_eez <- data_grid %>% 
-    sf::st_intersection(eez) 
+    sf::st_intersection(eez_all) 
   
   save_data_grid_eez <- data_grid_eez %>%
     st_drop_geometry()
@@ -374,11 +408,34 @@ test <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"))
   
   qs::qsave(data_grid_eez_3, here("data/model_features/deg_1_x_1/eez/int/eez_intersection_no_highseas.qs"))
 
+  data_grid_eez_3 <- qread(here("data/model_features/deg_1_x_1/eez/int/eez_intersection_no_highseas.qs")) %>%
+    dplyr::select(-fraction_eez_overlap)
+  
+    data_grid_eez_2_fix <- qs::qread(here("data/model_features/deg_1_x_1/eez/int/eez_intersection.qs"))
+  
+  data_grid_eez_3_missing <- data_grid_eez_2_fix %>%
+    left_join(data_grid %>% st_drop_geometry()) %>%
+    filter(eez_sovereign %in% c("SGP", "SVN", "KNA")) %>%
+    dplyr::select(pixel_id, eez_sovereign)
+  
+    data_grid_eez_3_fin <- data_grid_eez_3 %>%
+      rbind(., data_grid_eez_3_missing) %>%
+      filter(!(pixel_id == 28944 & eez_sovereign == "VEN")) %>%
+      filter(!(pixel_id == 28945 & eez_sovereign == "GBR")) %>%
+      filter(!(pixel_id == 29213 & eez_sovereign == "NLD")) %>%
+      filter(!(pixel_id == 29214 & eez_sovereign == "ATG")) %>%
+      filter(!(pixel_id == 24708 & eez_sovereign == "IDN")) %>%
+      filter(!(pixel_id == 24709 & eez_sovereign == "MYS")) %>%
+      filter(!(pixel_id == 35694 & eez_sovereign == "HRV")) # fix the iso3cs that were missing and make sure each pixel id only has one EEZ
+
+
+  qs::qsave(data_grid_eez_3_fin, here("data/model_features/eez/int/eez_intersection_no_highseas_fix.qs"))
+
   
   eez_lookup <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"))
   
   
-  data_grid_high_seas <- data_grid_eez_3 %>%
+  data_grid_high_seas <- data_grid_eez_3_fin %>%
     full_join(data_grid %>% st_drop_geometry()) %>%
     mutate(eez_sovereign = ifelse(is.na(eez_sovereign), "High seas", eez_sovereign)) %>%
         left_join(eez_lookup, by = c("eez_sovereign")) %>%
@@ -391,9 +448,13 @@ test <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"))
   write.csv(data_grid_high_seas, here("data/model_features/deg_1_x_1/eez/eez.csv"), row.names = FALSE)
   
 
+data_grid_high_seas <- read.csv(here("data/model_features/deg_1_x_1/eez/eez.csv")) %>%
+  left_join(eez_lookup)
+  
+missing <- setdiff(rousseau_eezs, unique(data_grid_high_seas$eez_sovereign))
+# HKG - good, just HKG. In predictions we will just assume HKG uses the same EEZ as China. 
 
 ```
-
 
 # World bank development regions
 
@@ -401,11 +462,10 @@ test <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"))
 
 eez_lookup_ids <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"))
 
-
 eez_region_features <- eez_lookup_ids %>%
-    mutate(eez_region_world_bank_7 = countrycode::countrycode(ISO_SOV1,"iso3c","region"))%>%
-    distinct(ISO_SOV1, eez_region_world_bank_7, MRGID_SOV1)  %>% 
-  mutate(eez_region_world_bank_7 = ifelse(ISO_SOV1 == "ESH", "Middle East & North Africa", eez_region_world_bank_7))
+    mutate(eez_region_world_bank_7 = countrycode::countrycode(eez_sovereign,"iso3c","region"))%>%
+    distinct(eez_sovereign, eez_region_world_bank_7, eez_id)  %>% 
+  mutate(eez_region_world_bank_7 = ifelse(eez_sovereign == "ESH", "Middle East & North Africa", eez_region_world_bank_7))
 
 write.csv(eez_region_features, here("data/model_features/world_bank_regions.csv"), row.names = FALSE)
 
@@ -493,7 +553,7 @@ write.csv(fao_lookup_fin, here("data/model_features/deg_1_x_1/fao/fao.csv"), row
 # missing_eez <- unique(test$eez_id)
 # 
 # eez_lookup_ids <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv")) %>%
-#   filter(MRGID_SOV1 %in% missing_eez)
+#   filter(eez_id %in% missing_eez)
 # unique(eez_lookup_ids$ISO_SOV1) # [1] "USA"       "IRN"       "TKM"       "AZE"       "KAZ"       "RUS"       "Land"      "High seas"
 # # ok so we don't care about Land. But the rest are worrisome.
 
@@ -533,46 +593,6 @@ fao_lookup_fin <- fao_lookup_fin %>%
 sum(is.na(fao_lookup_fin$fao_id)) 
 
 write.csv(fao_lookup_fin, here("data/model_features/deg_1_x_1/fao/fao_fixed.csv"), row.names = FALSE)
-
-# # Attempt to fix missing FAO IDs using nearest neighbor approach
-# cat("\nAttempting to fix missing FAO IDs using nearest neighbor approach...\n")
-# 
-# # Create a spatial points object for missing pixels
-# missing_points <- missing_pixels %>%
-#   st_centroid()
-# 
-# # Find the nearest FAO area for each missing point
-# if (nrow(missing_points) > 0) {
-#   # Create a function to find nearest FAO area
-#   find_nearest_fao <- function(point, fao_areas) {
-#     distances <- st_distance(point, fao_areas)
-#     nearest_idx <- which.min(distances)
-#     return(fao_areas$F_AREA[nearest_idx])
-#   }
-#     # Apply the function to each missing point
-#   cat("Finding nearest FAO area for each missing point...\n")
-#   nearest_fao_ids <- sapply(1:nrow(missing_points), function(i) {
-#     if (i %% 100 == 0) cat("Processing point", i, "of", nrow(missing_points), "\n")
-#     find_nearest_fao(missing_points[i,], fao)
-#   })
-#   
-#     # Create a fixed lookup table
-#   fixed_lookup <- fao_lookup_fin %>%
-#     mutate(fao_id = ifelse(is.na(fao_id) & pixel_id %in% missing_fao$pixel_id,
-#                           nearest_fao_ids[match(pixel_id, missing_fao$pixel_id)],
-#                           fao_id))
-#   
-#   # Save the fixed lookup table
-#   write.csv(fixed_lookup, here("data/model_features/deg_1_x_1/fao/fao_fixed.csv"), row.names = FALSE)
-#   
-#   # Check if all pixels now have an FAO ID
-#   still_missing <- fixed_lookup %>%
-#     filter(is.na(fao_id))
-#   
-#   cat("\nAfter fixing, number of pixels still missing FAO ID:", nrow(still_missing), "\n")
-# } else {
-#   cat("No missing points to fix.\n")
-# }
 
 ```
 
@@ -895,7 +915,6 @@ Now prep wind data
 ```{r}
 ## lets prep chl data. They provide monthly at 60 arc mins (1 degree). We want yearly average and sd. Will need to reproject to our projection likely. 
 
-## why is there so much more data than SST???? Should only be 1980 layers... Is this chlorophyll at different depths?
 
 wind_obs_2014 <- read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv")) %>%
   filter(year == 2014) %>%
@@ -1181,5 +1200,63 @@ conversion_1_df <- conversion_1_df %>%
 
 qs::qsave(conversion_1_df, here("data/int/hours_to_days_conversion.qs"))
 
+```
+
+
+
+Distance to seamount data 
+
+```{r}
+
+library(nngeo)
+
+pixel_size <- 1
+
+mollweide_projection <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+
+# Read in data_grid, generated in data_wrangling.Rmd
+# We will do spatial joining in Mollweide, for proper calculations
+# Note that data grid still retains lat and lon columns, for joining with non-spatial tibbles
+# For Mollweide, always wrap around dateline, then transform, then calculate areas at end
+data_grid <- data.table::fread(here("data/model_features/deg_1_x_1/global_grid.csv"))%>%
+  st_as_sf(wkt = "geometry_wkt",
+           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")%>% 
+  st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% 
+  st_transform(mollweide_projection) %>%
+  mutate(pixel_area_m2 = st_area(geometry_wkt)%>%
+           units::drop_units()) 
+
+seamounts <- st_read(file.path(rdsi_raw_dir, "seamounts-yesson-2019/"), layer = "YessonEtAl2019-Seamounts-V2")
+
+analysis_projection = mollweide_projection
+
+global_grid = data_grid
+
+# Wrangle seamounts data
+# Calculate nearest distance from the centroid of each pixel to each seamount
+
+  seamounts <- seamounts %>%
+    dplyr::select(seamount_id = PeakID,
+                  geometry)%>% 
+    st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% 
+    st_transform(analysis_projection)
+  
+  wrangle_seamounts <- nngeo::st_nn(global_grid %>%
+                 st_centroid(),
+               seamounts, 
+               # Only select single nearest eez
+               k = 1, 
+               returnDist = T,
+               parallel = 1) %>%# floor(parallel::detectCores()/4))  %>% 
+    as_tibble() %>% 
+    mutate(nearest_seamount_id =  seamounts$seamount_id[as.numeric(nn)], 
+           nearest_seamount_distance_m = as.numeric(dist)) %>%
+    dplyr::select(-nn,-dist) %>%
+    bind_cols(global_grid %>%
+                st_set_geometry(NULL) %>%
+                dplyr::select(pixel_id))
+
+  write.csv(wrangle_seamounts, here("data/model_features/deg_1_x_1/seamounts.csv"), row.names = FALSE)
+  
 ```
 

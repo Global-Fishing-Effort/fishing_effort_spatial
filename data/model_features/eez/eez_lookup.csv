@@ -1,288 +1,169 @@
-"MRGID","MRGID_SOV1","TERRITORY1","ISO_TER1","SOVEREIGN1","ISO_SOV1","GEONAME"
-8444,2204,"American Samoa","ASM","United States","USA","United States Exclusive Economic Zone (American Samoa)"
-8379,2208,"Ascension","SHN","United Kingdom","GBR","British Exclusive Economic Zone (Ascension)"
-8446,2227,"Cook Islands","COK","New Zealand","NZL","New Zealand Exclusive Economic Zone (Cook Islands)"
-8389,2208,"Falkland / Malvinas Islands","FLK","United Kingdom","GBR","Overlapping claim Falkland / Malvinas Islands: United Kingdom / Argentina"
-8440,17,"French Polynesia","PYF","France","FRA","French Exclusive Economic Zone (French Polynesia)"
-8439,2208,"Pitcairn","PCN","United Kingdom","GBR","British Exclusive Economic Zone (Pitcairn)"
-8380,2208,"Saint Helena","SHN","United Kingdom","GBR","British Exclusive Economic Zone (Saint Helena)"
-8445,8671,"Samoa","WSM","Samoa","WSM","Samoan Exclusive Economic Zone"
-8448,8674,"Tonga","TON","Tonga","TON","Tongan Exclusive Economic Zone"
-8382,2208,"Tristan da Cunha","SHN","United Kingdom","GBR","British Exclusive Economic Zone (Tristan da Cunha)"
-8465,2165,"Chile","CHL","Chile","CHL","Chilean Exclusive Economic Zone"
-8447,2227,"Niue","NIU","New Zealand","NZL","New Zealand Exclusive Economic Zone (Niue)"
-48961,2216,"Uruguay","URY","Uruguay","URY","Joint regime area: Uruguay / Argentina"
-48962,2257,"Peru","PER","Peru","PER","Joint regime area: Peru / Ecuador"
-8467,2216,"Uruguay","URY","Uruguay","URY","Uruguayan Exclusive Economic Zone"
-8449,2227,"Tokelau","TKL","New Zealand","NZL","New Zealand Exclusive Economic Zone (Tokelau)"
-8432,2257,"Peru","PER","Peru","PER","Peruvian Exclusive Economic Zone"
-22756,2165,"Islas San Félix and San Ambrosio","CHL","Chile","CHL","Chilean Exclusive Economic Zone (Islas San Félix and San Ambrosio)"
-21787,2165,"Easter Island",NA,"Chile","CHL","Chilean Exclusive Economic Zone (Easter Island)"
-8381,2143,"Trindade",NA,"Brazil","BRA","Brazilian Exclusive Economic Zone (Trindade)"
-8450,2116,"Phoenix Group","KIR","Kiribati","KIR","Kiribati Exclusive Economic Zone (Phoenix Group)"
-8466,2149,"Argentina","ARG","Argentina","ARG","Argentinian Exclusive Economic Zone"
-8386,17,"Amsterdam and Saint Paul Islands","ATF","France","FRA","French Exclusive Economic Zone (Amsterdam and Saint Paul Islands)"
-8309,2147,"Christmas Island","CXR","Australia","AUS","Australian Exclusive Economic Zone (Christmas Island)"
-8308,2147,"Cocos Islands","CCK","Australia","AUS","Australian Exclusive Economic Zone (Cocos Islands)"
-8334,2163,"Comores","COM","Comores","COM","Comoran Exclusive Economic Zone"
-8385,17,"Crozet Islands","ATF","France","FRA","French Exclusive Economic Zone (Crozet Islands)"
-48944,17,"Mayotte","MYT","France","FRA","Overlapping claim Mayotte: France / Comores"
-48946,17,"Ile Tromelin",NA,"France","FRA","Overlapping claim Ile Tromelin: France / Madagascar / Republic of Mauritius"
-8388,2147,"Heard and McDonald Islands","HMD","Australia","AUS","Australian Exclusive Economic Zone (Heard and McDonald Islands)"
-8387,17,"Kerguélen","ATF","France","FRA","French Exclusive Economic Zone (Kerguélen)"
-8348,7963,"Madagascar","MDG","Madagascar","MDG","Madagascan Exclusive Economic Zone"
-8396,2176,"South Africa","ZAF","South Africa","ZAF","South African Exclusive Economic Zone"
-8312,17,"New Caledonia","NCL","France","FRA","French Exclusive Economic Zone (New Caledonia)"
-8310,2147,"Norfolk Island","NFK","Australia","AUS","Australian Exclusive Economic Zone (Norfolk Island)"
-8343,8614,"Republic of Mauritius","MUS","Republic of Mauritius","MUS","Mauritian Exclusive Economic Zone"
-8338,17,"Réunion","REU","France","FRA","French Exclusive Economic Zone (Réunion)"
-8313,2202,"Vanuatu","VUT","Vanuatu","VUT","Vanuatuan Exclusive Economic Zone"
-8395,2218,"Namibia","NAM","Namibia","NAM","Namibian Exclusive Economic Zone"
-21791,8757,"Oecusse",NA,"East Timor","TLS","Timorese Exclusive Economic Zone (Oecusse)"
-8394,8633,"Republic of the Congo","COG","Republic of the Congo","COG","Congolese (Republic of) Exclusive Economic Zone"
-8478,2150,"Angola","AGO","Angola","AGO","Angolan Exclusive Economic Zone"
-8347,2220,"Mozambique","MOZ","Mozambique","MOZ","Mozambican Exclusive Economic Zone"
-8349,2118,"Kenya","KEN","Kenya","KEN","Kenyan Exclusive Economic Zone"
-21798,2237,"Papua New Guinea","PNG","Papua New Guinea","PNG","Joint regime area Torres Strait Treaty: Papua New Guinea / Australia"
-8384,2176,"Prince Edward Islands",NA,"South Africa","ZAF","South African Exclusive Economic Zone (Prince Edward Islands)"
-8479,2205,"Tanzania","TZA","Tanzania","TZA","Tanzanian Exclusive Economic Zone"
-8314,8593,"Solomon Islands","SLB","Solomon Islands","SLB","Solomon Islands Exclusive Economic Zone"
-8337,2192,"Seychelles","SYC","Seychelles","SYC","Seychellois Exclusive Economic Zone"
-48945,7963,"Glorioso Islands",NA,"Madagascar","MDG","Overlapping claim Glorioso Islands: France / Madagascar"
-8341,17,"Europa Island","ATF","France","FRA","French Exclusive Economic Zone (Europa Island)"
-48948,17,"Matthew and Hunter Islands",NA,"France","FRA","Overlapping claim Matthew and Hunter Islands: France / Vanuatu"
-8477,2198,"Democratic Republic of the Congo","COD","Democratic Republic of the Congo","COD","Congolese (Democratic Republic of) Exclusive Economic Zone"
-8323,2147,"Australia","AUS","Australia","AUS","Australian Exclusive Economic Zone"
-8311,2147,"Macquarie Island",NA,"Australia","AUS","Australian Exclusive Economic Zone (Macquarie Island)"
-8339,17,"Juan de Nova Island","ATF","France","FRA","French Exclusive Economic Zone (Juan de Nova Island)"
-8340,17,"Bassas da India","ATF","France","FRA","French Exclusive Economic Zone (Bassas da India)"
-8758,8757,"East Timor","TLS","East Timor","TLS","Timorese Exclusive Economic Zone"
-8412,2208,"Anguilla","AIA","United Kingdom","GBR","British Exclusive Economic Zone (Anguilla)"
-8414,8645,"Antigua and Barbuda","ATG","Antigua and Barbuda","ATG","Antiguan and Barbudan Exclusive Economic Zone"
-26519,15,"Aruba","ABW","Netherlands","NLD","Dutch Exclusive Economic Zone (Aruba)"
-8361,2243,"Azores",NA,"Portugal","PRT","Portuguese Exclusive Economic Zone (Azores)"
-8404,2144,"Bahamas","BHS","Bahamas","BHS","Bahamian Exclusive Economic Zone"
-8418,8649,"Barbados","BRB","Barbados","BRB","Barbadian Exclusive Economic Zone"
-8429,2224,"Mexico","MEX","Mexico","MEX","Mexican Exclusive Economic Zone"
-26520,15,"Bonaire","BES","Netherlands","NLD","Dutch Exclusive Economic Zone (Bonaire)"
-8411,2208,"British Virgin Islands","VGB","United Kingdom","GBR","British Exclusive Economic Zone (British Virgin Islands)"
-8362,2168,"Cape Verde","CPV","Cape Verde","CPV","Cape Verdean Exclusive Economic Zone"
-8364,2185,"Canary Islands",NA,"Spain","ESP","Spanish Exclusive Economic Zone (Canary Islands)"
-8407,2208,"Cayman Islands","CYM","United Kingdom","GBR","British Exclusive Economic Zone (Cayman Islands)"
-8401,17,"Clipperton Island",NA,"France","FRA","French Exclusive Economic Zone (Clipperton Island)"
-8423,2249,"Panama","PAN","Panama","PAN","Panamanian Exclusive Economic Zone"
-8424,2162,"Costa Rica","CRI","Costa Rica","CRI","Costa Rican Exclusive Economic Zone"
-26517,15,"Curaçao","CUW","Netherlands","NLD","Dutch Exclusive Economic Zone (Curaçao)"
-8417,8648,"Dominica","DMA","Dominica","DMA","Dominican Exclusive Economic Zone"
-8409,8640,"Dominican Republic","DOM","Dominican Republic","DOM","Dominican (Republic) Exclusive Economic Zone"
-8430,2097,"Guatemala","GTM","Guatemala","GTM","Guatemalan Exclusive Economic Zone"
-8435,2157,"Faeroe","FRO","Denmark","DNK","Danish Exclusive Economic Zone (Faeroe)"
-8370,2113,"Gambia","GMB","Gambia","GMB","Gambian Exclusive Economic Zone"
-8365,2208,"Gibraltar","GIB","United Kingdom","GIB","Overlapping claim Gibraltar: United Kingdom / Spain"
-8419,8650,"Grenada","GRD","Grenada","GRD","Grenadian Exclusive Economic Zone"
-33177,17,"Guadeloupe","GLP","France","FRA","French Exclusive Economic Zone (Guadeloupe)"
-8390,2191,"Sierra Leone","SLE","Sierra Leone","SLE","Sierra Leonean Exclusive Economic Zone"
-5680,2129,"Iceland","ISL","Iceland","ISL","Icelandic Exclusive Economic Zone"
-8459,8682,"Jamaica","JAM","Jamaica","JAM","Jamaican Exclusive Economic Zone"
-8363,2243,"Madeira",NA,"Portugal","PRT","Portuguese Exclusive Economic Zone (Madeira)"
-8369,2236,"Mauritania","MRT","Mauritania","MRT","Mauritanian Exclusive Economic Zone"
-8415,2208,"Montserrat","MSR","United Kingdom","GBR","British Exclusive Economic Zone (Montserrat)"
-48951,8639,"Navassa Island",NA,"Haiti","HTI","Overlapping claim Navassa Island: United States / Haiti / Jamaica"
-8443,2204,"Palmyra Atoll","UMI","United States","USA","United States Exclusive Economic Zone (Palmyra Atoll)"
-33179,2204,"Puerto Rico","PRI","United States","USA","United States Exclusive Economic Zone (Puerto Rico)"
-26518,15,"Saba","BES","Netherlands","NLD","Dutch Exclusive Economic Zone (Saba)"
-48952,17,"Saint-Barthélemy","BLM","France","FRA","French Exclusive Economic Zone (Saint-Barthélemy)"
-26526,15,"Sint-Eustatius","BES","Netherlands","NLD","Dutch Exclusive Economic Zone (Sint-Eustatius)"
-8413,8644,"Saint Kitts and Nevis","KNA","Saint Kitts and Nevis","KNA","Kittitian and Nevisian Exclusive Economic Zone"
-8416,8647,"Saint Lucia","LCA","Saint Lucia","LCA","Saint Lucian Exclusive Economic Zone"
-8495,17,"Collectivity of Saint Martin","MAF","France","FRA","French Exclusive Economic Zone (Collectivity of Saint Martin)"
-8494,17,"Saint-Pierre and Miquelon","SPM","France","FRA","French Exclusive Economic Zone (Saint-Pierre and Miquelon)"
-8421,8651,"Saint Vincent and the Grenadines","VCT","Saint Vincent and the Grenadines","VCT","Saint Vincentian Exclusive Economic Zone"
-21803,15,"Sint-Maarten","SXM","Netherlands","NLD","Dutch Exclusive Economic Zone (Sint-Maarten)"
-8420,2186,"Trinidad and Tobago","TTO","Trinidad and Tobago","TTO","Trinidadian and Tobagonian Exclusive Economic Zone"
-8405,2208,"Turks and Caicos Islands","TCA","United Kingdom","GBR","British Exclusive Economic Zone (Turks and Caicos Islands)"
-33180,2204,"United States Virgin Islands","VIR","United States","USA","United States Exclusive Economic Zone (United States Virgin Islands)"
-5688,2243,"Portugal","PRT","Portugal","PRT","Portuguese Exclusive Economic Zone"
-8428,2135,"El Salvador","SLV","El Salvador","SLV","Salvadoran Exclusive Economic Zone"
-8457,8681,"Belize","BLZ","Belize","BLZ","Belizean Exclusive Economic Zone"
-8406,8637,"Cuba","CUB","Cuba","CUB","Cuban Exclusive Economic Zone"
-8408,8639,"Haiti","HTI","Haiti","HTI","Haitian Exclusive Economic Zone"
-33178,17,"Martinique","MTQ","France","FRA","French Exclusive Economic Zone (Martinique)"
-48964,2225,"Senegal","SEN","Senegal","SEN","Joint regime area: Senegal / Guinea-Bissau"
-48965,2201,"Venezuela","VEN","Venezuela","VEN","Overlapping claim: Venezuela / Netherlands (Aruba) / Dominican Republic"
-48966,17,"France","FRA","France","FRA","Joint regime area: Spain / France"
-48967,2208,"United Kingdom","GBR","United Kingdom","GBR","Joint regime area: United Kingdom / Denmark (Faeroe Islands)"
-48943,2169,"Canada","CAN","Canada","CAN","Overlapping claim: Canada / United States"
-48968,2162,"Costa Rica","CRI","Costa Rica","CRI","Joint regime area: Costa Rica / Ecuador (Galapagos)"
-8425,2255,"Nicaragua","NIC","Nicaragua","NIC","Nicaraguan Exclusive Economic Zone"
-8460,2124,"Guyana","GUY","Guyana","GUY","Guyanese Exclusive Economic Zone"
-48969,8649,"Barbados","BRB","Barbados","BRB","Joint regime area: Barbados / Guyana"
-48970,8640,"Dominican Republic","DOM","Dominican Republic","DOM","Joint regime area: Dominican Republic / Colombia"
-48971,2175,"Colombia","COL","Colombia","COL","Overlapping claim: Colombia / Dominican Republic / Venezuela"
-5681,2114,"Ireland","IRL","Ireland","IRL","Irish Exclusive Economic Zone"
-21788,2208,"Guernsey","GGY","United Kingdom","GBR","British Exclusive Economic Zone (Guernsey)"
-21789,2208,"Jersey","JEY","United Kingdom","GBR","British Exclusive Economic Zone (Jersey)"
-8371,2225,"Senegal","SEN","Senegal","SEN","Senegalese Exclusive Economic Zone"
-8471,8685,"Guinea-Bissau","GNB","Guinea-Bissau","GNB","Bissau-Guinean Exclusive Economic Zone"
-8472,2122,"Guinea","GIN","Guinea","GIN","Guinean Exclusive Economic Zone"
-8473,2161,"Ivory Coast","CIV","Ivory Coast","CIV","Ivorian Exclusive Economic Zone"
-33185,2124,"Guyana","GUY","Guyana","GUY","Overlapping claim: Guyana / Trinidad and Tobago / Venezuela"
-8391,2105,"Liberia","LBR","Liberia","LBR","Liberian Exclusive Economic Zone"
-21792,8682,"Jamaica","JAM","Jamaica","JAM","Joint regime area: Jamaica / Colombia"
-48972,2103,"Honduras","HND","Honduras","HND","Joint regime area: Honduras / United Kingdom (Cayman Islands)"
-48973,2157,"Faeroe","FRO","Denmark","DNK","Joint regime area: Iceland / Denmark (Faeroe Islands)"
-8433,2201,"Venezuela","VEN","Venezuela","VEN","Venezuelan Exclusive Economic Zone"
-8427,2103,"Honduras","HND","Honduras","HND","Honduran Exclusive Economic Zone"
-48974,2166,"Ecuador","ECU","Ecuador","ECU","Joint regime area: Ecuador / Colombia"
-48975,2129,"Iceland","ISL","Iceland","ISL","Joint regime area: Iceland / Norway (Jan Mayen)"
-8493,2169,"Canada","CAN","Canada","CAN","Canadian Exclusive Economic Zone"
-8368,8617,"Western Sahara","ESH","Western Sahara","ESH","Overlapping claim Western Sahara: Western Sahara / Morocco"
-8461,2182,"Suriname","SUR","Suriname","SUR","Surinamese Exclusive Economic Zone"
-8462,17,"French Guiana","GUF","France","FRA","French Exclusive Economic Zone (French Guiana)"
-48982,2204,"Puerto Rico","PRI","United States","USA","Overlapping claim: United States (Puerto Rico) / Dominican Republic"
-8452,2204,"Johnston Atoll","UMI","United States","USA","United States Exclusive Economic Zone (Johnston Atoll)"
-8426,2175,"Colombia","COL","Colombia","COL","Colombian Exclusive Economic Zone"
-62596,2175,"Serrana Bank",NA,"Colombia","COL","Colombian Exclusive Economic Zone (Serrana Bank)"
-62598,2175,"Quitasueño Bank",NA,"Colombia","COL","Colombian Exclusive Economic Zone (Quitasueño Bank)"
-48984,2175,"Serranilla Bank",NA,"Colombia","COL","Colombian Exclusive Economic Zone (Serranilla Bank)"
-48985,2175,"Bajo Nuevo Bank",NA,"Colombia","COL","Colombian Exclusive Economic Zone (Bajo Nuevo Bank)"
-8367,2221,"Morocco","MAR","Morocco","MAR","Moroccan Exclusive Economic Zone"
-49000,2185,"Melilla",NA,"Spain","ESP","Overlapping claim Melilla: Spain / Morocco"
-49001,2185,"Alhucemas Islands",NA,"Spain","ESP","Overlapping claim Alhucemas Islands: Spain / Morocco"
-48998,2185,"Perejil Island",NA,"Spain","ESP","Overlapping claim Perejil Island: Spain / Morocco"
-49002,2185,"Ceuta",NA,"Spain","ESP","Overlapping claim Ceuta: Spain / Morocco"
-48999,2185,"Peñón de Vélez de la Gomera",NA,"Spain","ESP","Overlapping claim Peñón de Vélez de la Gomera: Spain / Morocco"
-48997,2185,"Chafarinas Islands",NA,"Spain","ESP","Overlapping claim Chafarinas Islands: Spain / Morocco"
-8360,2206,"United Arab Emirates","ARE","United Arab Emirates","ARE","Emirati Exclusive Economic Zone"
-8376,2159,"Cyprus","CYP","Cyprus","CYP","Cypriote Exclusive Economic Zone"
-48947,2206,"Abu musa, Greater and Lesser Tunb",NA,"United Arab Emirates","ARE","Overlapping claim Abu musa, Greater and Lesser Tunb: United Arab Emirates / Iran"
-48956,2111,"Doumeira Islands",NA,"Eritrea","ERI","Overlapping claim Doumeira Islands: Eritrea / Djibouti"
-8490,3868,"Egypt","EGY","Egypt","EGY","Egyptian Exclusive Economic Zone"
-8351,2111,"Eritrea","ERI","Eritrea","ERI","Eritrean Exclusive Economic Zone"
-5678,2102,"Georgia","GEO","Georgia","GEO","Georgian Exclusive Economic Zone"
-8469,2126,"Iran","IRN","Iran","IRN","Iranian Exclusive Economic Zone"
-8374,2098,"Lebanon","LBN","Lebanon","LBN","Lebanese Exclusive Economic Zone"
-8372,2194,"Libya","LBY","Libya","LBY","Libyan Exclusive Economic Zone"
-5685,2217,"Malta","MLT","Malta","MLT","Maltese Exclusive Economic Zone"
-8354,2251,"Oman","OMN","Oman","OMN","Omani Exclusive Economic Zone"
-8356,2215,"Saudi Arabia","SAU","Saudi Arabia","SAU","Saudi Arabian Exclusive Economic Zone"
-8346,2195,"Sri Lanka","LKA","Sri Lanka","LKA","Sri Lankan Exclusive Economic Zone"
-8373,3384,"Syria","SYR","Syria","SYR","Syrian Exclusive Economic Zone"
-8392,8632,"Togo","TGO","Togo","TGO","Togolese Exclusive Economic Zone"
-5679,2099,"Greece","GRC","Greece","GRC","Greek Exclusive Economic Zone"
-5697,2213,"Turkey","TUR","Turkey","TUR","Turkish Exclusive Economic Zone"
-21790,2222,"Monaco","MCO","Monaco","MCO","Monégasque Exclusive Economic Zone"
-8366,2214,"Tunisia","TUN","Tunisia","TUN","Tunisian Exclusive Economic Zone"
-5691,17831,"Montenegro","MNE","Montenegro","MNE","Montenegrin Exclusive Economic Zone"
-5670,2153,"Albania","ALB","Albania","ALB","Albanian Exclusive Economic Zone"
-5672,2174,"Bulgaria","BGR","Bulgaria","BGR","Bulgarian Exclusive Economic Zone"
-48953,15525,"Palestine","PSE","Palestine","PSE","Palestinian Exclusive Economic Zone"
-8357,2115,"Kuwait","KWT","Kuwait","KWT","Kuwaiti Exclusive Economic Zone"
-8470,2125,"Iraq","IRQ","Iraq","IRQ","Iraqi Exclusive Economic Zone"
-8358,2154,"Bahrain","BHR","Bahrain","BHR","Bahraini Exclusive Economic Zone"
-8468,2242,"Qatar","QAT","Qatar","QAT","Qatari Exclusive Economic Zone"
-8353,2199,"Yemen","YEM","Yemen","YEM","Yemeni Exclusive Economic Zone"
-8375,2123,"Israel","ISR","Israel","ISR","Israeli Exclusive Economic Zone"
-8491,2120,"Jordan","JOR","Jordan","JOR","Jordanian Exclusive Economic Zone"
-8352,2131,"Djibouti","DJI","Djibouti","DJI","Djiboutian Exclusive Economic Zone"
-8481,2142,"Bangladesh","BGD","Bangladesh","BGD","Bangladeshi Exclusive Economic Zone"
-8474,2253,"Nigeria","NGA","Nigeria","NGA","Nigerian Exclusive Economic Zone"
-8475,2170,"Cameroon","CMR","Cameroon","CMR","Cameroonian Exclusive Economic Zone"
-21797,2238,"São Tomé and Principe","STP","São Tomé and Principe","STP","Joint regime area: São Tomé and Principe / Nigeria"
-48976,17,"France","FRA","France","FRA","Joint regime area: France / Italy"
-22491,2136,"Bosnia and Herzegovina","BIH","Bosnia and Herzegovina","BIH","Bosnian and Herzegovinian Exclusive Economic Zone"
-48957,2204,"Guam","GUM","United States","USA","United States Exclusive Economic Zone (Guam)"
-8318,2226,"Marshall Islands","MHL","Marshall Islands","MHL","Marshallese Exclusive Economic Zone"
-48980,2204,"Northern Mariana Islands","MNP","United States","USA","United States Exclusive Economic Zone (Northern Mariana Islands)"
-8315,8594,"Palau","PLW","Palau","PLW","Palauan Exclusive Economic Zone"
-8322,2245,"Philippines","PHL","Philippines","PHL","Philippine Exclusive Economic Zone"
-48954,2177,"Senkaku Islands",NA,"Taiwan","TWN","Overlapping claim Senkaku Islands: Taiwan / Japan / China"
-8485,2190,"Singapore","SGP","Singapore","SGP","Singaporean Exclusive Economic Zone"
-8332,2207,"Thailand","THA","Thailand","THA","Thailand Exclusive Economic Zone"
-8319,2204,"Wake Island / Enenkio","UMI","United States","USA","Overlapping claim Wake Island / Enenkio: United States / Marshall Islands"
-8484,2200,"Vietnam","VNM","Vietnam","VNM","Vietnamese Exclusive Economic Zone"
-21796,8600,"South Korea","KOR","South Korea","KOR","Joint regime area: South Korea / Japan"
-26521,2145,"Brunei","BRN","Brunei","BRN","Bruneian Exclusive Economic Zone"
-8321,2177,"Taiwan","TWN","Taiwan","TWN","Overlapping claim Taiwan: Taiwan / China"
-8328,8601,"North Korea","PRK","North Korea","PRK","North Korean Exclusive Economic Zone"
-8331,2171,"Cambodia","KHM","Cambodia","KHM","Cambodian Exclusive Economic Zone"
-8486,8603,"China","CHN","China","CHN","Chinese Exclusive Economic Zone"
-5675,2110,"Estonia","EST","Estonia","EST","Estonian Exclusive Economic Zone"
-5676,2106,"Finland","FIN","Finland","FIN","Finnish Exclusive Economic Zone"
-5694,2180,"Sweden","SWE","Sweden","SWE","Swedish Exclusive Economic Zone"
-5684,2156,"Lithuania","LTU","Lithuania","LTU","Lithuanian Exclusive Economic Zone"
-48977,2252,"Norway","NOR","Norway","NOR","Joint regime area: Sweden / Norway"
-3293,14,"Belgium","BEL","Belgium","BEL","Belgian Exclusive Economic Zone"
-5668,15,"Netherlands","NLD","Netherlands","NLD","Dutch Exclusive Economic Zone"
-5669,2101,"Germany","DEU","Germany","DEU","German Exclusive Economic Zone"
-5674,2157,"Denmark","DNK","Denmark","DNK","Danish Exclusive Economic Zone"
-5683,2132,"Latvia","LVA","Latvia","LVA","Latvian Exclusive Economic Zone"
-5673,2160,"Croatia","HRV","Croatia","HRV","Croatian Exclusive Economic Zone"
-5682,2133,"Italy","ITA","Italy","ITA","Italian Exclusive Economic Zone"
-5695,2196,"Ukraine","UKR","Ukraine","UKR","Overlapping claim Ukraine: Ukraine / Russia"
-5689,2241,"Romania","ROU","Romania","ROU","Romanian Exclusive Economic Zone"
-8487,2121,"Japan","JPN","Japan","JPN","Japanese Exclusive Economic Zone"
-48950,2121,"Kuril Islands",NA,"Japan","JPN","Overlapping claim Kuril Islands: Japan / Russia"
-8333,2128,"Andaman and Nicobar",NA,"India","IND","Indian Exclusive Economic Zone (Andaman and Nicobar Islands)"
-8359,2250,"Pakistan","PAK","Pakistan","PAK","Pakistani Exclusive Economic Zone"
-26523,2212,"Turkmenistan","TKM","Turkmenistan","TKM","Turkmen Exclusive Economic Zone"
-26524,2134,"Azerbaijan","AZE","Azerbaijan","AZE","Azerbaijani Exclusive Economic Zone"
-26522,2119,"Kazakhstan","KAZ","Kazakhstan","KAZ","Kazakh Exclusive Economic Zone"
-8482,2219,"Myanmar","MMR","Myanmar","MMR","Myanma Exclusive Economic Zone"
-5687,2244,"Poland","POL","Poland","POL","Polish Exclusive Economic Zone"
-8480,2128,"India","IND","India","IND","Indian Exclusive Economic Zone"
-26582,2183,"Halaib Triangle",NA,"Sudan","SDN","Overlapping claim Halaib Triangle: Sudan / Egypt"
-8393,2139,"Benin","BEN","Benin","BEN","Beninese Exclusive Economic Zone"
-5692,2188,"Slovenia","SVN","Slovenia","SVN","Slovenian Exclusive Economic Zone"
-8483,2230,"Malaysia","MYS","Malaysia","MYS","Malaysian Exclusive Economic Zone"
-49003,8603,"China","CHN","China","CHN","Overlapping claim: South China Sea"
-50167,2160,"Croatia","HRV","Croatia","HRV","Joint regime area: Croatia / Slovenia"
-8327,8600,"South Korea","KOR","South Korea","KOR","South Korean Exclusive Economic Zone"
-48955,2121,"Liancourt Rocks",NA,"Japan","JPN","Overlapping claim Liancourt Rocks: Japan / South Korea"
-50170,8468,"Qatar","QAT","Qatar","QAT","Overlapping claim: Qatar / Saudi Arabia / United Arab Emirates"
-8455,2227,"New Zealand","NZL","New Zealand","NZL","New Zealand Exclusive Economic Zone"
-8442,2204,"Jarvis Island","UMI","United States","USA","United States Exclusive Economic Zone (Jarvis Islands)"
-8326,2210,"Tuvalu","TUV","Tuvalu","TUV","Tuvaluan Exclusive Economic Zone"
-8454,17,"Wallis and Futuna","WLF","France","FRA","French Exclusive Economic Zone (Wallis and Futuna)"
-8451,2204,"Howland and Baker Islands","UMI","United States","USA","United States Exclusive Economic Zone (Howland and Baker Islands)"
-8325,2108,"Fiji","FJI","Fiji","FJI","Fijian Exclusive Economic Zone"
-8464,2143,"Brazil","BRA","Brazil","BRA","Brazilian Exclusive Economic Zone"
-8441,2116,"Line Group","KIR","Kiribati","KIR","Kiribati Exclusive Economic Zone (Line Group)"
-8488,2116,"Gilbert Islands","KIR","Kiribati","KIR","Kiribati Exclusive Economic Zone (Gilbert Islands)"
-8403,2166,"Galapagos",NA,"Ecuador","ECU","Ecuadorian Exclusive Economic Zone (Galapagos)"
-8431,2166,"Ecuador","ECU","Ecuador","ECU","Ecuadorian Exclusive Economic Zone"
-8397,2238,"Sao Tome and Principe","STP","Sao Tome and Principe","STP","São Toméan Exclusive Economic Zone"
-8316,8595,"Micronesia","FSM","Micronesia","FSM","Micronesian Exclusive Economic Zone"
-8398,2112,"Equatorial Guinea","GNQ","Equatorial Guinea","GNQ","Equatorial Guinean Exclusive Economic Zone"
-8345,2229,"Maldives","MDV","Maldives","MDV","Maldivian Exclusive Economic Zone"
-8324,2237,"Papua New Guinea","PNG","Papua New Guinea","PNG","Papua New Guinean Exclusive Economic Zone"
-8350,2187,"Federal Republic of Somalia","SOM","Federal Republic of Somalia","SOM","Somali Exclusive Economic Zone"
-8317,8596,"Nauru","NRU","Nauru","NRU","Nauruan Exclusive Economic Zone"
-8476,2104,"Gabon","GAB","Gabon","GAB","Gabonese Exclusive Economic Zone"
-8492,2127,"Indonesia","IDN","Indonesia","IDN","Indonesian Exclusive Economic Zone"
-48978,2204,"United States","USA","United States","USA","Joint regime area: United States / Russia"
-5677,17,"France","FRA","France","FRA","French Exclusive Economic Zone"
-8378,2152,"Algeria","DZA","Algeria","DZA","Algerian Exclusive Economic Zone"
-8400,2100,"Ghana","GHA","Ghana","GHA","Ghanaian Exclusive Economic Zone"
-8438,2157,"Greenland","GRL","Denmark","DNK","Danish Exclusive Economic Zone (Greenland)"
-5696,2208,"United Kingdom","GBR","United Kingdom","GBR","British Exclusive Economic Zone"
-8453,2204,"Hawaii",NA,"United States","USA","United States Exclusive Economic Zone (Hawaii)"
-33181,2252,"Svalbard","SJM","Norway","NOR","Norwegian Exclusive Economic Zone (Svalbard)"
-5686,2252,"Norway","NOR","Norway","NOR","Norwegian Exclusive Economic Zone"
-5690,2240,"Russia","RUS","Russia","RUS","Russian Exclusive Economic Zone"
-8437,2252,"Jan Mayen","SJM","Norway","NOR","Norwegian Exclusive Economic Zone (Jan Mayen)"
-8463,2204,"Alaska",NA,"United States","USA","United States Exclusive Economic Zone (Alaska)"
-5693,2185,"Spain","ESP","Spain","ESP","Spanish Exclusive Economic Zone"
-62589,8614,"Chagos Archipelago",NA,"Republic of Mauritius","MUS","Mauritian Exclusive Economic Zone (Chagos Archipelago)"
-8383,2208,"South Georgia and the South Sandwich Islands","SGS","United Kingdom","GBR","Overlapping claim South Georgia and the South Sandwich Islands: United Kingdom / Argentina"
-8402,2208,"Bermuda","BMU","United Kingdom","GBR","British Exclusive Economic Zone (Bermuda)"
-8456,2204,"United States","USA","United States","USA","United States Exclusive Economic Zone"
-8355,2183,"Sudan","SDN","Sudan","SDN","Sudanese Exclusive Economic Zone"
-64446,2208,"Isle of Man","IMN","United Kingdom","GBR","British Exclusive Economic Zone (Isle of Man)"
-64460,2125,"Iraq","IRQ","Iraq","IRQ","Overlapping claim: Iraq / Iran"
-64430,3868,"Egypt","EGY","Egypt","EGY","Overlapping claim: Egypt / Libya"
-64431,8681,"Belize","BLZ","Belize","BLZ","Overlapping claim: Belize / Honduras"
-64459,2252,"Norway","NOR","Norway","NOR","Joint regime area: Norway / Russia"
-64440,2230,"Malaysia","MYS","Malaysia","MYS","Overlapping claim: Malaysia / Singapore"
-99999,99999,NA,NA,"High seas","HSX","High seas region"
-999999,999999,NA,NA,"Land","LND","Land region"
+"eez_sovereign","eez_id"
+"USA",2204
+"GBR",2208
+"NZL",2227
+"FRA",17
+"WSM",8671
+"TON",8674
+"CHL",2165
+"URY",2216
+"PER",2257
+"BRA",2143
+"KIR",2116
+"ARG",2149
+"AUS",2147
+"COM",2163
+"MDG",7963
+"ZAF",2176
+"MUS",8614
+"VUT",2202
+"NAM",2218
+"TLS",8757
+"COG",8633
+"AGO",2150
+"MOZ",2220
+"KEN",2118
+"PNG",2237
+"TZA",2205
+"SLB",8593
+"SYC",2192
+"COD",2198
+"ATG",8645
+"NLD",15
+"PRT",2243
+"BHS",2144
+"BRB",8649
+"MEX",2224
+"CPV",2168
+"ESP",2185
+"PAN",2249
+"CRI",2162
+"DMA",8648
+"DOM",8640
+"GTM",2097
+"DNK",2157
+"GMB",2113
+"GRD",8650
+"SLE",2191
+"ISL",2129
+"JAM",8682
+"MRT",2236
+"KNA",8644
+"LCA",8647
+"VCT",8651
+"TTO",2186
+"SLV",2135
+"BLZ",8681
+"CUB",8637
+"HTI",8639
+"SEN",2225
+"NIC",2255
+"GUY",2124
+"IRL",2114
+"GNB",8685
+"GIN",2122
+"CIV",2161
+"LBR",2105
+"HND",2103
+"VEN",2201
+"ECU",2166
+"CAN",2169
+"SUR",2182
+"COL",2175
+"MAR",2221
+"ARE",2206
+"CYP",2159
+"EGY",3868
+"ERI",2111
+"GEO",2102
+"IRN",2126
+"LBN",2098
+"LBY",2194
+"MLT",2217
+"OMN",2251
+"SAU",2215
+"LKA",2195
+"SYR",3384
+"TGO",8632
+"GRC",2099
+"TUR",2213
+"MCO",2222
+"TUN",2214
+"MNE",17831
+"ALB",2153
+"BGR",2174
+"PSE",15525
+"KWT",2115
+"IRQ",2125
+"BHR",2154
+"QAT",2242
+"YEM",2199
+"ISR",2123
+"JOR",2120
+"DJI",2131
+"BGD",2142
+"NGA",2253
+"CMR",2170
+"STP",2238
+"BIH",2136
+"MHL",2226
+"PLW",8594
+"PHL",2245
+"SGP",2190
+"THA",2207
+"VNM",2200
+"KOR",8600
+"BRN",2145
+"PRK",8601
+"KHM",2171
+"CHN",8603
+"EST",2110
+"FIN",2106
+"SWE",2180
+"LTU",2156
+"NOR",2252
+"BEL",14
+"DEU",2101
+"LVA",2132
+"HRV",2160
+"ITA",2133
+"ROU",2241
+"JPN",2121
+"IND",2128
+"PAK",2250
+"TKM",2212
+"AZE",2134
+"KAZ",2119
+"MMR",2219
+"POL",2244
+"BEN",2139
+"SVN",2188
+"MYS",2230
+"TUV",2210
+"FJI",2108
+"FSM",8595
+"GNQ",2112
+"MDV",2229
+"SOM",2187
+"NRU",8596
+"GAB",2104
+"IDN",2127
+"DZA",2152
+"GHA",2100
+"RUS",2240
+"SDN",2183
+"High seas",99999
+"COK",8672
+"PYF",8656
+"MYT",8606
+"NCL",2261
+"REU",8609
+"RAA",2454
+"FRO",3297
+"GLP",8654
+"RAM",4956
+"GUF",8683
+"TWN",2177
+"UKR",2196
+"WLF",8680
+"GRL",2260
