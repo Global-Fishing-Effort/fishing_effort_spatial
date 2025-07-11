@@ -1,0 +1,160 @@
+---
+title: "Prep country level data indices for modelling"
+author: "Gage Clawson (IMAS)"
+date: '`r format(Sys.time(), "%m/%d/%Y")`'
+output: 
+  pdf_document: 
+    number_sections: yes
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: console
+---
+
+# Summary
+
+Prep country level data indices for modelling
+ - Pacific Decadal Oscillation index 
+ - El Nino South Oscillation Index
+ - World bank development regions
+ - Global fishing index data 
+ 
+```{r echo = FALSE}
+# This chunk sets up default settings for all chunks below
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,fig.width = 7.5,fig.height = 5,dev = 'png',dpi=300)
+```
+
+```{r include=FALSE}
+# Load all necessary packages
+library(tidyverse)
+library(sf)
+library(glue)
+library(rnaturalearth)
+library(countrycode)
+library(terra)
+library(here)
+library(janitor)
+library(readxl)
+
+options(scipen = 20)
+
+source(here("R/dir.R"))
+
+```
+
+# Defining our global grid
+
+```{r}
+pixel_size <- 0.5
+
+mollweide_projection <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+
+# Read in data_grid, generated in data_wrangling.Rmd
+# We will do spatial joining in Mollweide, for proper calculations
+# Note that data grid still retains lat and lon columns, for joining with non-spatial tibbles
+# For Mollweide, always wrap around dateline, then transform, then calculate areas at end
+
+data_grid <- data.table::fread(here::here("data/model_features/global_grid.csv")) %>%
+  st_as_sf(wkt = "geometry_wkt",
+           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
+              mutate(pixel_area_m2 = sf::st_area(geometry_wkt) %>%
+                 units::drop_units())
+```
+
+Pacific Decadal Oscillation index 
+
+https://www.ncei.noaa.gov/pub/data/cmb/ersst/v5/index/ersst.v5.pdo.dat
+
+```{r}
+
+# Pull and wrangle PDO data from NOAA
+# Calculate annual mean and SD for our time period of interest
+
+wrangle_pdo_data <- 
+  read.table(url("https://www.ncei.noaa.gov/pub/data/cmb/ersst/v5/index/ersst.v5.pdo.dat"), skip = 2) %>%
+      as_tibble() %>%
+    rename(year = V1) %>%
+    pivot_longer(-year) %>%
+    mutate(month = stringr::str_remove_all(name,"V") %>%
+             as.numeric() - 1,
+           date = lubridate::ymd(glue::glue("{year}-{month}-1")),
+           year = lubridate::year(date)) %>%
+    dplyr::select(year,pdo_index = value) %>%
+    filter(year >= 1950,
+           year <= 2024) %>%
+    mutate(pdo_index = ifelse(pdo_index == 99.99,NA_real_,pdo_index)) %>%
+    group_by(year) %>%
+  summarise(mean = mean(pdo_index, na.rm = TRUE),
+            sd = sd(pdo_index, na.rm = TRUE)) %>%
+  ungroup() #
+
+
+write.csv(wrangle_pdo_data, here("data/model_features/pdo_index.csv"), row.names = FALSE)
+
+```
+
+El Nino South Oscillation Index
+Download from:https://psl.noaa.gov/data/correlation/oni.data
+
+N. Rayner et al., Global analyses of sea surface temperature, sea ice, and night marine air temperature since the late nineteenth century. J. Geophys. Res. Atmos. 108, 1–25 (2003).
+
+```{r}
+# Pull and wrangle ENSO data from NOAA
+# https://psl.noaa.gov/data/correlation/oni.data
+# Calculate annual mean and SD for our time period of interest
+wrangle_enso_data <- 
+  read.table(url("https://psl.noaa.gov/data/correlation/oni.data"),skip=1,nrows=75) %>%
+    as_tibble() %>%
+    rename(year = V1) %>%
+    pivot_longer(-year) %>%
+    mutate(month = stringr::str_remove_all(name,"V") %>%
+             as.numeric() - 1,
+           date = lubridate::ymd(glue::glue("{year}-{month}-1")),
+           year = lubridate::year(date)) %>%
+    dplyr::select(year,enso_index = value) %>%
+    filter(year >= 1950,
+           year <= 2024)%>%
+    group_by(year) %>%
+    summarize(across(everything(),list(mean = ~mean(.,na.rm=TRUE),
+                                       sd = ~sd(.,na.rm=TRUE)))) %>%
+    ungroup()
+
+write.csv(wrangle_enso_data, here("data/model_features/enso_index.csv"), row.names = FALSE)
+
+```
+
+# World bank development regions
+
+```{r}
+
+eez_lookup_ids <- read.csv(here("data/model_features/eez/eez_lookup.csv"))
+
+eez_region_features <- eez_lookup_ids %>%
+    mutate(eez_region_world_bank_7 = countrycode::countrycode(eez_sovereign,"iso3c","region"))%>%
+    distinct(eez_sovereign, eez_region_world_bank_7, eez_id)  %>% 
+  mutate(eez_region_world_bank_7 = case_when(
+    eez_sovereign == "ESH" ~ "Middle East & North Africa", 
+    eez_sovereign == "High seas" ~ "High seas", 
+    eez_sovereign == "MYT" ~ "Sub-Saharan Africa",
+    eez_sovereign == "REU" ~ "Sub-Saharan Africa",
+    eez_sovereign == "RAA" ~ "Europe & Central Asia",
+    eez_sovereign == "RAM" ~ "Europe & Central Asia",
+    eez_sovereign == "WLF" ~ "East Asia & Pacific",
+    TRUE ~ eez_region_world_bank_7
+  ))
+
+write.csv(eez_region_features, here("data/model_features/world_bank_regions.csv"), row.names = FALSE)
+
+```
+
+Global fishing index data 
+
+```{r}
+
+gfi_raw <- readxl::read_xlsx("/home/ubuntu/data_storage/raw_data/Global Fishing Index 2021 - Data download V1.1/Global Fishing Index 2021 Data for Download V1.1.xlsx", sheet = 3, skip = 1)  %>% 
+  dplyr::select(flag_fin  = "ISO Code", gov_score = "Governance capacity") %>%
+  mutate(gov_score = as.factor(gov_score)) # make it into a categorical variable
+
+write.csv(gfi_raw, here("data/model_features/global_fishing_index_governance.csv"), row.names = FALSE)
+```
+

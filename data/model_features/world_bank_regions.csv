@@ -152,18 +152,18 @@
 "GHA","Sub-Saharan Africa",2100
 "RUS","Europe & Central Asia",2240
 "SDN","Sub-Saharan Africa",2183
-"High seas",NA,99999
+"High seas","High seas",99999
 "COK","East Asia & Pacific",8672
 "PYF","East Asia & Pacific",8656
-"MYT",NA,8606
+"MYT","Sub-Saharan Africa",8606
 "NCL","East Asia & Pacific",2261
-"REU",NA,8609
-"RAA",NA,2454
+"REU","Sub-Saharan Africa",8609
+"RAA","Europe & Central Asia",2454
 "FRO","Europe & Central Asia",3297
 "GLP","Latin America & Caribbean",8654
-"RAM",NA,4956
+"RAM","Europe & Central Asia",4956
 "GUF","Latin America & Caribbean",8683
 "TWN","East Asia & Pacific",2177
 "UKR","Europe & Central Asia",2196
-"WLF",NA,8680
+"WLF","East Asia & Pacific",8680
 "GRL","Europe & Central Asia",2260

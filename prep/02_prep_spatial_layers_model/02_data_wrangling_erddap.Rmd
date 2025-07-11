@@ -1,0 +1,225 @@
+---
+title: "Data wrangling - errdap"
+author: "Gage Clawson (IMAS)"
+date: '`r format(Sys.time(), "%m/%d/%Y")`'
+output: 
+  pdf_document: 
+    number_sections: yes
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: console
+---
+
+# Summary 
+
+Spatially and temporally aggregate errdap data to 0.5 and 1 degree grids
+
+```{r echo = FALSE}
+# This chunk sets up default settings for all chunks below
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,fig.width = 7.5,fig.height = 5,dev = 'png',dpi=300)
+```
+
+```{r include=FALSE}
+# Load all necessary packages
+library(tidyverse)
+library(sf)
+library(stars)
+library(rerddap)
+library(rnaturalearth)
+library(glue)
+library(scico)
+library(lubridate)
+library(furrr)
+library(here)
+library(terra)
+library(ncdf4)
+library(strex)
+source(here::here("prep/02_prep_spatial_layers_model/_functions_data_wrangling_erddap.R"))
+source(here("R/dir.R"))
+
+# Set the data directory. This specifies the folder in our drive where the data can be found. 
+
+data_directory <- rdsi_raw_dir
+
+# Get high-res ocean data
+ocean <- ne_download(scale = 50, type = 'ocean', category = 'physical',returnclass = "sf") %>%
+  dplyr::select(geometry)
+```
+
+# Defining our global grid
+
+We'll start by aggregating to a 0.5 by 0.5 degree grid
+
+```{r}
+pixel_size <- 0.5
+
+# Start with global ocean
+starting_shape <- ocean
+```
+
+Only need to run once: 
+
+```{r eval = params$download_data}
+# Make a grid using desired pixel size
+data_grid <- starting_shape %>%
+  make_grid_custom(pixel_size = pixel_size)
+
+data_grid %>%
+  # Add geometry wkt column for saving this as a csv
+  mutate(geometry_wkt = st_as_text(geometry)) %>% 
+  # Make geometry point, grab lon/lat in lower left-hand corner
+  # We'll use this later for joining to GFW data
+  st_cast("POINT") %>%
+  dplyr::mutate(lon = sf::st_coordinates(.)[,1],
+                lat = sf::st_coordinates(.)[,2])%>%
+  st_set_geometry(NULL)  %>% 
+  group_by(pixel_id,geometry_wkt) %>% 
+  summarize(lon = min(lon),
+            lat = min(lat))%>%
+  ungroup()  %>%
+  as_tibble() %>%
+  write_csv(here::here("data/model_features/global_grid.csv"))
+```
+
+We define a global grid using pixels that are `r pixel_size` degree latitude by `r pixel_size` degree longitude. We will then aggregate all of our model feature data to these `r pixel_size`x`r pixel_size` degree pixels. We include only pixels that overlap with the ocean. Each pixel is assigned a static `pixel_id`.
+
+```{r}
+data_grid <- data.table::fread(here::here("data/model_features/global_grid.csv")) %>%
+  st_as_sf(wkt = "geometry_wkt",
+           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+
+# test <- data_grid %>%
+#   st_drop_geometry() %>%
+#   dplyr::select(lon, lat, pixel_id) %>%
+#   rast(., type = "xyz") # 0.5 by 0.5.. cool it worked.
+# plot(test)
+
+```
+
+
+## SST and SST anomaly data 
+
+We use 0.25 degree data from [SST, Daily Optimum Interpolation (OI), AVHRR Only, Version 2.1, Final, Global, 0.25°, 1981-present, Lon+/-180](https://coastwatch.pfeg.noaa.gov/erddap/info/ncdcOisst21Agg_LonPM180/index.html). These data download ~25x as fast and are much faster to spatially aggregate.
+
+```{r eval = params$aggregate_data}
+# Spatially aggregate SST and SST anomaly data
+spatially_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
+                                        spatial_aggregation = data_grid,
+                                        years = 2014:2024,  # really only need these years
+                                        run_parallel = TRUE)
+```
+
+```{r eval = params$aggregate_data}
+# Spatially aggregate SST and SST anomaly data
+
+temporally_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
+                                         temporal_aggregation = "year",
+                                         run_parallel = TRUE,
+                                         years_per_chunk = 5)
+
+```
+
+
+# Chlorophyll
+
+We get monthly chlorophyll data from [Chlorophyll-a, Aqua MODIS, NPP, L3SMI, Global, 4km, Science Quality, 2003- present (Monthly Composite)](https://coastwatch.pfeg.noaa.gov/erddap/griddap/erdMH1chlamday.html). Units are mg m-3 .
+
+
+```{r eval = params$aggregate_data}
+# Spatially aggregate chl data
+spatially_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
+                                        spatial_aggregation = data_grid,
+                                        years = 2014:2024, # only need these dates 
+                                        run_parallel = TRUE)
+```
+
+```{r eval = params$aggregate_data}
+# Spatially aggregate SST and SST anomaly data
+
+
+temporally_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
+                                         temporal_aggregation = "year",
+                                         run_parallel = TRUE,
+                                         years_per_chunk = 5)
+
+```
+
+
+# Now we prep the same data to a 1 degree by 1 degree grid
+
+## Defining our global grid
+
+```{r}
+pixel_size <- 1
+
+# Create polygon rectangle of globe
+# This will serve as basis of grid
+global_polygon_sf <-
+  tibble(lon = c(-180,-180,180,180,-180),
+       lat = c(-90,90,90,-90,-90))%>%
+  as.matrix() %>%
+  list(.) %>%
+  st_polygon() %>%
+  st_sfc(crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
+  st_as_sf()
+
+# Start with global ocean
+starting_shape <- ocean
+
+data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
+  st_as_sf(wkt = "geometry_wkt",
+           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
+              mutate(pixel_area_m2 = sf::st_area(geometry_wkt) %>%
+                 units::drop_units())
+
+```
+
+Prep 2015-2024 SST, CHL, data, and save
+
+```{r}
+## start with prepping 1 by 1 sst data for 2015 only. Then we will appead it onto the existing data downloaded from the paper
+# Spatially aggregate SST and SST anomaly data
+spatially_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
+                                        spatial_aggregation = data_grid,
+                                        years = 2016:2024, # choose years you want to run
+                                        run_parallel = TRUE)
+
+
+# temporally aggregate SST and SST anomaly data
+
+temporally_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
+                                         temporal_aggregation = "year",
+                                         run_parallel = TRUE,
+                                         years_per_chunk = 5)
+
+## now lets merge them all together
+files <- list.files(here("data/model_features/deg_1_x_1/ncdcOisst21Agg_LonPM180/"), full.names = TRUE)
+
+all_sst <- lapply(files, read.csv) %>%
+  bind_rows() 
+
+write.csv(all_sst, here("data/model_features/deg_1_x_1/errdap_sst.csv"), row.names = FALSE)
+
+
+# Spatially aggregate chl data for 2015
+spatially_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
+                                        spatial_aggregation = data_grid,
+                                        years = 2016:2024, # choose years you want to run
+                                        run_parallel = TRUE)
+
+temporally_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
+                                         temporal_aggregation = "year",
+                                         run_parallel = TRUE,
+                                         years_per_chunk = 5)
+## now lets merge them all together
+files <- list.files(here("data/model_features/deg_1_x_1/erdMH1chlamday/"), full.names = TRUE)
+
+all_chl <- lapply(files, read.csv) %>%
+  bind_rows() 
+
+write.csv(all_chl, here("data/model_features/deg_1_x_1/errdap_chl.csv"), row.names = FALSE)
+
+
+```
+

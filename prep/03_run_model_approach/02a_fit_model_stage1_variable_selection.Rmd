@@ -135,8 +135,6 @@ model_formula_rf <- formula(
     ocean +  # Spatial categorical variables
     eez_region_world_bank_7 + # world bank regions
     gov_score + # global fishing index; make sure this is categorical and not a numeric variable
-    # Total effort predictor (log-transformed)
-  #  log_total_fishing_hours + # removing this for now; seems unneccesary 
     # Continuous predictors
     lon + lat + 
     elevation_m + # depth
@@ -149,8 +147,8 @@ model_formula_rf <- formula(
     wind_speed_ms_mean + 
     wind_speed_ms_sd +
     enso_index_mean + # el nino data 
-    enso_index_sd + # pacific decadal oscillation
-    pdo_index_mean +  
+    enso_index_sd + 
+    pdo_index_mean +  # pacific decadal oscillation
     pdo_index_sd + 
     nearest_seamount_distance_m + 
     year

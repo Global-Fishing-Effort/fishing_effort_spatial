@@ -1,0 +1,563 @@
+---
+title: "Data wrangling - Spatial measures 0.5 degrees"
+author: "Gage Clawson (IMAS)"
+date: '`r format(Sys.time(), "%m/%d/%Y")`'
+output: 
+  pdf_document: 
+    number_sections: yes
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: console
+---
+
+# Summary 
+
+
+Prep spatial measures we use to inform our model at 1 degree resolution
+ - distance to short, port
+ - bathymetry (depth)
+ - EEZ regions
+ - FAO regions
+ - mesopelagic regions
+ - ocean regions
+ - distance to nearest seamount
+ - days at sea to fishing hours data
+ 
+```{r}
+# Load all necessary packages
+library(tidyverse)
+library(sf)
+library(stars)
+library(rnaturalearth)
+library(glue)
+library(scico)
+library(lubridate)
+library(furrr)
+library(here)
+library(terra)
+library(fasterize)
+library(raster)
+library(janitor)
+library(strex)
+library(qs)
+
+source(here::here("prep/02_prep_spatial_layers_model/_functions_data_wrangling_erddap.R"))
+source(here("R/dir.R"))
+
+# Set the data directory. This specifies the folder in our drive where the data can be found. 
+
+data_directory <- rdsi_raw_dir
+
+# Get high-res ocean data
+ocean <- ne_download(scale = 50, type = 'ocean', category = 'physical',returnclass = "sf") %>%
+  dplyr::select(geometry)
+
+```
+
+# Defining our global grid
+
+```{r}
+pixel_size <- 1
+
+data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
+  st_as_sf(wkt = "geometry_wkt",
+           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
+              mutate(pixel_area_m2 = sf::st_area(geometry_wkt) %>%
+                 units::drop_units())
+
+```
+
+We use the distance to short, port, and bathymetry data provided by Mcdonald et al. 2024, so no need to aggregate from the raw data: https://github.com/emlab-ucsb/mpa-fishing-effort-redistribution/blob/cfb990e431418c69f13fac4906df9a8c80ba0605/data/model_features/gfw_static_spatial_measures.csv 
+
+Need to prep 1 by 1 EEZ, FAO, and mesopelagic data 
+
+# Determine EEZ of each cell 
+
+Use Marine Region's [Maritime Boundaries Geodatabase: Maritime Boundaries and Exclusive Economic Zones (200NM), version 12]
+
+```{r}
+analysis_projection <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+eez <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"), layer = 'eez_v12')
+
+  hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
+    ## remove artisanal
+    filter(sector == "I") %>%
+    group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
+    summarize(
+      total_nominal_fishing_hours = sum(nom_active_hours, na.rm = TRUE),
+      total_effective_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    dplyr::select(flag_fin, year, gear, length_category, total_nominal_fishing_hours, total_effective_fishing_hours) %>%
+        filter(total_nominal_fishing_hours > 0) 
+
+rousseau_eezs <- unique(hist_fish_data$flag_fin) #151
+  
+test <- eez %>%
+  st_drop_geometry() 
+
+eez_lookup_ids <- eez %>% 
+      filter(POL_TYPE !=  "Overlapping claim") %>% 
+  st_drop_geometry() %>%
+  dplyr::distinct(eez_sovereign = ISO_SOV1, eez_id = MRGID_SOV1) %>%
+        filter(eez_sovereign != "ATA")  %>% 
+  add_row(eez_sovereign = "High seas", eez_id = 99999)
+
+sort(setdiff(rousseau_eezs, eez_lookup_ids$eez_sovereign)) # [1] "COK" "FRO" "GLP" "GRL" "GUF" "HKG" "MYT" "NCL" "PYF" "RAA" "RAM" "REU" "TWN" "UKR" "WLF"; # missing these 
+
+# ok I think we will need to go one by one...
+
+# cook islands, faeroe, guadeloupe, greenland, french guiana, mayotte, new calednia, french polynesia, azores, madeira, reunion, Taiwan
+eez_terr_fix <- eez %>%
+  st_drop_geometry() %>%
+  filter(ISO_TER1 %in% c("COK", "FRO", "GLP", "GRL", "GUF", "MYT", "NCL", "PYF", "REU", "TWN", "UKR", "WLF") | MRGID_TER1 %in% c(8672, 3297, 8654, 2260, 8683, 8606, 2261, 8656, 2454, 4956, 8609, 2177, 2196, 8680)) %>%
+  distinct(eez_sovereign = ISO_TER1, eez_id = MRGID_TER1) %>% # cool, just missing hong kong
+  mutate(eez_id = as.character(eez_id)) %>%
+  mutate(eez_sovereign = case_when(
+    eez_id == 2454 ~ "RAA", 
+    eez_id == 4956 ~ "RAM",
+    TRUE ~ eez_sovereign 
+  )) %>%
+  mutate(eez_id = as.numeric(eez_id))
+
+eez_lookup_fix <- eez_lookup_ids %>% 
+  rbind(., eez_terr_fix)
+
+sort(setdiff(rousseau_eezs, eez_lookup_fix$eez_sovereign))  # just hong kong, good
+
+write.csv(eez_lookup_fix, here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"), row.names = FALSE)
+
+  eez_sovereign_nations <- eez %>%
+    filter(POL_TYPE !=  "Overlapping claim") %>%
+    filter(!str_detect(GEONAME, "Greenland|Faeroe|Cook Islands|Guadeloupe|French Guiana|French Polynesia|New Caledonia|Réunion|Wallis and Futuna|Azores|Madeira")) %>%
+   dplyr::select(eez_sovereign = ISO_SOV1) %>%
+    # Don't include Antarctica - classify it as high seas instead
+    filter(eez_sovereign != "ATA")  
+
+    eez_territory <- eez %>%
+  filter(ISO_TER1 %in% c("COK", "FRO", "GLP", "GRL", "GUF", "MYT", "NCL", "PYF", "REU", "TWN", "UKR", "WLF") | MRGID_TER1 %in% c(8672, 3297, 8654, 2260, 8683, 8606, 2261, 8656, 2454, 4956, 8609, 2177, 2196, 8680)) %>%
+      filter(GEONAME != "Joint regime area: Iceland / Denmark (Faeroe Islands)") %>% 
+  dplyr::select(eez_sovereign = ISO_TER1, eez_id = MRGID_TER1) %>% # cool, just missing hong kong
+  mutate(eez_id = as.character(eez_id)) %>%
+  mutate(eez_sovereign = case_when(
+    eez_id == 2454 ~ "RAA", 
+    eez_id == 4956 ~ "RAM",
+    TRUE ~ eez_sovereign 
+  )) %>%
+  mutate(eez_id = as.numeric(eez_id)) %>%
+  dplyr::select(eez_sovereign) 
+
+    
+eez_all <- rbind(eez_sovereign_nations, eez_territory) %>% 
+    sf::st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>%
+    sf::st_transform(analysis_projection) %>%
+    sf::st_make_valid() %>%
+    mutate(eez_area_m2 = sf::st_area(geometry)%>%
+             units::drop_units())
+
+  # Now intersect our grids with EEZs, calculate fraction each grid overlaps with EEZ
+  # And only pick one EEZ per grid
+  data_grid_eez <- data_grid %>% 
+    sf::st_intersection(eez_all) 
+  
+  save_data_grid_eez <- data_grid_eez %>%
+    st_drop_geometry()
+  
+  qs::qsave(save_data_grid_eez, here("data/model_features/deg_1_x_1/eez/int/eez_intersection.qs")) # save as we go
+  
+  data_grid_eez_2 <- data_grid_eez %>% 
+      mutate(geometry_wkt = sf::st_make_valid(geometry_wkt)) %>%
+    mutate(area_eez_overlap_m2 = sf::st_area(geometry_wkt)%>%
+             units::drop_units())
+  
+  data_grid_eez_3 <- data_grid_eez_2 %>%
+    left_join(data_grid %>% st_drop_geometry()) %>%
+    st_drop_geometry() %>%
+    mutate(fraction_eez_overlap = (area_eez_overlap_m2 / pixel_area_m2) %>%
+             pmax(0) %>%
+             pmin(1))%>%
+    group_by(pixel_id) %>%
+    slice_max(area_eez_overlap_m2, n = 1, with_ties = FALSE)%>%
+    # In cases when there are ties, take largest EEZ
+    ungroup() %>%
+    dplyr::select(pixel_id,eez_sovereign,fraction_eez_overlap)
+  
+  qs::qsave(data_grid_eez_3, here("data/model_features/deg_1_x_1/eez/int/eez_intersection_no_highseas.qs"))
+
+  data_grid_eez_3 <- qread(here("data/model_features/deg_1_x_1/eez/int/eez_intersection_no_highseas.qs")) %>%
+    dplyr::select(-fraction_eez_overlap)
+  
+    data_grid_eez_2_fix <- qs::qread(here("data/model_features/deg_1_x_1/eez/int/eez_intersection.qs"))
+  
+  data_grid_eez_3_missing <- data_grid_eez_2_fix %>%
+    left_join(data_grid %>% st_drop_geometry()) %>%
+    filter(eez_sovereign %in% c("SGP", "SVN", "KNA")) %>%
+    dplyr::select(pixel_id, eez_sovereign)
+  
+    data_grid_eez_3_fin <- data_grid_eez_3 %>%
+      rbind(., data_grid_eez_3_missing) %>%
+      filter(!(pixel_id == 28944 & eez_sovereign == "VEN")) %>%
+      filter(!(pixel_id == 28945 & eez_sovereign == "GBR")) %>%
+      filter(!(pixel_id == 29213 & eez_sovereign == "NLD")) %>%
+      filter(!(pixel_id == 29214 & eez_sovereign == "ATG")) %>%
+      filter(!(pixel_id == 24708 & eez_sovereign == "IDN")) %>%
+      filter(!(pixel_id == 24709 & eez_sovereign == "MYS")) %>%
+      filter(!(pixel_id == 35694 & eez_sovereign == "HRV")) # fix the iso3cs that were missing and make sure each pixel id only has one EEZ
+
+
+  qs::qsave(data_grid_eez_3_fin, here("data/model_features/eez/int/eez_intersection_no_highseas_fix.qs"))
+
+  
+  eez_lookup <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"))
+  
+  
+  data_grid_high_seas <- data_grid_eez_3_fin %>%
+    full_join(data_grid %>% st_drop_geometry()) %>%
+    mutate(eez_sovereign = ifelse(is.na(eez_sovereign), "High seas", eez_sovereign)) %>%
+        left_join(eez_lookup, by = c("eez_sovereign")) %>%
+    dplyr::distinct(pixel_id, eez_id)
+  
+  # %>%
+    # dplyr::select(lon, lat, eez_id = MRGID_SOV1) %>%
+    # rast(., type = "xyz")
+  
+  write.csv(data_grid_high_seas, here("data/model_features/deg_1_x_1/eez/eez.csv"), row.names = FALSE)
+  
+
+data_grid_high_seas <- read.csv(here("data/model_features/deg_1_x_1/eez/eez.csv")) %>%
+  left_join(eez_lookup)
+  
+missing <- setdiff(rousseau_eezs, unique(data_grid_high_seas$eez_sovereign))
+# HKG - good, just HKG. In predictions we will just assume HKG uses the same EEZ as China. 
+
+```
+
+
+# Determine FAO region of each cell 
+https://data.apps.fao.org/map/catalog/srv/eng/catalog.search#/metadata/ac02a460-da52-11dc-9d70-0017f293bd28d
+
+```{r}
+## see if we can fill the missing fao_id pixels using different method 
+
+fao <- st_read(file.path(rdsi_raw_dir, "fao/FAO_AREAS_CWP")) %>%
+  filter(F_LEVEL == "MAJOR") %>%
+  mutate(F_AREA = as.numeric(F_AREA))
+
+# Print summary of FAO areas
+cat("\nFAO areas summary:\n")
+print(paste("Number of FAO areas:", nrow(fao)))
+print(paste("CRS:", st_crs(fao)$proj4string))
+
+# Check if CRS is different and transform if needed
+if (st_crs(fao) != st_crs(data_grid)) {
+  cat("\nTransforming FAO CRS to match data grid...\n")
+  fao <- st_transform(fao, st_crs(data_grid))
+}
+
+# Save FAO major IDs
+fao_major_ids <- fao %>% 
+  st_drop_geometry() %>%
+  distinct(fao_id = F_AREA, NAME_EN, OCEAN) %>%
+  clean_names()
+
+write.csv(fao_major_ids, here("data/model_features/deg_1_x_1/fao/fao_major_ids.csv"), row.names = FALSE)
+
+# Convert grid to raster
+grid <- data_grid %>%
+  st_drop_geometry() %>%
+  dplyr::select(lon, lat, pixel_id) %>% 
+  rast(., type = "xyz") 
+
+# Print grid raster info
+cat("\nGrid raster info:\n")
+print(grid)
+
+# Rasterize FAO areas
+cat("\nRasterizing FAO areas...\n")
+fao_rast <- rast(fasterize::fasterize(fao, raster(grid), field = "F_AREA"))
+
+# Print FAO raster info
+cat("\nFAO raster info:\n")
+print(fao_rast)
+
+# Count NA cells in FAO raster
+na_count <- global(is.na(fao_rast), "sum")
+cat("\nNumber of NA cells in FAO raster:", na_count$sum, "\n") # 20265
+
+176*360 - 20265 # 43095; ok, this value SHOULD BE 46229 (the number of ocean cells). However, it is lower than that. So we are missing ~3000 cells that should have FAO fishing area information. 
+
+writeRaster(fao_rast, here("data/model_features/deg_1_x_1/fao/fao_id_rast.tif"), overwrite = TRUE)
+
+# Create lookup table
+fao_lookup <- fao_rast %>%
+  as.data.frame(xy = TRUE, na.rm = FALSE)
+
+cat("\nFAO lookup table dimensions:", dim(fao_lookup)[1], "rows,", dim(fao_lookup)[2], "columns\n")
+
+# Join with data_grid to get pixel_id and fao_id pairs
+fao_lookup_fin <- fao_lookup %>%
+  dplyr::select(lon = x, lat = y, fao_id = layer) %>%
+  full_join(data_grid %>% st_drop_geometry(), by = c("lon", "lat")) %>% 
+  filter(!is.na(pixel_id)) %>%
+  dplyr::select(pixel_id, fao_id)
+
+write.csv(fao_lookup_fin, here("data/model_features/deg_1_x_1/fao/fao.csv"), row.names = FALSE)
+
+# 
+# test <- isl_full_data %>% 
+#   filter(is.na(fao_id)) %>%
+#   filter(gear == "Dredges",
+#          length_category == "12-24m",
+#          year == 2015) # why are there 3157 pixels without FAO ids? 
+# 
+# ## ok which EEZs are these? 
+# missing_eez <- unique(test$eez_id)
+# 
+# eez_lookup_ids <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv")) %>%
+#   filter(eez_id %in% missing_eez)
+# unique(eez_lookup_ids$ISO_SOV1) # [1] "USA"       "IRN"       "TKM"       "AZE"       "KAZ"       "RUS"       "Land"      "High seas"
+# # ok so we don't care about Land. But the rest are worrisome.
+
+# Analyze missing FAO IDs
+missing_fao <- fao_lookup_fin %>%
+  filter(is.na(fao_id))
+
+cat("\nNumber of pixels with missing FAO ID:", nrow(missing_fao), "\n")
+
+# Get the coordinates of missing pixels
+missing_pixels <- data_grid %>%
+  filter(pixel_id %in% missing_fao$pixel_id)
+
+# Save missing pixels for visualization
+st_write(missing_pixels, here("data/model_features/deg_1_x_1/fao/missing_fao_pixels.shp"), delete_layer = TRUE)
+
+# Create a simple plot of missing pixels
+missing_coords <- missing_pixels %>%
+  st_centroid() %>%
+  st_coordinates() %>%
+  as.data.frame()
+
+# Save coordinates for plotting
+write.csv(missing_coords, here("data/model_features/deg_1_x_1/fao/missing_fao_coords.csv"), row.names = FALSE)
+
+## we need to fill in any NA fao_id's with the nearest non-NA pixel_id's fao_id
+library(zoo)
+fao_lookup_fin <- fao_lookup_fin %>%
+  arrange(pixel_id)
+
+# Fill missing fao_id using nearest non-NA values. we will just use filling up or down for this, since we already know the pixel_ids are in order from where they are located. we assume that if the pixel id is close to it, then it will be in the same FAO id. For now. I will try to run the nearest neighbor approach overnight. 
+fao_lookup_fin <- fao_lookup_fin %>%
+  mutate(fao_id = na.locf(fao_id, na.rm = FALSE, fromLast = FALSE)) %>%  # Forward fill
+  mutate(fao_id = na.locf(fao_id, na.rm = FALSE, fromLast = TRUE))       # Backward fill
+
+# Check if there are still any NAs left
+sum(is.na(fao_lookup_fin$fao_id)) 
+
+write.csv(fao_lookup_fin, here("data/model_features/deg_1_x_1/fao/fao_fixed.csv"), row.names = FALSE)
+
+```
+
+
+# Determine if cell is mesopelagic zone or not 
+
+Use Marine Region's [Mesopelagic ecoregions of the world's oceans](https://www.sciencedirect.com/science/article/pii/S0967063717301437?via%3Dihub#ack0005)
+
+
+```{r}
+
+meso <- st_read(glue("{data_directory}/marine_regions/mesopelagiczones/")) %>%
+  clean_names() %>%
+  rename(meso_id = provid)
+
+meso_ids <- meso %>%
+  st_drop_geometry() %>%
+  dplyr::select(meso_id, meso_region = provname)
+
+
+ grid <- data_grid %>%
+  st_drop_geometry() %>%
+  dplyr::select(lon, lat, pixel_id) %>% 
+  rast(., type = "xyz") 
+ 
+meso_rast <- rast(fasterize::fasterize(meso, raster(grid), field = "meso_id"))
+
+
+writeRaster(meso_rast, here("data/model_features/deg_1_x_1/mesopelagiczones/meso_id_rast.tif"), overwrite = TRUE)
+
+# Count NA cells in FAO raster
+na_count <- global(is.na(meso_rast), "sum")
+cat("\nNumber of NA cells in FAO raster:", na_count$sum, "\n") # 24834; this is too many!! 
+
+# test <- meso_rast %>%
+#   mutate(layer = ifelse(is.na(layer), 9999999, layer))
+
+meso_lookup <- meso_rast %>%
+  as.data.frame(xy = TRUE)
+
+
+meso_lookup_id <- meso_lookup %>%
+  dplyr::select(lon = x, lat = y, meso_id = layer) %>%
+  full_join(data_grid) %>% 
+    filter(!is.na(pixel_id)) %>%
+  dplyr::select(pixel_id, meso_id)
+
+cat("\nFAO lookup table dimensions:", dim(meso_lookup_id)[1], "rows,", dim(meso_lookup_id)[2], "columns\n") # ok good but many of these are NA... we need to fill these in
+
+
+test <- meso_lookup_id %>%
+  group_by(pixel_id) %>%
+  summarise(n_distinct(meso_id)) # ok cool, seems to have worked?! 
+  
+
+write.csv(meso_lookup_id, here("data/model_features/deg_1_x_1/mesopelagiczones/mesopelagiczones.csv"), row.names = FALSE)
+
+## we need to fill in any NA meso_id's with the nearest non-NA pixel_id's fao_id
+
+meso_lookup_id <- meso_lookup_id %>%
+  arrange(pixel_id)
+
+# Fill missing fao_id using nearest non-NA values. we will just use filling up or down for this, since we already know the pixel_ids are in order from where they are located. we assume that if the pixel id is close to it, then it will be in the same FAO id. For now. I will try to run the nearest neighbor approach overnight. 
+library(zoo)
+meso_lookup_id <- meso_lookup_id %>%
+  mutate(meso_id = na.locf(meso_id, na.rm = FALSE, fromLast = FALSE)) %>%  # Forward fill
+  mutate(meso_id = na.locf(meso_id, na.rm = FALSE, fromLast = TRUE))       # Backward fill
+
+# Check if there are still any NAs left
+sum(is.na(meso_lookup_id$meso_id)) 
+
+write.csv(meso_lookup_id, here("data/model_features/deg_1_x_1/mesopelagiczones/mesopelagiczones_fixed.csv"), row.names = FALSE)
+
+```
+
+Look at ocean data from Gavin's paper. There are some cells with missing ocean values. We will fill these in like we have with meso regions and fao ids 
+
+```{r}
+ocean_df <- read.csv(here("data/model_features/deg_1_x_1/oceans.csv"))
+
+ocean_df_fin <- ocean_df %>%
+  arrange(pixel_id) %>%
+  mutate(ocean = ifelse(ocean == "", NA, ocean)) %>%
+  mutate(ocean = na.locf(ocean, na.rm = FALSE, fromLast = FALSE)) %>%  # Forward fill
+  mutate(ocean = na.locf(ocean, na.rm = FALSE, fromLast = TRUE))       # Backward fill
+
+# Check if there are still any NAs left
+sum(is.na(ocean_df_fin$ocean)) 
+
+write.csv(ocean_df_fin, here("data/model_features/deg_1_x_1/oceans_fixed.csv"), row.names = FALSE)
+
+
+# ocean_df_ids <- ocean_df_fin %>%
+#     mutate(ocean = ifelse(ocean == "", "MISSING", ocean)) %>%
+#   mutate(ocean_id = as.numeric(as.factor(ocean))) %>%
+#   distinct(ocean, ocean_id)
+# 
+# ocean_rast <- ocean_df_fin %>%
+#   mutate(ocean = ifelse(ocean == "", "MISSING", ocean)) %>%
+#   mutate(ocean = as.numeric(as.factor(ocean))) %>%
+#   left_join(data_grid) %>%
+#   dplyr::select(lon, lat, ocean) %>%
+#   rast(., type = "xyz")
+# 
+# plot(ocean_rast) # looks good! 
+
+```
+
+
+Distance to seamount data 
+
+```{r}
+
+library(nngeo)
+
+pixel_size <- 1
+
+mollweide_projection <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+
+# Read in data_grid, generated in data_wrangling.Rmd
+# We will do spatial joining in Mollweide, for proper calculations
+# Note that data grid still retains lat and lon columns, for joining with non-spatial tibbles
+# For Mollweide, always wrap around dateline, then transform, then calculate areas at end
+data_grid <- data.table::fread(here("data/model_features/deg_1_x_1/global_grid.csv"))%>%
+  st_as_sf(wkt = "geometry_wkt",
+           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")%>% 
+  st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% 
+  st_transform(mollweide_projection) %>%
+  mutate(pixel_area_m2 = st_area(geometry_wkt)%>%
+           units::drop_units()) 
+
+seamounts <- st_read(file.path(rdsi_raw_dir, "seamounts-yesson-2019/"), layer = "YessonEtAl2019-Seamounts-V2")
+
+analysis_projection = mollweide_projection
+
+global_grid = data_grid
+
+# Wrangle seamounts data
+# Calculate nearest distance from the centroid of each pixel to each seamount
+
+  seamounts <- seamounts %>%
+    dplyr::select(seamount_id = PeakID,
+                  geometry)%>% 
+    st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% 
+    st_transform(analysis_projection)
+  
+  wrangle_seamounts <- nngeo::st_nn(global_grid %>%
+                 st_centroid(),
+               seamounts, 
+               # Only select single nearest eez
+               k = 1, 
+               returnDist = T,
+               parallel = 1) %>%# floor(parallel::detectCores()/4))  %>% 
+    as_tibble() %>% 
+    mutate(nearest_seamount_id =  seamounts$seamount_id[as.numeric(nn)], 
+           nearest_seamount_distance_m = as.numeric(dist)) %>%
+    dplyr::select(-nn,-dist) %>%
+    bind_cols(global_grid %>%
+                st_set_geometry(NULL) %>%
+                dplyr::select(pixel_id))
+
+  write.csv(wrangle_seamounts, here("data/model_features/deg_1_x_1/seamounts.csv"), row.names = FALSE)
+  
+```
+
+
+Aggregate days at sea to fishing hours conversion factors from Rousseau et al. to 1x1 degree: https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/ConversionFishingHours.csv
+
+```{r}
+
+conversion_0.5 <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/ConversionFishingHours.csv") %>%
+  clean_names() %>%
+    dplyr::select(lon, lat, mean, length_category)
+
+data_grid_rast <- data_grid %>%
+  st_drop_geometry() %>% 
+  dplyr::select(lon, lat) %>%
+  rast(., type = "xyz")
+  
+
+conversion_1_df <- data.frame(x = NA, y = NA, mean = NA, length_category = NA)
+
+for(l in unique(conversion_0.5$length_category)){
+  
+  # l = "Over 50m"
+  
+  conversion_l <- conversion_0.5 %>%
+    filter(length_category == l) %>%
+    dplyr::select(-length_category) %>%
+    rast(.) %>%
+    aggregate(., fact = 2, fun = "mean") %>%
+    resample(., data_grid_rast, method = "bilinear") %>%
+    as.data.frame(., xy = TRUE) %>%
+    mutate(length_category = l)
+  
+  conversion_1_df <- rbind(conversion_1_df, conversion_l)
+  
+}
+
+conversion_1_df <- conversion_1_df %>%
+  filter(!is.na(x))
+
+qs::qsave(conversion_1_df, here("data/int/hours_to_days_conversion.qs"))
+
+```
+
