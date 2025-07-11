@@ -21,7 +21,6 @@ rm(list = ls())
 
 library(tidyverse)
 library("qs")
-library(betareg)
 library(foreach)
 library(doParallel)
 library(here)
@@ -44,30 +43,27 @@ source(here("R/dir.R"))
 ## Functions to prepare enviro and effort data  
 
 ```{r}
-
 elnino <- read.csv(here("data/model_features/enso_index.csv"))
 
-pdo <- read.csv(here("data/model_features/pdo_index.csv"))
+pdo <- read.csv(here("data/model_features/pdo_index.csv")) 
 
-world_bank <- read.csv(here("data/model_features/world_bank_regions.csv")) %>%
-  filter(ISO_SOV1 != "GIB") # filter out gibralter bc it is duplicating the UK for some reason
+world_bank <- read.csv(here("data/model_features/world_bank_regions.csv")) 
 
 gfi_df <- read.csv(here("data/model_features/global_fishing_index_governance.csv"))
 
-  
 # Load prepared data
 model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
   mutate(year = as.numeric(year)) %>%
-  mutate(presence = 1) # i think we need to adjust the prepared data to include cells which have no fishing effort in them. We can do this in the loop below? 
+  mutate(presence = 1) 
 
 ## read in environmental variables
 
   global_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv"))
   
   ocean_data <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv")) %>%
-  left_join(read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv")), by = c("pixel_id", "year")) %>% 
-  left_join(read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv")), by = c("pixel_id", "year")) %>%
-  filter(year %in% c(2015:2017)) 
+      left_join(read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv")), by = c("pixel_id", "year")) %>% 
+      left_join(read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv")), by = c("pixel_id", "year")) %>%
+      filter(year %in% c(2015:2024)) 
 
 
   spatial_data <- global_grid %>%
@@ -77,7 +73,7 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/fao/fao_fixed.csv")), by = "pixel_id") %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/oceans_fixed.csv")), by = "pixel_id") %>%
     left_join(read.csv(here("data/model_features/deg_1_x_1/seamounts.csv")), by = "pixel_id") %>% 
-   crossing(., year = c(2015:2017)) 
+   crossing(., year = c(2015:2024)) 
   
   
   env_data <- spatial_data %>%
@@ -85,36 +81,13 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
     dplyr::select(-geometry_wkt) %>%
     left_join(elnino) %>%
     left_join(pdo) %>%
-    left_join(world_bank, by = c("eez_id" = "MRGID_SOV1")) %>%
-    mutate(eez_region_world_bank_7 = ifelse(ISO_SOV1 %in% c("High seas", "Land"), "High seas", eez_region_world_bank_7)) %>% 
-    left_join(gfi_df, by = c("ISO_SOV1" = "flag_fin")) %>% # add in global fishing index data here
+    left_join(world_bank, by = c("eez_id")) %>%
+    mutate(eez_region_world_bank_7 = ifelse(eez_sovereign %in% c("High seas", "Land"), "High seas", eez_region_world_bank_7)) %>% 
+    left_join(gfi_df, by = c("eez_sovereign" = "flag_fin")) %>% # add in global fishing index data here
     mutate(gov_score = ifelse(eez_id >= 99999 & is.na(gov_score), "high_seas", gov_score)) %>%
         mutate(gov_score = ifelse(eez_id < 99999 & is.na(gov_score), "no_data", gov_score)) %>%
-    dplyr::select(-ISO_SOV1, -nearest_seamount_id) %>% 
+    dplyr::select(-eez_sovereign, -nearest_seamount_id) %>% 
     distinct() 
-
-
-# Get total fishing hours for a specific year from IMAS data
-get_historical_total_fishing_hours <- function(yr) {
-  # This function would load and process the IMAS data for the given year
-  # Note: Implement based on your IMAS data structure
-  imas_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
-    
-    ## remove artisanal
-    filter(sector == "I") %>%
-    
-    group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
-    summarize(
-      total_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
-      .groups = 'drop'
-    ) %>%
-    filter(year == yr) %>%
-    dplyr::select(flag_fin, year, gear, length_category, total_fishing_hours)
-  
-  
-  return(imas_data)
-}
-
 
 ```
 
@@ -155,22 +128,18 @@ model_formula_rf <- formula(
 )
   
 
-hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
-    rbind(., get_historical_total_fishing_hours(2016)) %>%
-    rbind(., get_historical_total_fishing_hours(2017)) %>%
-    mutate(log_total_fishing_hours = log1p(total_fishing_hours)) %>%
+hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
+    ## remove artisanal
+    filter(sector == "I") %>%
+    group_by(flag_fin = country, gear = gear_new, length_category) %>%
+    summarize(
+      total_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    dplyr::select(flag_fin, gear, length_category, total_fishing_hours) %>%
     filter(total_fishing_hours > 0)
   
-flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 167 of them
-
-unique_combinations <- hist_fish_data %>%
-  distinct(year, flag_fin, gear, length_category) %>% # we only want to make models for these combinations since these are what is in the IMAS/FAO data 
-  mutate(row_n = row_number())
-
-# test_aus <- unique_combinations %>% filter(flag_fin == "AUS") # ok, AUS for example has 128 different combinations that 1 model will be able to predict. 128*46229 = ~6 million rows being fed into the model. Will this work?? Let's try! 
-#   
-# 
-# setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
+flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 151 of them
 
 env_grid <- env_data %>% 
   dplyr::select(lon, lat) %>% distinct()
@@ -186,10 +155,9 @@ env_grid <- env_data %>%
  - If the AUC doesn't increase at all, we stop the model pruning, if it does, we continue, hoping that the AUC will improve even more in the next iteration. 
  - If the threshold doesn't remove any variables, we increase the threshold by 1% until a variable is removed, and rerun the process
  - We loop through this until the AUC does not improve at all. 
+  - NOTE: We keep year as a variable no matter what, because we care about the differences over time. 
  
  NOTE: lets use Area Under the Precision-Recall Curve (AUC-PR) instead of RMSE because RMSE isn't really relevant to classification regression; Higher AUC-PR value is better. 
-
-
 
 Run full models first 
 
@@ -198,11 +166,14 @@ Run full models first
 flags <- unique(hist_fish_data$flag_fin)
 
 missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
-length(missing_flags) # 28 these are flags that are in the rousseau data but not in the gfw data, meaning we can't fit a model or make predictions on them.
+length(missing_flags) #  #  "DOM" "MYT" "RAA" "RAM"; 4 these are flags that are in the rousseau data but not in the gfw data, meaning we can't fit a model or make predictions on them.
 
-flags <- setdiff(flags, missing_flags)
+vessel_info <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/fishing-vessels-v3.csv")) %>%
+  distinct(flag_gfw) # check to make sure they actually don't exist in GFW
 
-flags <- setdiff(flags, c("BGR", "BEL", "CMR"))
+flags <- setdiff(flags, missing_flags) # 147 flags to run now
+
+flags_to_run <- setdiff(flags, "GNB") # add any flags we've already run
 
 # Set up parallel backend
 num_cores <- 3 
@@ -210,13 +181,12 @@ cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 
 # Run the loop in parallel
-foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc")) %dopar% {
+foreach(flag = flags_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc")) %dopar% {
   
-    # flag = "BGR"
+    # flag = "GNB"
   model_data_flag <- model_data %>%
     dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
     filter(flag_fin == flag)
-  
   
   distinct_cats <- model_data_flag %>%
     distinct(year, flag_fin, gear, length_category)
@@ -228,7 +198,7 @@ foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glu
     left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
     mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
     dplyr::select(-pixel_id)
-  
+
   if (nrow(full_data) == 0) {
     cat(flag, "not in data... skipping\n")
     return(NULL)
@@ -256,12 +226,10 @@ foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glu
   
  # model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_25.qs")))
 
-  
   var_imp_i <- importance(model)
   
   n_vars <- nrow(var_imp_i)
   qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_{n_vars}.qs")))
-
   
 }
 
@@ -273,19 +241,9 @@ Now apply variable selection methods
 
 ```{r}
 # Threshold-Based Selection: Remove variables with importance scores below a certain threshold (e.g., the median or a predefined percentage of the highest importance value).
-# Recursive Feature Elimination (RFE): Iteratively remove the least important variable and re-run the model until performance stabilizes. - NOTE: this would probably be the best option, but would take the longest 
 #### How to check when model performance stabilizes?? Look at AUC-PR vs number of variables in each model. When the AUC-PR stops getting better is where you make the variable delineation.  
 
-
-## lets try the threshold based selection, where the threshold is 10% of max importance score (i.e. we keep any variable that is above that 10% of max importance score) and rerun the model and test to see if RMSE improves or not 
-
-flags <- unique(hist_fish_data$flag_fin)
-
-missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
-length(missing_flags) # 28 these are flags that are in the rousseau data but not in the gfw data, meaning we can't fit a model or make predictions on them.
-
-flags <- setdiff(flags, missing_flags)
-
+## lets try the threshold based selection, where the threshold is 10% of max importance score (i.e. we keep any variable that is above that 10% of max importance score) and rerun the model and test to see if RMSE improves or not. BUT KEEP YEAR IN NO MATTER WHAT
 
 # Set up parallel backend
 #### NOTE ABOUT PARALLEL: THIS ISN'T WORKING; for some reason it gets hung up when saving the new rf model and saves it as realllllly large and only saves one per flag, which isn't correct. I think it might have to do with the while loops I've included. In theory it should work though... Without it takes ~12 hours to run. 
@@ -296,14 +254,14 @@ flags <- setdiff(flags, missing_flags)
 # Run the loop in parallel
 # foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc")) %dopar% {
 
+flags_to_run <- setdiff(flags, "")
+
   auc_values <- c()
   num_vars <- c()
   
-#  tracking_df <- data.frame(flag = NA, auc = NA, n_vars = NA)
-
-for(flag in flags){
+for(flag in flags_to_run){
   
-    # flag = "GNQ"
+    # flag = "GNB"
   model_data_flag <- model_data %>%
     dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
     filter(flag_fin == flag)
@@ -363,9 +321,6 @@ for(flag in flags){
   num_vars <- c(nrow(var_imp_i))
   threshold_i <- quantile(var_imp_i[, 4], 0.10)  # Use the 10th percentile instead of a fixed multiplier
   
-    # threshold_i <- max(var_imp_i[, 4])*0.1  # Use the 10th percentile instead of a fixed multiplier
-
-  
   if (threshold_i == 0) {
     threshold_i <- 0.0000001
   }
@@ -379,27 +334,19 @@ for(flag in flags){
   auc_pr <- pr_curve$auc.integral # higher auc_pr is BETTER. So if it gets lower, then we don't want the next model 
 
   auc_values <- c(auc_values, auc_pr)
-  # rmse <- sqrt(mean((as.numeric(as.character(test$presence)) - pred_probs)^2))
-  # rmse_values <- c(rmse_values, rmse)
   
   iteration <- 1
  while (TRUE) {
     
-   selected_vars <- names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i])
-    
-    # Rank variables by importance (column 4 of var_imp_i)
-   #  sorted_vars <- names(sort(var_imp_i[, 4], decreasing = TRUE))
-    
-    
+   # selected_vars <- names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i])
+    selected_vars <- unique(c("year", names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i])))
     
      if (length(selected_vars) < 6) break  # Ensure at least 5 variables remain
     
-        # selected_vars <- sorted_vars[-length(sorted_vars)]
-        
         # Increase the threshold iteratively until at least one variable is removed
     while (length(selected_vars) == num_vars[length(num_vars)]) {
         threshold_i <- threshold_i * 1.01  # Increase threshold by 1%
-        selected_vars <- names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i])
+        selected_vars <- unique(c("year", names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i])))
     }
     
     model_i <- randomForest(presence ~ ., data = train[, c("presence", selected_vars)], 
@@ -410,11 +357,9 @@ for(flag in flags){
     
     # Compute a new threshold dynamically based on the 10th percentile
     threshold_i <- quantile(var_imp_i[, 4], 0.10)  # Use the 10th percentile instead of a fixed multiplier
-    # threshold_i <- max(var_imp_i[, 4])*0.1  # Use 10% of max importance
 
     pred_probs_i <- predict(model_i, newdata = test, type = "prob")[, 2]
-    # rmse_i <- sqrt(mean((as.numeric(as.character(test$presence)) - pred_probs_i)^2))
-    
+
    true_labels_i <- as.numeric(as.character(test$presence))  # Replace with the actual labels in your test data
 
   pr_curve <- pr.curve(scores.class0 = pred_probs_i, weights.class0 = true_labels_i, curve = TRUE)
@@ -422,8 +367,7 @@ for(flag in flags){
 
   auc_values <- c(auc_values, auc_pr_i)
     
-    # rmse_values <- c(rmse_values, rmse_i)
-    num_vars <- c(num_vars, length(selected_vars))
+  num_vars <- c(num_vars, length(selected_vars))
     
     n_vars <- length(selected_vars)
     file_path <- glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_{n_vars}.qs"))
@@ -444,11 +388,6 @@ for(flag in flags){
     iteration <- iteration + 1
  }
 
-  
-  # tracking_df_i <- data.frame(flag = flag, auc = auc_values, n_vars = num_vars)
-  # 
-  # tracking_df <- rbind(tracking_df, tracking_df_i)
-  
 }
 
 # Stop parallel cluster
@@ -474,8 +413,6 @@ stage_1_files_done <- list.files(stage_1_path_done, full.names = TRUE)[-1]
 stage_1_flags_done <- unique(sub(".*stage_1_rf_model_full_data_([A-Z]{3})_.*", "\\1", stage_1_files_done)) # 118 flags; weird there are more here than in stage 2?!
 
 stage_1_flags <- setdiff(stage_1_flags, stage_1_flags_done)
-
-# stage_1_flags <- c("AGO", "ALB", "AUS")
 
 # num_cores <- 3 # Use one less than the total available cores
 # cl <- makeCluster(num_cores)
@@ -514,23 +451,13 @@ for(flag in stage_1_flags) {
     left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
     mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
     dplyr::select(-pixel_id)
-  
-  # if (nrow(full_data) == 0) { # shouldn't ever happen but just in case
-  #   cat(flag, "not in data... skipping\n")
-  #   # return(NULL)
-  #   next()
-  # }
+
   
   data_random_forest <- full_data %>% 
     na.omit() %>%
     mutate(presence = as.factor(presence)) %>%
     distinct()
   
-  # if (nrow(full_data) == 1) { # shouldn't ever happen but just in case
-  #   cat(flag, "not enough rows\n")
-  #   #return(NULL)
-  #   next()
-  # }
   
   set.seed(123)
   

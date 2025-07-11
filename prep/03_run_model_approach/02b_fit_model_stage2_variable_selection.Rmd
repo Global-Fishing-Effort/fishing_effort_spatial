@@ -25,8 +25,6 @@ library(glue)
 library(arrow)
 library(strex)
 library(broom)
-
-# install.packages("randomForest")
 library(randomForest)
 
 source(here("R/dir.R"))
@@ -58,7 +56,7 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
   ocean_data <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv")) %>%
   left_join(read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv")), by = c("pixel_id", "year")) %>% 
   left_join(read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv")), by = c("pixel_id", "year")) %>%
-  filter(year %in% c(2015:2017)) 
+  filter(year %in% c(2015:2024)) 
 
 
   spatial_data <- global_grid %>%
@@ -68,7 +66,7 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/fao/fao_fixed.csv")), by = "pixel_id") %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/oceans_fixed.csv")), by = "pixel_id") %>%
     left_join(read.csv(here("data/model_features/deg_1_x_1/seamounts.csv")), by = "pixel_id") %>% 
-   crossing(., year = c(2015:2017)) 
+   crossing(., year = c(2015:2024)) 
   
   
   env_data <- spatial_data %>%
@@ -76,52 +74,29 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
     dplyr::select(-geometry_wkt) %>%
     left_join(elnino) %>%
     left_join(pdo) %>%
-    left_join(world_bank, by = c("eez_id" = "MRGID_SOV1")) %>%
-    mutate(eez_region_world_bank_7 = ifelse(ISO_SOV1 %in% c("High seas", "Land"), "High seas", eez_region_world_bank_7)) %>% 
-    left_join(gfi_df, by = c("ISO_SOV1" = "flag_fin")) %>% # add in global fishing index data here
+    left_join(world_bank, by = c("eez_id")) %>%
+    mutate(eez_region_world_bank_7 = ifelse(eez_sovereign %in% c("High seas", "Land"), "High seas", eez_region_world_bank_7)) %>% 
+    left_join(gfi_df, by = c("eez_sovereign" = "flag_fin")) %>% # add in global fishing index data here
     mutate(gov_score = ifelse(eez_id >= 99999 & is.na(gov_score), "high_seas", gov_score)) %>%
         mutate(gov_score = ifelse(eez_id < 99999 & is.na(gov_score), "no_data", gov_score)) %>%
-    dplyr::select(-ISO_SOV1, -nearest_seamount_id) %>% 
+    dplyr::select(-eez_sovereign, -nearest_seamount_id) %>% 
     distinct() 
-
-
-# Get total fishing hours for a specific year from IMAS data
-get_historical_total_fishing_hours <- function(yr) {
-
-  imas_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
-    
-    ## remove artisanal
-    filter(sector == "I") %>%
-    
-    group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
-    summarize(
-      total_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
-      .groups = 'drop'
-    ) %>%
-    filter(year == yr) %>%
-    dplyr::select(flag_fin, year, gear, length_category, total_fishing_hours)
-  
-  
-  return(imas_data)
-}
-
 
 ```
 
 ```{r}
-
-hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
-    rbind(., get_historical_total_fishing_hours(2016)) %>%
-    rbind(., get_historical_total_fishing_hours(2017)) %>%
-    mutate(log_total_fishing_hours = log1p(total_fishing_hours)) %>%
+hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
+    ## remove artisanal
+    filter(sector == "I") %>%
+    group_by(flag_fin = country, gear = gear_new, length_category) %>%
+    summarize(
+      total_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    dplyr::select(flag_fin, gear, length_category, total_fishing_hours) %>%
     filter(total_fishing_hours > 0)
   
-flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 147 of them
-
-unique_combinations <- hist_fish_data %>%
-  distinct(year, flag_fin, gear, length_category) %>% # we only want to make models for these combinations since these are what is in the IMAS/FAO data 
-  mutate(row_n = row_number())
-
+flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 151 of them
 
 env_grid <- env_data %>% 
   dplyr::select(lon, lat) %>% distinct()
@@ -136,9 +111,7 @@ full_model_formula <- formula(
     fao_id + 
     ocean +  # Spatial categorical variables
     eez_region_world_bank_7 + # world bank regions
-    gov_score + # global fishing index; make sure this is character and not a numeric variable
-    # Total effort predictor (log-transformed)
-  #  log_total_fishing_hours + 
+    gov_score + # global fishing index
     # Continuous predictors
     lon + lat + 
     elevation_m + # depth
@@ -170,6 +143,7 @@ full_model_formula <- formula(
  - If the RMSE doesn't DECREASE at all, we stop the model pruning, if it does, we continue, hoping that the RMSE will improve even more in the next iteration. 
  - If the threshold doesn't remove any variables, we increase the threshold by 1% until a variable is removed, and rerun the process
  - We loop through this until the RMSE does not improve at all (improvement being a decrease in RMSE)
+  - NOTE: Always keep year as a variable
  
  NOTE: Lower RMSE is better
 
@@ -180,24 +154,22 @@ Save full models first
 ```{r}
 flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 167 of them
 
-
 missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
-length(missing_flags) # 28 these are flags that are in the rousseau data but not in the gfw data, meaning we can't make predictions on them.
+length(missing_flags) #  these are flags that are in the rousseau data but not in the gfw data, meaning we can't make predictions on them.
 
 flags <- setdiff(flags, missing_flags)
 
+flags_to_run <- setdiff(flags, "")
 
-for(flag in flags) {
+for(flag in flags_to_run) {
 
 #  flag = "PRK"
   
 model_data_flag <- model_data %>%
   dplyr::select(lon, lat, flag_fin, gear, length_category, year, prop_fishing_hours_cell) %>%
-  filter(flag_fin == flag) %>% # only 2419 rows for new zealand - could be problematic! 
+  filter(flag_fin == flag) %>% 
   left_join(env_data) %>%
-  left_join(hist_fish_data) %>% 
-  dplyr::select(-total_fishing_hours, -log_total_fishing_hours) %>%
-  na.omit() # this removes the categories which are not in the Rousseau data. For example, Rousseau does not have data for NZL, Lines_Longlines, 24-50m, 2015, but GFW does. 
+  na.omit() # removes any NAs
 
 if(nrow(model_data_flag) == 1){
   next()
@@ -232,26 +204,17 @@ qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pru
 Now apply variable selection methods 
 
 ```{r}
+flags_to_run <- setdiff(flags, "")
 
-flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 167 of them
-
-
-missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
-length(missing_flags) # 28 these are flags that are in the rousseau data but not in the gfw data, meaning we can't make predictions on them.
-
-flags <- setdiff(flags, missing_flags)
-
-
-  for(flag in flags){
+  for(flag in flags_to_run){
     rmse_values <- c()
 
 model_data_flag <- model_data %>%
   dplyr::select(lon, lat, flag_fin, gear, length_category, year, prop_fishing_hours_cell) %>%
-  filter(flag_fin == flag) %>% # only 2419 rows for new zealand - could be problematic! 
+  filter(flag_fin == flag) %>%
   left_join(env_data) %>%
-  left_join(hist_fish_data) %>% 
   dplyr::select(-total_fishing_hours, -log_total_fishing_hours) %>%
-  na.omit() # this removes the categories which are not in the Rousseau data. For example, Rousseau does not have data for NZL, Lines_Longlines, 24-50m, 2015, but GFW does. 
+  na.omit() 
 
 if(nrow(model_data_flag) == 1){
   next()
@@ -304,7 +267,7 @@ iteration <- 1
 while (TRUE) {
   
   # Select variables above threshold
-  selected_vars <- names(var_imp_i[, 2][var_imp_i[, 2] > threshold_i])
+    selected_vars <- unique(c("year", names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i])))
   
   # Stop if too few variables remain
   if (length(selected_vars) < 6) break  # Avoid over-pruning. We can change this to any number of variables. Maybe 10 would be better computationally? 
@@ -312,7 +275,7 @@ while (TRUE) {
           # Increase the threshold iteratively until at least one variable is removed
     while (length(selected_vars) == num_vars[length(num_vars)]) {
         threshold_i <- threshold_i * 1.01  # Increase threshold by 1%
-        selected_vars <- names(var_imp_i[, 2][var_imp_i[, 2] > threshold_i])
+        selected_vars <- unique(c("year", names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i])))
     }
 
   # Refit model with selected variables
@@ -338,7 +301,7 @@ while (TRUE) {
   file_path <-   glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_{n_vars}.qs"))
   
   if(!file.exists(file_path)){
-    # save model here? Put number of variables (length(selected_vars)) in model save name so we know which one to pick for best predictions? 
+    # save model here. Put number of variables (length(selected_vars)) in model save name so we know which one to pick for best predictions. 
   qs::qsave(model_i, file_path)
   }
 
@@ -351,13 +314,11 @@ while (TRUE) {
     
   }
 
-
   iteration <- iteration + 1
 }
 
 }
 
-rmse_values
 
 ```
 
@@ -410,83 +371,3 @@ qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/sta
 
 
 ```
-
-
-After the models are fit, we make predictions on ALL DATA. So stage 1 is in sample predictions (since we fit the stage one model on all data), and stage two will contain out of sample predictions (since we fit the model on only data with fishing effort in it!)
-
-```{r}
-
-## out of sample predictions for CHN 
-env_grid <- env_data %>% 
-  dplyr::select(lon, lat) %>% distinct()
-
-
-model_data_flag <- model_data %>%
-  dplyr::select(lon, lat, flag_fin, gear, length_category, year, prop_fishing_hours_cell) %>%
-  filter(flag_fin == flag)
-  
-distinct_cats <- model_data_flag %>%
-    distinct(year, flag_fin, gear, length_category)
-  
-full_grid <- tidyr::crossing(env_grid, distinct_cats)
-  
-full_data <- full_grid %>%
-  left_join(env_data, by = c("lon", "lat", "year")) %>%
-  left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
-  dplyr::select(-pixel_id) %>%
-  left_join(hist_fish_data) %>%
-  mutate(total_fishing_hours = ifelse(is.na(total_fishing_hours), 0, total_fishing_hours),
-         log_total_fishing_hours = ifelse(is.na(log_total_fishing_hours), 0, log_total_fishing_hours))
-
-
-stage2_model <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/stage_2_models/pruning/stage_2_rf_train_CHN_23.qs")
-
-oos_preds <- full_data %>%
-  mutate(pred_prop = predict(stage2_model, newdata = ., type="response")) 
-
-# oos_test <- oos_preds %>%
-#   group_by(flag_fin, gear, length_category, year) %>%
-#   summarise(sum_prop = sum(pred_prop, na.rm = TRUE)) %>% # ok yeah we'll need to rescale these to be between 0 and 1, AFTER multiplying by the stage 1 predictions? 
-#   ungroup()
-
-
-rast_test <- oos_preds %>%
-  filter(gear == "Trawl_Midwater_or_Unsp",
-         length_category == "12-24m",
-         year == 2015) %>%
-  dplyr::select(lon, lat, pred_prop)  %>%
-  rast(., type = "xyz")
-
-plot(rast_test) # yeah this makes sense, It will make a prediction for EVERY CELL globally. Then the stage 1 model is how we mask out the cells where there is no presence prediction. Makes sense the largest values are around NZL too. Cool. 
-
-
-## read in CHN stage one model: 
-
-stage1_chn <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/stage_1_models/pruning/stage_1_rf_train_CHN_26.qs")
-# stage1_full <- qs::qread(here("data/output/FULL_rf_model_train.qs"))
-
-stage1_preds <- full_data %>%
-    mutate(pred_presence = predict(stage1_chn, newdata = ., type="prob")[, "1"]) %>%
-  mutate(pred_presence = ifelse(pred_presence < 0.5, 0, 1))
-
-
-## join stage 1 and 2 preds together and multiply 
-all_preds <- oos_preds %>%
-  # probably select lat, lon, gear, length, year, flag here? 
-  #dplyr::select(lat, lon, gear, length_category, year, flag_fin, pred_prop) %>%
-  left_join(., stage1_preds) %>%
-  mutate(pred_prop_final = pred_prop*pred_presence) 
-
-test_preds <- all_preds %>%
-    filter(gear == "Lines_Longlines",
-         length_category == "12-24m",
-         year == 2015,
-         pred_prop_final > 0) %>%
-  dplyr::select(lon, lat, pred_prop_final) %>%
-  rast(., type = "xyz")
-
-plot(test_preds) # ok looks a lot better when using China specific stage 1 model. We're going to have to fit a model for each flag country for each stage. 
-
-
-```
-

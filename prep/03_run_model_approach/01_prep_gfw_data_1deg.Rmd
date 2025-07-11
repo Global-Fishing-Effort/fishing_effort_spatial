@@ -1,0 +1,193 @@
+---
+title: "Prep gfw fishing effort to feed to model for 1 degree"
+output: html_document
+date: "2024-12-11"
+---
+
+# Summary
+
+Here we combine the data created in the previous folders (01 and 03) so that we can feed it into a prediction model. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(qs)
+library(here)
+library(glue)
+
+source(here("R/dir.R"))
+grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv"))
+
+```
+
+```{r}
+elnino <- read.csv(here("data/model_features/enso_index.csv"))
+
+years <- 2015:2024
+model_data <- list()
+
+for(yr in years) {
+  # yr = 2024
+  # Load effort proportions
+  effort_props <- qread(file.path(rdsi_dir, glue("prep/gfw_props/deg_one/all_effort_gear_length_props_{yr}.qs"))) %>%
+    mutate(year = yr) %>%
+    filter(fishing_hours > 0)
+
+  
+  # Combine all data
+  year_data <- effort_props %>%
+    mutate(sector = "I") %>% 
+    # Add total effort for each combination
+   # left_join(total_efforts, by = c("flag_fin", "year", "gear", "length_category")) %>% 
+    dplyr::select(
+      # Response
+      prop_fishing_hours_cell,
+      lon = x, 
+      lat = y,
+      # Categorical predictors
+      flag_fin, gear, length_category,
+      
+      # Additional info
+      year
+    )
+  
+  model_data[[as.character(yr)]] <- year_data
+}
+
+# Combine all years
+final_data <- bind_rows(model_data)
+
+# Save prepared data
+saveRDS(final_data, here("data/model_features/prepared_data_1deg.rds"))
+
+```
+
+Get rousseau larger regions
+
+```{r}
+
+rousseau_regions <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv") %>%
+  dplyr::select(-X) %>%
+  rename(region = Region) 
+
+
+fix_landlocked <- rousseau_regions %>%
+  filter(region == "Landlocked") %>%
+  mutate(region = case_when(
+    Country == "AFG" ~ "MidEast",
+    Country == "AND" ~ "Europe",
+    Country == "AZE" ~ "MidEast",
+    Country == "AUT" ~ "Europe",
+    Country == "ARM" ~ "MidEast",
+    Country == "BTN" ~ "SouthEastAsia",
+    Country == "BOL" ~ "LatinAmerica",
+    Country == "BWA" ~ "SubAfrica",
+    Country == "BDI" ~ "SubAfrica",
+    Country == "BLR" ~ "Europe",
+    Country == "CAF" ~ "SubAfrica",
+    Country == "TCD" ~ "NWAfrica",
+    Country == "CSK" ~ "Europe",   # Historical, treat as Europe if included
+    Country == "CZE" ~ "Europe",
+    Country == "ETH" ~ "SubAfrica",
+    Country == "HUN" ~ "Europe",
+    Country == "KAZ" ~ "MidEast",
+    Country == "KGZ" ~ "MidEast",
+    Country == "LAO" ~ "SouthEastAsia",
+    Country == "LSO" ~ "SubAfrica",
+    Country == "LIE" ~ "Europe",
+    Country == "LUX" ~ "Europe",
+    Country == "MWI" ~ "SubAfrica",
+    Country == "MLI" ~ "NWAfrica",
+    Country == "MNG" ~ "NorthEastAsia",
+    Country == "MDA" ~ "Europe",
+    Country == "NPL" ~ "SouthEastAsia",
+    Country == "NER" ~ "NWAfrica",
+    Country == "PRY" ~ "LatinAmerica",
+    Country == "RWA" ~ "SubAfrica",
+    Country == "SMR" ~ "Europe",
+    Country == "SVK" ~ "Europe",
+    Country == "SWZ" ~ "SubAfrica",
+    Country == "CHE" ~ "Europe",
+    Country == "TJK" ~ "MidEast",
+    Country == "TKM" ~ "MidEast",
+    Country == "UGA" ~ "SubAfrica",
+    Country == "MKD" ~ "Europe",
+    Country == "BFA" ~ "NWAfrica",
+    Country == "UZB" ~ "MidEast",
+    Country == "SRB" ~ "Europe",
+    Country == "ZMB" ~ "SubAfrica",
+    TRUE ~ region
+  ))
+
+rousseau_fix <- rousseau_regions %>%
+  filter(region != "Landlocked") %>%
+  rbind(fix_landlocked) %>%
+  dplyr::select(-SAUP) %>%
+  filter(region  != "Unknown") %>%
+  add_row(Country = "ATF", region = "IslandNations") %>%
+    add_row(Country = "VAT", region = "Europe") %>%
+    add_row(Country = "BES", region = "Caribbean") %>%
+    add_row(Country = "CCK", region = "IslandNations")
+
+
+
+```
+
+
+Group GFW effort data by larger region and save 
+
+```{r}
+years <- 2015:2024
+model_data <- list()
+
+for(yr in years) {
+  # yr = 2024
+  # Load effort data
+  effort_props <- qread(file.path(rdsi_dir, glue("prep/gfw_props/deg_one/all_effort_gear_length_props_{yr}.qs"))) %>%
+    mutate(year = yr) %>%
+    filter(fishing_hours > 0) %>%
+    left_join(rousseau_fix, by = c("flag_fin" = "Country"))
+  
+  # test <- effort_props %>%
+  #   filter(is.na(region))
+  # unique(test$flag_fin)
+
+  # Combine all data
+  year_data <- effort_props %>%
+    filter(region != "UNK" | !is.na(region)) %>%
+    group_by(x, y, region, year, gear, length_category) %>%
+    summarise(fishing_hours = sum(fishing_hours, na.rm = TRUE)) %>%
+    ungroup() %>%
+    group_by(region, year, gear, length_category) %>%
+     #   group_by(region, year) %>%
+      mutate(
+            fishing_hours_global = sum(fishing_hours, na.rm = TRUE)) %>%
+  ungroup() %>%
+    mutate(sector = "I",
+           prop_fishing_hours_cell = fishing_hours/fishing_hours_global) %>% 
+    # Add total effort for each combination
+    dplyr::select(
+      # Response
+      prop_fishing_hours_cell,
+      lon = x, 
+      lat = y,
+      # Categorical predictors
+      region, gear, length_category,
+      
+      # Additional info
+      year
+    )
+  
+  model_data[[as.character(yr)]] <- year_data
+}
+
+# Combine all years
+final_data <- bind_rows(model_data)
+test <- final_data %>%
+  filter(is.na(region)) # 0 good
+
+# Save prepared data
+saveRDS(final_data, here("data/model_features/prepared_regional_data_1deg.rds"))
+
+```

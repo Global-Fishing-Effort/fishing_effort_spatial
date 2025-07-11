@@ -84,8 +84,8 @@ wrangle_pdo_data <-
            year <= 2024) %>%
     mutate(pdo_index = ifelse(pdo_index == 99.99,NA_real_,pdo_index)) %>%
     group_by(year) %>%
-  summarise(mean = mean(pdo_index, na.rm = TRUE),
-            sd = sd(pdo_index, na.rm = TRUE)) %>%
+  summarise(pdo_index_mean = mean(pdo_index, na.rm = TRUE),
+            pdo_index_sd = sd(pdo_index, na.rm = TRUE)) %>%
   ungroup() #
 
 
@@ -150,11 +150,27 @@ write.csv(eez_region_features, here("data/model_features/world_bank_regions.csv"
 Global fishing index data 
 
 ```{r}
+eez_lookup_ids <- read.csv(here("data/model_features/eez/eez_lookup.csv"))
+
+# Custom function to get the mode
+get_mode <- function(x) {
+  ux <- na.omit(unique(x))
+  ux[which.max(tabulate(match(x, ux)))]
+}
 
 gfi_raw <- readxl::read_xlsx("/home/ubuntu/data_storage/raw_data/Global Fishing Index 2021 - Data download V1.1/Global Fishing Index 2021 Data for Download V1.1.xlsx", sheet = 3, skip = 1)  %>% 
   dplyr::select(flag_fin  = "ISO Code", gov_score = "Governance capacity") %>%
   mutate(gov_score = as.factor(gov_score)) # make it into a categorical variable
 
-write.csv(gfi_raw, here("data/model_features/global_fishing_index_governance.csv"), row.names = FALSE)
+eez_gfi <- eez_region_features %>%
+  left_join(gfi_raw, by = c("eez_sovereign" = "flag_fin")) %>% # lets gapfill using the mode of the same world bank region
+  group_by(eez_region_world_bank_7) %>%
+  mutate(most_common_score = get_mode(gov_score)) %>%
+  ungroup() %>%
+  mutate(gov_score_new = ifelse(is.na(gov_score), most_common_score, gov_score)) %>%
+  mutate(gov_score_new = gov_score_new - 1) %>% # for some reason its adding one?
+  dplyr::select(flag_fin = eez_sovereign, gov_score = gov_score_new)
+
+write.csv(eez_gfi, here("data/model_features/global_fishing_index_governance.csv"), row.names = FALSE)
 ```
 
