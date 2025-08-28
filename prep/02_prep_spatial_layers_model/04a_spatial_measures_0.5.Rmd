@@ -317,6 +317,56 @@ eez_all <- rbind(eez_sovereign_nations, eez_territory) %>%
 
 ```
 
+See if we can add HKG to the data, using the EEZ data from Rousseau et al 2024: https://github.com/Global-Fishing-Effort/RousseauEtAl2023/blob/main/Data/Cells_LatLon_EEZ.csv
+
+```{r}
+data_grid <- data_grid %>% st_drop_geometry()
+
+data_grid_rast <- data_grid %>%
+  dplyr::select(lon, lat, pixel_id) %>%
+  rast(., type = "xyz")
+
+eez_data <- read.csv(here("data/model_features/eez/eez.csv"))
+
+eez_lookup <- read.csv(here("data/model_features/eez/eez_lookup.csv"))
+
+eez_rousseau_raw <- read.csv("https://raw.githubusercontent.com/Global-Fishing-Effort/RousseauEtAl2023/refs/heads/main/Data/Cells_LatLon_EEZ.csv") %>%
+    clean_names()
+
+test <- eez_rousseau_raw %>%
+  distinct(c_number, fa_oname)
+
+eez_rousseau_hkg <- eez_rousseau_raw %>%
+    filter(fa_oname %in% c("Hong Kong", "Mexico")) %>% # pick 2 countries bc making a rast out of just hkg won't work
+  dplyr::select(lon, lat, c_number) %>%
+  rast(., type = "xyz") %>%
+  terra::resample(., data_grid_rast, method = "bilinear") %>%
+  as.data.frame(., xy = TRUE) %>%
+  left_join(test) %>%
+  filter(fa_oname == "Hong Kong") %>%
+  rename(lon = x, lat = y, eez_id = c_number) %>%
+  left_join(data_grid) %>%
+  filter(!is.na(pixel_id)) %>%
+  dplyr::select(pixel_id, eez_id)
+
+eez_lookup_fix <- eez_lookup %>%
+  add_row(eez_sovereign = "HKG", eez_id = 344)
+
+write.csv(eez_lookup_fix, here("data/model_features/eez/eez_lookup_fix.csv"), row.names = FALSE)
+
+eez_data_fix <- eez_data %>% 
+  rbind(eez_rousseau_hkg)
+
+write.csv(eez_data_fix, here("data/model_features/eez/eez_fix.csv"), row.names = FALSE)
+
+test <- eez_data_fix %>%
+  left_join(data_grid) %>%
+  filter(eez_id == 344) %>% 
+  dplyr::select(lon, lat, eez_id) # cool.
+
+
+```
+
 
 # Determine FAO region of each cell 
 https://data.apps.fao.org/map/catalog/srv/eng/catalog.search#/metadata/ac02a460-da52-11dc-9d70-0017f293bd28d

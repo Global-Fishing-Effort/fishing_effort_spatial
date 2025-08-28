@@ -15,6 +15,7 @@ library(tidyverse)
 library(qs)
 library(here)
 library(glue)
+library(janitor)
 
 source(here("R/dir.R"))
 grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv"))
@@ -189,5 +190,33 @@ test <- final_data %>%
 
 # Save prepared data
 saveRDS(final_data, here("data/model_features/prepared_regional_data_1deg.rds"))
+
+```
+
+
+Also prep the Rousseau data for eventual predictions
+We need to prep Rousseau data by calculating average gross tonnage and Days at sea per flag and length combinations. Using these metrics with the predicted effort, we can calculate number of vessels.  
+
+ - `nom effort = nv*days_at_sea*mean_engine_p`
+ ----> `nv = nominal_effort / (days_at_sea*mean_engine_p)`
+
+```{r}
+rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FishingCountry_LengthBoat_Gear_Sector.csv") %>%
+  filter(!is.na(Length_Category)) %>%
+  dplyr::select(-X) %>%
+  clean_names() %>%
+  filter(sector == "I") %>%
+  group_by(flag_fin = country, length_category, year) %>%
+  summarise(nom_active_days = sum(nom_active, na.rm = TRUE),
+            eff_active_days = sum(eff_active, na.rm = TRUE), 
+            nv = sum(nv, na.rm = TRUE),
+            p = sum(p),
+            gt = sum(gt)) %>%
+  ungroup() %>%
+  filter(nv > 0) %>%
+  mutate(days_at_sea = nom_active_days/p,
+         mean_engine_p = p/nv) 
+
+qs::qsave(rousseau_eff, here("data/model_features/rousseau_ind_effort_nv_conversion.qs"))
 
 ```

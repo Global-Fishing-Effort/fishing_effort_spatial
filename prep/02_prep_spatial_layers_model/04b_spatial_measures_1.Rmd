@@ -1,5 +1,5 @@
 ---
-title: "Data wrangling - Spatial measures 0.5 degrees"
+title: "Data wrangling - Spatial measures 1 degree"
 author: "Gage Clawson (IMAS)"
 date: '`r format(Sys.time(), "%m/%d/%Y")`'
 output: 
@@ -92,7 +92,7 @@ eez <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"),
     dplyr::select(flag_fin, year, gear, length_category, total_nominal_fishing_hours, total_effective_fishing_hours) %>%
         filter(total_nominal_fishing_hours > 0) 
 
-rousseau_eezs <- unique(hist_fish_data$flag_fin) #151
+rousseau_eezs <- sort(unique(hist_fish_data$flag_fin)) #151
   
 test <- eez %>%
   st_drop_geometry() 
@@ -230,6 +230,56 @@ data_grid_high_seas <- read.csv(here("data/model_features/deg_1_x_1/eez/eez.csv"
   
 missing <- setdiff(rousseau_eezs, unique(data_grid_high_seas$eez_sovereign))
 # HKG - good, just HKG. In predictions we will just assume HKG uses the same EEZ as China. 
+
+```
+
+See if we can add HKG to the data, using the EEZ data from Rousseau et al 2024: https://github.com/Global-Fishing-Effort/RousseauEtAl2023/blob/main/Data/Cells_LatLon_EEZ.csv
+
+```{r}
+data_grid <- data_grid %>% st_drop_geometry()
+
+data_grid_rast <- data_grid %>%
+  dplyr::select(lon, lat, pixel_id) %>%
+  rast(., type = "xyz")
+
+eez_data <- read.csv(here("data/model_features/deg_1_x_1/eez/eez.csv"))
+
+eez_lookup <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"))
+
+
+eez_rousseau_raw <- read.csv("https://raw.githubusercontent.com/Global-Fishing-Effort/RousseauEtAl2023/refs/heads/main/Data/Cells_LatLon_EEZ.csv") %>%
+    clean_names()
+
+test <- eez_rousseau_raw %>%
+  distinct(c_number, fa_oname)
+
+eez_rousseau_hkg <- eez_rousseau_raw %>%
+    filter(fa_oname %in% c("Hong Kong", "Mexico")) %>% # pick 2 countries bc making a rast out of just hkg won't work
+  dplyr::select(lon, lat, c_number) %>%
+  rast(., type = "xyz") %>%
+  terra::resample(., data_grid_rast, method = "bilinear") %>%
+  as.data.frame(., xy = TRUE) %>%
+  left_join(test) %>%
+  filter(fa_oname == "Hong Kong") %>%
+  rename(lon = x, lat = y, eez_id = c_number) %>%
+  mutate(lat = ifelse(fa_oname == "Hong Kong", 22, lat)) %>% # use the next closest latitude
+  left_join(data_grid) %>%
+ # dplyr::select(lon, lat, eez_id) %>%
+ # rast(., type = "xyz")
+  filter(!is.na(pixel_id)) %>%
+  dplyr::select(pixel_id, eez_id)
+
+eez_lookup_fix <- eez_lookup %>%
+  add_row(eez_sovereign = "HKG", eez_id = 344)
+
+write.csv(eez_lookup_fix, here("data/model_features/deg_1_x_1/eez/eez_lookup_fix.csv"), row.names = FALSE)
+
+eez_data_fix <- eez_data %>% 
+  filter(!(pixel_id == 30598 & eez_id == 8603)) %>%
+  rbind(eez_rousseau_hkg)
+
+
+write.csv(eez_data_fix, here("data/model_features/deg_1_x_1/eez/eez_fix.csv"), row.names = FALSE)
 
 ```
 

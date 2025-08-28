@@ -1,0 +1,374 @@
+
+---
+title: "Data wrangling - Sea ice layer"
+author: "Gage Clawson (IMAS)"
+date: '`r format(Sys.time(), "%m/%d/%Y")`'
+output: 
+  pdf_document: 
+    number_sections: yes
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+library(tidyverse)
+library(terra)
+library(tidyterra)
+library(glue)
+source(here("R/dir.R"))
+
+data_directory <- rdsi_raw_dir
+
+```
+
+```{r}
+pixel_size <- 0.5
+
+mollweide_projection <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+
+# Read in data_grid, generated in data_wrangling.Rmd
+# We will do spatial joining in Mollweide, for proper calculations
+# Note that data grid still retains lat and lon columns, for joining with non-spatial tibbles
+# For Mollweide, always wrap around dateline, then transform, then calculate areas at end
+
+data_grid <- data.table::fread(here::here("data/model_features/global_grid.csv")) %>%
+  st_drop_geometry %>%
+  dplyr::select(lon, lat, pixel_id)
+
+data_rast <- rast(data_grid, type = "xyz")
+
+```
+
+# Summary
+
+Prep a sea ice layer to apply to our predictions so that we can cut out cells that are unsuitable for fishing due to sea ice concentrations. 
+
+Reference: 
+Xiao Liu, Charles Stock, John Dunne, Minjin Lee, Elena Shevliakova, Sergey Malyshev, Paul C.D. Milly, Matthias Büchner (2022): ISIMIP3a ocean physical and biogeochemical input data [GFDL-MOM6-COBALT2 dataset] (v1.0). ISIMIP Repository. https://doi.org/10.48364/ISIMIP.920945
+
+
+
+New methods, derived from relationships described in Kawaguchi & Press 2009 (https://onlinelibrary.wiley.com/doi/full/10.1111/j.1365-2400.2009.00686.x?saml_referrer#b5) and Hewitt 1997 (https://www.ccamlr.org/es/system/files/science_journal_papers/05hewitt.pdf)
+
+
+To constrain fishing effort allocation in regions with extensive seasonal ice cover, we derived a quantitative relationship between the number of months a location is ice-covered and the expected number of fishing months, using the empirical results of Kawaguchi & Press (2009) and the sea ice index methodology of Hewitt (1997).
+
+### 1. Source relationship from literature
+Kawaguchi & Press (2009) examined the relationship between the number of months operated by the Antarctic krill fishery and the annual sea ice cover index (Hewitt, 1997) for several sub-Antarctic regions. For the South Shetland Islands and South Orkney Islands combined—both subject to seasonal ice cover—the best-fit linear regression was:
+
+Months operated = 12.1 - 1.0482 × I
+
+where `I` is the **annual sea ice index** (in units of *10^6 km²·months*).
+
+### 2. Sea ice index definition
+Following Hewitt (1997), `I` is calculated by:
+- Using monthly passive microwave satellite data at 25 km resolution to determine the total area covered by ≥15% ice concentration (“open water” defined as <15%).
+- Integrating ice-covered area over the 12 months in a year for a fixed study region (40 × 50 pixels, ≈ 1.25 × *10^6* km²).  
+Units of `I` are therefore million km²·months.
+
+### 3. Normalizing to per-cell ice months
+The regression slope in Murphy et al. (2009) is per unit `I` for the whole 1.25 × *10^6* km² region. To apply this relationship at the scale of an individual grid cell (e.g., 0.5°), we normalized `I` by the region’s area to express the relationship in terms of the **average number of iced months per location in the region**:
+
+J = I / A_reg
+
+where:
+- `J` has units of **months iced per year** per cell.
+- `A_reg = 1.25` million km² is the region area in Hewitt’s study.
+
+Substituting `I = A_reg × J` into the regression:
+
+
+Months operated = 12.1 - (1.0482 × A_reg) × J
+Months operated = 12.1 - 1.31025 × J
+
+### 4. Deriving the threshold
+Setting `Months operated = 0` to determine the maximum number of iced months beyond which no fishing is expected:
+0 = 12.1 - 1.31025 × J
+J* = 12.1 / 1.31025 ≈ 9.24 months iced/year
+
+Thus, in the normalized per-cell form, a location experiencing ≥9.2 months per year with ice concentration ≥15% is expected to have no fishing activity.
+
+### 5. Implementation in the spatial allocation model
+- **Hard cutoff:** Cells with `N_ice ≥ 9` months/year (integer threshold) are excluded from fishing allocation.  
+
+### 6. Assumptions and limitations
+- Relationship derived for the krill trawl fleet in the South Shetland and South Orkney Islands; applied here as a proxy for general accessibility constraints in seasonally ice-covered regions.
+- Assumes a linear relationship between iced months and fishing months.
+- Uses the same 15% ice concentration threshold as Hewitt (1997) and Kawaguchi & Press (2009) for consistency.
+
+```{r}
+sic <- rast(file.path(data_directory, "ISIMIP/seaice/gfdl-mom6-cobalt2_obsclim_siconc_15arcmin_global_monthly_1961_2010.nc")) / 100
+
+
+# ---- Fix time: your tt are decimal "model years"; map to real YYYY-MM-DD
+tt  <- time(sic)
+offset <- 1961L - floor(tt[1])  # e.g., 1961 - 2030 = -69
+yy_raw <- floor(tt) + offset
+frac   <- tt - floor(tt)
+eps    <- 1e-8
+mm     <- pmin(12, pmax(1, floor(frac*12 + eps) + 1))
+dates  <- as.Date(sprintf("%04d-%02d-15", yy_raw, mm))
+time(sic) <- dates
+
+
+# ---- (1) Monthly ICE (1 if >=0.15), at native 15'
+ice_bin <- app(sic, fun = function(x) as.integer(x >= 0.15))
+
+library(tidyterra)
+# ---- (2) Aggregate to 0.5° (15' -> 0.5° is fact=2)
+#      Use mean to get fraction iced in each coarse cell-month, then threshold by tau.
+tau <- 0.5                      # share of subcells iced to count the coarse cell as iced (sensitivity: 0.25–0.75)
+ice_frac <- aggregate(ice_bin, fact = 2, fun = mean, na.rm = TRUE)
+ice_coarse <- ice_frac >= tau   # 1 if majority of subcells are iced, else 0
+tvec <- time(sic)  
+time(ice_coarse) <- tvec     
+
+# ---- Choose year definition
+# A) Calendar years:
+yrs_cal <- format(time(ice_coarse), "%Y")
+
+
+yrs <- yrs_cal
+
+
+# ---- (3) Count ICE months per cell-year: N_ice in [0,12]
+N_ice <- tapp(ice_coarse, index = yrs, fun = function(v, ...) sum(v, na.rm = TRUE))
+names(N_ice) <- sort(unique(yrs))
+
+## calculate limit for sea ice cutoff from literature:
+
+# Regression from SSI+SOI (Murphy et al.):
+# Months_oper = 12.1 - 1.0482 * I
+# where I is the Hewitt ice index in 10^6 km^2·months over a 1.25e6 km^2 region.
+
+intercept <- 12.1
+beta_I    <- 1.0482         # slope w.r.t. the regional ice index I
+A_reg     <- 1.25           # region area in units of 10^6 km^2 (40x50 pixels of 25km)
+
+# Convert to per-cell "months iced" slope:
+beta_J <- beta_I * A_reg    # = 1.31025... months lost per iced-month in the cell
+
+# Solve for Months_oper = 0:
+N_ice_star <- intercept / beta_J
+
+N_ice_star
+# [1] 9.236...
+
+hard_exclude <- N_ice >= 9  # derived cutoff (≈9.2), use 9 for an integer threshold
+
+
+# ---- (5) (Optional) bring to your modeling grid
+# For categorical/binary products, prefer nearest or modal, not bilinear.
+# Example shows weights (continuous) with bilinear, and hard mask (binary) with near/modal.
+
+
+# hard mask to data grid (nearest neighbor)
+hard_on_grid <- resample(hard_exclude, data_rast, method = "near")
+
+# ---- (6) Make a tidy df you can left_join by pixel_id
+hard_df <- hard_on_grid |>
+  as.data.frame(xy = TRUE) |>
+  pivot_longer(-c(x, y), names_to = "year", values_to = "hard_exclude") |>
+  rename(lon = x, lat = y) |>
+  left_join(data_grid, by = c("lon","lat")) |>
+  filter(!is.na(pixel_id)) |>
+  mutate(year = as.integer(str_remove(year, "^X")),
+         hard_exclude = as.integer(hard_exclude))
+
+# Also save N_ice for diagnostics
+n_ice_df <- N_ice |>
+  resample(data_rast, method = "bilinear") %>%
+  as.data.frame(xy = TRUE) |>
+  pivot_longer(-c(x, y), names_to = "year", values_to = "N_ice") |>
+  rename(lon = x, lat = y) |>
+  left_join(data_grid, by = c("lon","lat")) |>
+  filter(!is.na(pixel_id)) |>
+  mutate(year = as.integer(str_remove(year, "^X")))
+
+sea_ice_features <- hard_df |>
+  left_join(n_ice_df |> select(pixel_id, year, N_ice), by = c("pixel_id","year")) %>%
+  dplyr::select(lon, lat, pixel_id, year, sea_ice_present = hard_exclude, n_months_ice = N_ice)
+
+test <- sea_ice_features %>%
+  filter(year == 2010) %>%
+  dplyr::select(lon, lat, n_months_ice) %>%
+  rast(., type = "xyz") 
+
+test2 <- test %>% 
+  tidyterra::filter(n_months_ice >= 9)
+
+test3 <- sea_ice_features %>%
+  filter(year == 2010) %>%
+  dplyr::select(lon, lat, sea_ice_present) %>%
+  rast(., type = "xyz") 
+
+
+sea_ice_early <- sea_ice_features %>%
+  filter(year == 1961) %>%
+  dplyr::select(-year) %>%
+  crossing(., year = c(1950:1960))
+
+
+sea_ice_late <- sea_ice_features %>%
+  filter(year == 2010) %>%
+  dplyr::select(-year) %>%
+  crossing(., year = c(2011:2024))
+
+sea_ice_features_fin <- sea_ice_features %>%
+  rbind(., sea_ice_late, sea_ice_early)
+
+# Save
+qs::qsave(sea_ice_features_fin, here("data/model_features/sea_ice_features_lit.qs"))
+
+```
+
+Now prep the data but at 1 degree resolution 
+
+```{r}
+pixel_size <- 1
+
+mollweide_projection <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+
+# Read in data_grid, generated in data_wrangling.Rmd
+# We will do spatial joining in Mollweide, for proper calculations
+# Note that data grid still retains lat and lon columns, for joining with non-spatial tibbles
+# For Mollweide, always wrap around dateline, then transform, then calculate areas at end
+
+data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
+  st_drop_geometry %>%
+  dplyr::select(lon, lat, pixel_id)
+
+data_rast <- rast(data_grid, type = "xyz")
+
+```
+
+
+```{r}
+sic <- rast(file.path(data_directory, "ISIMIP/seaice/gfdl-mom6-cobalt2_obsclim_siconc_15arcmin_global_monthly_1961_2010.nc")) / 100
+
+
+# ---- Fix time: your tt are decimal "model years"; map to real YYYY-MM-DD
+tt  <- time(sic)
+offset <- 1961L - floor(tt[1])  # e.g., 1961 - 2030 = -69
+yy_raw <- floor(tt) + offset
+frac   <- tt - floor(tt)
+eps    <- 1e-8
+mm     <- pmin(12, pmax(1, floor(frac*12 + eps) + 1))
+dates  <- as.Date(sprintf("%04d-%02d-15", yy_raw, mm))
+time(sic) <- dates
+
+
+# ---- (1) Monthly ICE (1 if >=0.15), at native 15'
+ice_bin <- app(sic, fun = function(x) as.integer(x >= 0.15))
+
+library(tidyterra)
+# ---- (2) Aggregate to 1° (15' -> 1° is fact=4)
+#      Use mean to get fraction iced in each coarse cell-month, then threshold by tau.
+tau <- 0.5                      # share of subcells iced to count the coarse cell as iced (sensitivity: 0.25–0.75)
+ice_frac <- aggregate(ice_bin, fact = 4, fun = mean, na.rm = TRUE)
+ice_coarse <- ice_frac >= tau   # 1 if majority of subcells are iced, else 0
+tvec <- time(sic)  
+time(ice_coarse) <- tvec     
+
+# ---- Choose year definition
+# A) Calendar years:
+yrs_cal <- format(time(ice_coarse), "%Y")
+
+
+yrs <- yrs_cal
+
+
+# ---- (3) Count ICE months per cell-year: N_ice in [0,12]
+N_ice <- tapp(ice_coarse, index = yrs, fun = function(v, ...) sum(v, na.rm = TRUE))
+names(N_ice) <- sort(unique(yrs))
+
+## calculate limit for sea ice cutoff from literature:
+
+# Regression from SSI+SOI (Murphy et al.):
+# Months_oper = 12.1 - 1.0482 * I
+# where I is the Hewitt ice index in 10^6 km^2·months over a 1.25e6 km^2 region.
+
+intercept <- 12.1
+beta_I    <- 1.0482         # slope w.r.t. the regional ice index I
+A_reg     <- 1.25           # region area in units of 10^6 km^2 (40x50 pixels of 25km)
+
+# Convert to per-cell "months iced" slope:
+beta_J <- beta_I * A_reg    # = 1.31025... months lost per iced-month in the cell
+
+# Solve for Months_oper = 0:
+N_ice_star <- intercept / beta_J
+
+N_ice_star
+# [1] 9.236...
+
+hard_exclude <- N_ice >= 9  # derived cutoff (≈9.2), use 9 for an integer threshold
+
+
+# ---- (5) (Optional) bring to your modeling grid
+# For categorical/binary products, prefer nearest or modal, not bilinear.
+# Example shows weights (continuous) with bilinear, and hard mask (binary) with near/modal.
+
+
+# hard mask to data grid (nearest neighbor)
+hard_on_grid <- resample(hard_exclude, data_rast, method = "near")
+
+# ---- (6) Make a tidy df you can left_join by pixel_id
+hard_df <- hard_on_grid |>
+  as.data.frame(xy = TRUE) |>
+  pivot_longer(-c(x, y), names_to = "year", values_to = "hard_exclude") |>
+  rename(lon = x, lat = y) |>
+  left_join(data_grid, by = c("lon","lat")) |>
+  filter(!is.na(pixel_id)) |>
+  mutate(year = as.integer(str_remove(year, "^X")),
+         hard_exclude = as.integer(hard_exclude))
+
+# Also save N_ice for diagnostics
+n_ice_df <- N_ice |>
+  resample(data_rast, method = "bilinear") %>%
+  as.data.frame(xy = TRUE) |>
+  pivot_longer(-c(x, y), names_to = "year", values_to = "N_ice") |>
+  rename(lon = x, lat = y) |>
+  left_join(data_grid, by = c("lon","lat")) |>
+  filter(!is.na(pixel_id)) |>
+  mutate(year = as.integer(str_remove(year, "^X")))
+
+sea_ice_features <- hard_df |>
+  left_join(n_ice_df |> select(pixel_id, year, N_ice), by = c("pixel_id","year")) %>%
+  dplyr::select(lon, lat, pixel_id, year, sea_ice_present = hard_exclude, n_months_ice = N_ice)
+
+test <- sea_ice_features %>%
+  filter(year == 2010) %>%
+  dplyr::select(lon, lat, n_months_ice) %>%
+  rast(., type = "xyz") 
+
+test2 <- test %>% 
+  tidyterra::filter(n_months_ice >= 9)
+
+test3 <- sea_ice_features %>%
+  filter(year == 2010) %>%
+  dplyr::select(lon, lat, sea_ice_present) %>%
+  rast(., type = "xyz") 
+
+
+sea_ice_early <- sea_ice_features %>%
+  filter(year == 1961) %>%
+  dplyr::select(-year) %>%
+  crossing(., year = c(1950:1960))
+
+
+sea_ice_late <- sea_ice_features %>%
+  filter(year == 2010) %>%
+  dplyr::select(-year) %>%
+  crossing(., year = c(2011:2024))
+
+sea_ice_features_fin <- sea_ice_features %>%
+  rbind(., sea_ice_late, sea_ice_early)
+
+# Save
+qs::qsave(sea_ice_features_fin, here("data/model_features/deg_1_x_1/sea_ice_features_lit.qs"))
+
+```
+
+

@@ -1,7 +1,7 @@
 ---
 title: "Create fishing access dataset"
 output: html_document
-date: "2024-12-11"
+date: "2025-08-26"
 ---
 
 # Summary
@@ -22,181 +22,330 @@ library(qs)
 source(here("R/dir.R"))
 ```
 
-The data we need to access is located here: /home/ubuntu/gem/private/users/yannickr/effort_histsoc_1841_2017_EEZ_addFAO.csv
+```{r}
+eez_lookup <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup_fix.csv"))
+
+eez <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_fix.csv")) %>%
+  left_join(eez_lookup) 
+
+saup_codes <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv")
+```
+
+Read in gridded fishing effort by flag country from Rousseau et al.: https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/
+
+This is 0.5 degrees, so we need to resample the lat lons to match ours and then join to our 0.5 degree eez dataframe to get the fishing location
 
 ```{r}
-effort_df <- read.csv("/home/ubuntu/gem/private/users/yannickr/effort_histsoc_1841_2017_EEZ_addFAO.csv")
-
-colnames(effort_df)
-
-eez_sf <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_20231025"), layer = 'eez_v12')
-
-eez_lookup_ids <- eez_sf %>% 
-      filter(POL_TYPE !=  "Overlapping claim") %>% 
+data_grid_5 <- read.csv(here("data/model_features/global_grid.csv")) %>%
   st_drop_geometry() %>%
-  dplyr::distinct(eez_sovereign = ISO_SOV1, iso_ter = ISO_TER1) %>%
-        filter(eez_sovereign != "ATA")  %>% 
-  add_row(eez_sovereign = "High seas", iso_ter = "High seas") %>%
-  filter(!is.na(iso_ter))
+  dplyr::select(-geometry_wkt)
 
-# read in our eez lookup 
+eez_lookup_5 <- read.csv(here("data/model_features/eez/eez_lookup_fix.csv"))
 
-eez_lookup <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup.csv"))
+eez_5 <- read.csv(here("data/model_features/eez/eez_fix.csv")) %>%
+  left_join(eez_lookup_5)  %>%
+  left_join(data_grid_5)
 
-## need SAUP country codes they used
-saup_codes <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv")
+options(timeout = 1000)
+library(data.table)
+library(terra)
+
+url <- "https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/GriddedEffortby_FishingCountry.csv"
+grid_effort_flag_raw <- fread(url, showProgress = TRUE)  # very fast parser
+
+# 1) Templates: one with centers at .25/.75 (source), one at .0/.5 (target)
+r_src <- rast(
+  ext(-180, 180, -90, 90),     # boundaries at integers -> centers .25/.75
+  resolution = 0.5, crs = "EPSG:4326"
+)
+
+r_tgt <- rast(
+  ext(-180.25, 180.25, -90.25, 90.25),  # boundaries shifted -> centers .0/.5
+  resolution = 0.5, crs = "EPSG:4326"
+)
+
+r_tgt <- rast(data_grid_5 %>% dplyr::select(lon, lat, pixel_id), type = "xyz")
+
+# 2) Build a lookup FROM the .25/.75 grid TO the .0/.5 grid
+#    (use your actual source table of points to limit to cells you actually need)
+src_pts <- vect(grid_effort_flag_raw, geom = c("Lon","Lat"), crs = "EPSG:4326")
+
+# for each source point, which target cell contains it?
+tgt_cells <- cellFromXY(r_tgt, crds(src_pts))
+
+# target cell centers (snapped lon/lat)
+tgt_xy <- xyFromCell(r_tgt, tgt_cells)
+
+lookup_src_to_tgt <- tibble::tibble(
+  Lon_src  = grid_effort_flag_raw$Lon,
+  Lat_src  = grid_effort_flag_raw$Lat,
+  lon_tgt  = tgt_xy[,1],
+  lat_tgt  = tgt_xy[,2]
+) %>%
+  # keep a stable 1-decimal representation (avoids float fuzz)
+  mutate(
+    lon_tgt = as.numeric(sprintf("%.1f", lon_tgt)),
+    lat_tgt = as.numeric(sprintf("%.1f", lat_tgt))
+  ) %>%
+  distinct(Lon_src, Lat_src, .keep_all = TRUE)
+
+# Example join: snap the effort data to the EEZ scheme
+grid_effort_flag_snap <- grid_effort_flag_raw %>%
+  left_join(lookup_src_to_tgt,
+            by = c("Lon" = "Lon_src", "Lat" = "Lat_src")) %>%
+  rename(lon = lon_tgt, lat = lat_tgt)
+
+# Now you can left_join onto eez_5 by c("lon","lat")
+out <- grid_effort_flag_snap %>%
+  left_join(eez_5, by = c("lon","lat"))
+
+# test <- filter(out, is.na(lat)|is.na(lon)) # 0 good! 
+# test <- filter(out, is.na(eez_sovereign)) # ok sooo missing ~1% of rows 
+# 
+# test <- out %>% 
+#   filter(Country == "IND", 
+#          is.na(eez_sovereign), 
+#          Year == 2003) %>%
+#   dplyr::select(lon, lat, NV) %>%
+#   rast(., type = "xyz")
+# 
+# plot(test, col = "red") # all coastal..? So maybe I should assign the NAs its closest existent neighbor pixel? 
+
+missing_pixels <- out %>%
+  filter(is.na(pixel_id))
+
+setDT(missing_pixels)
+setDT(data_grid_5)
+
+# Build grid points once
+grid_pts <- vect(data_grid_5, geom = c("lon","lat"), crs = "EPSG:4326")
+
+# Unique lon/lat among the NAs
+uniq_xy <- unique(missing_pixels[is.na(pixel_id), .(lon, lat)])
+uniq_pts <- vect(uniq_xy, geom = c("lon","lat"), crs = "EPSG:4326")
+
+library(FNN)
+
+X <- as.matrix(data_grid_5[, c("lon","lat")])   # reference points
+Q <- as.matrix(uniq_xy[, c("lon","lat")])       # query (unique missing)
+
+kn <- get.knnx(X, Q, k = 1)
+to_idx <- kn$nn.index[, 1]
+
+lookup_nn <- data.table(
+  lon_old      = uniq_xy$lon,
+  lat_old      = uniq_xy$lat,
+  pixel_id = data_grid_5$pixel_id[to_idx]
+) %>%
+  left_join(data_grid_5, by = "pixel_id")
 
 
-effort_access_df <- effort_df %>%
-  filter(NomActive > 0, 
-        Year >= 1950,
-        Sector == "Industrial") %>%
-  distinct(year = Year,  flag_id = SAUP, eez_country_name) %>% 
-  left_join(saup_codes, by = c("flag_id" = "SAUP")) %>%
-  dplyr::select(year, flag_fin = Country, eez_country_name) %>%
-  mutate(iso_ter = countrycode(eez_country_name, origin = "country.name", destination = "iso3c")) %>%
-  mutate(iso_ter = ifelse(eez_country_name == "High Seas", "High seas", iso_ter)) %>%
-  left_join(eez_lookup_ids) %>%
-    mutate(eez_country_name = ifelse(eez_country_name == "High Seas", "High seas", eez_country_name))  %>%
-    mutate(eez_sovereign = case_when(
-    eez_country_name == "Dominican Rp" ~ "DOM",
-    eez_country_name == "NethAntilles" ~ "NLD",
-    eez_country_name %in% c("US Virgin Is", "Amer Samoa") ~ "USA",
-    eez_country_name %in% c("Fr Guiana", "Kerguelen Is", "Fr Polynesia") ~ "FRA", 
-    eez_country_name %in% c("Channel Is", "Br Virgin Is", "Br Ind Oc Tr") ~ "GBR", 
-    eez_country_name == "Serbia Montenegro" ~ "MNE", # choosing montenegro here as serbia is landlocked
-    eez_country_name == "West Sahara" ~ "MAR", # this is technically not right? I guess it depends on the year 
-    eez_country_name == "Untd Arab Em" ~ "ARE", 
-    eez_country_name == "Micronesia" ~ "FSM",
-    TRUE ~ eez_sovereign
-  )) %>%
-    mutate(access = 1) %>%
-  mutate(eez_sovereign = case_when(
-    eez_country_name == "Falkland Is" ~ "ARG",
-    eez_country_name == "Gibraltar" ~ "GBR",
-    eez_country_name == "Mayotte" ~ "FRA", 
-    eez_country_name %in% c("Hong Kong", "Macau", "Taiwan") ~ "CHN", # contentious? 
-    eez_country_name == "Ukraine" ~ "RUS", # this isnt true... 
-    TRUE ~ eez_sovereign
-  )) %>%
-  distinct(year, flag_fin, eez_sovereign, access) %>%
-  left_join(eez_lookup) 
-  
-qs::qsave(effort_access_df, here("data/int/prediction_historical_data/fishing_access.qs"))
+missing_data_fix <- missing_pixels %>%
+  as.data.frame() %>%
+  dplyr::select(-pixel_id, -eez_id, -eez_sovereign) %>%
+  left_join(lookup_nn, by = c("lon" = "lon_old", "lat" = "lat_old")) %>%
+  dplyr::select(-lon, -lat) %>%
+  dplyr::rename(lon_old = Lon, lat_old = Lat, lon = lon.y, lat = lat.y) %>%
+  left_join(eez_5)
+
+all_data_matched_effort <- out %>%
+  filter(!is.na(pixel_id)) %>%
+  rename(lon_old = Lon, lat_old = Lat) %>%
+  rbind(., missing_data_fix)
+
+
+all_data_distinct_access <- all_data_matched_effort %>% 
+  filter(NomActiveHours > 0) %>%
+  distinct(year = Year, flag_fin = Country, eez_sovereign) %>%
+  mutate(access = 1)
+
+qs::qsave(all_data_distinct_access, here("data/int/prediction_historical_data/fishing_access.qs"))
+
 
 ```
+
 
 Create access mask for high seas areas and use FAO areas as access areas for those
 
 ```{r}
-effort_access_df_highseas <- effort_df %>%
-  filter(NomActive > 0, 
-        Year >= 1950,
-        Sector == "Industrial",
-        eez_country_name == "High Seas") %>%
-  distinct(year = Year,  flag_id = SAUP, eez_country_name, fao_area) %>% # maybe add gear here? Vessel length too? For as much detail as we can get? 
-  left_join(saup_codes, by = c("flag_id" = "SAUP")) %>%
-  dplyr::select(year, flag_fin = Country, eez_country_name, fao_area) %>%
-    mutate(eez_country_name = ifelse(eez_country_name == "High Seas", "High seas", eez_country_name))  %>%
-    mutate(access_fao = 1) %>%
-  distinct(year, flag_fin, eez_sovereign = eez_country_name, fao_area, access_fao) %>%
-  left_join(eez_lookup) 
+fao_df <- read.csv(here("data/model_features/fao/fao_fixed.csv")) %>%
+  left_join(read.csv(here("data/model_features/fao/fao_major_ids.csv")))
 
+effort_access_df_highseas <- all_data_matched_effort %>%
+  filter(NomActiveHours > 0, 
+         eez_sovereign == "High seas") %>%
+  left_join(fao_df) %>%
+  mutate(access_fao = 1) %>%
+  distinct(year = Year, flag_fin = Country, eez_country_name = eez_sovereign, fao_id, fao_area_name = name_en, access_fao)
+  
 qs::qsave(effort_access_df_highseas, here("data/int/prediction_historical_data/high_seas_fao_fishing_access.qs"))
 
-
-fao_lookup <- read.csv(here("data/model_features/fao/fao_major_ids.csv"))
-
-antartica_access <- effort_access_df_highseas %>%
-  distinct(year, flag_fin, eez_sovereign, fao_area, access_fao) %>%
-  left_join(fao_lookup, by = c("fao_area" = "fao_id")) %>%
-  filter(str_detect(name_en, "Antarctic"))
 ```
 
-Try with catch data instead?
+Instead of using the pre-existing Watson data already processed by Cami (and using a different EEZ mask), we will pull using our own EEZ mask:
+
+Read in the data: 
 
 ```{r}
-catch_df <- read.csv("/home/ubuntu/gem/private/users/yannickr/catch_histsoc_1869_2017_EEZ_addFAO.csv") %>%
-  filter(Sector == "industrial")
+library(janitor)
 
-catch_access_df <- catch_df %>%
-  mutate(catch = Reported + IUU + Discards) %>%
-  filter(catch > 1, 
-        Year >= 1950,
-        SAUP != 999) %>% # antarctica i believe?
-  distinct(year = Year, SAUP, FCountryName, eez_country_name) %>%
-  left_join(saup_codes, by = c("SAUP")) %>%
-  mutate(Country = ifelse(SAUP == 830, "GBR", Country)) %>%
-  dplyr::select(year, flag_fin = Country, eez_country_name) %>%
-  filter(!is.na(flag_fin)) %>%
-  mutate(iso_ter = countrycode(eez_country_name, origin = "country.name", destination = "iso3c")) %>%
-  mutate(iso_ter = ifelse(eez_country_name == "High Seas", "High seas", iso_ter)) %>%
-  left_join(eez_lookup_ids) %>%
-    mutate(eez_country_name = ifelse(eez_country_name == "High Seas", "High seas", eez_country_name))  %>%
-    mutate(eez_sovereign = case_when(
-    eez_country_name == "Dominican Rp" ~ "DOM",
-    eez_country_name == "NethAntilles" ~ "NLD",
-    eez_country_name %in% c("US Virgin Is", "Amer Samoa") ~ "USA",
-    eez_country_name %in% c("Fr Guiana", "Kerguelen Is", "Fr Polynesia") ~ "FRA", 
-    eez_country_name %in% c("Channel Is", "Br Virgin Is", "Br Ind Oc Tr") ~ "GBR", 
-    eez_country_name == "Serbia Montenegro" ~ "MNE", # choosing montenegro here as serbia is landlocked
-    eez_country_name == "West Sahara" ~ "MAR", # this is technically not right? I guess it depends on the year 
-    eez_country_name == "Untd Arab Em" ~ "ARE", 
-    eez_country_name == "Micronesia" ~ "FSM",
-    TRUE ~ eez_sovereign
-  )) %>%
-    mutate(access = 1) %>%
-  mutate(eez_sovereign = case_when(
-    eez_country_name == "Falkland Is" ~ "ARG",
-    eez_country_name == "Gibraltar" ~ "GBR",
-    eez_country_name == "Mayotte" ~ "FRA", 
-    eez_country_name %in% c("Hong Kong", "Macau", "Taiwan") ~ "CHN", # contentious? 
-    eez_country_name == "Ukraine" ~ "RUS", # this isnt true... but our EEZ mask excludes disputed areas (like Ukraine). I think we will need to adjust this to include Ukraine and other territories in the data (e.g., madiera, azores, etc.)
-    TRUE ~ eez_sovereign
-  )) %>%
-  distinct(year, flag_fin, eez_sovereign, access) %>%
-  left_join(eez_lookup)
+# big file, takes a long time to load. 
+watson_industrial_catch <- read.csv("/home/ubuntu/gem/private/users/yannickr/Reg_catchData/20220606_RegCatchData/NonHistoricalIndCami_toCombine/NonHistoricalIndCami.csv") %>%
+  clean_names() %>%
+  mutate(catch = reported+iuu) %>%
+  group_by(year, c_number, lon, lat) %>%
+  summarise(catch = sum(catch, na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(catch > 0, 
+         year >= 1950)
 
-## need to make a dataset where each flag country has access to its own EEZ for each year: 
-iso3_list <- unique(saup_codes$Country)
+library(readxl)
 
-# Remove invalid or empty entries if not already done
-invalid_iso3 <- c("")
-iso3_list <- iso3_list[!iso3_list %in% invalid_iso3]
+c_codes <- read_xlsx("/home/ubuntu/gem/private/users/yannickr/Reg_catchData/20220606_RegCatchData/CodesRevisedJune2022.xlsx", sheet = 6) %>%
+  clean_names() %>%
+  dplyr::select(c_number = cnumber_1, country_name = fao_name) %>% 
+  mutate(flag_fin = countrycode::countrycode(country_name, origin = "country.name", destination = "iso3c")) %>% 
+    mutate(flag_fin = case_when(
+    country_name == "Dominican Rp" ~ "DOM",
+    country_name == "NethAntilles" ~ "NLD",
+    country_name %in% c("US Virgin Is", "Amer Samoa") ~ "USA",
+    country_name %in% c("Channel Is", "Br Virgin Is", "Br Ind Oc Tr") ~ "GBR",
+    country_name == "Untd Arab Em" ~ "ARE",
+    country_name == "Micronesia" ~ "FSM",
+    country_name == "Falkland Is" ~ "ARG",
+    country_name == "Gibraltar" ~ "GBR",
+    country_name %in% c("Macau") ~ "CHN",
+    country_name == "Fr Guiana" ~ "GUF",
+    country_name == "Fr Polynesia" ~ "PYF",
+    country_name == "St Pier Mq" ~ "FRA",
+    country_name == "Yugoslavia" ~ "YUG", 
+    country_name == "Other nei" ~ "NEI", 
+    TRUE ~ flag_fin)) %>%
+  distinct(flag_fin, country_name, c_number)
 
-# Define the years
-years <- 1950:2017
+catch_df_access <- watson_industrial_catch %>% 
+  distinct(year, lon, lat, c_number) %>%
+  left_join(c_codes) %>%
+  distinct(year, lon, lat, flag_fin)
+```
 
-# Create a dataframe with all combinations of year and country
-fishing_access_own_eez <- expand.grid(
-  year = years,
-  flag_fin = iso3_list,
-  stringsAsFactors = FALSE
+Now apply the same methodology as above for the catch data pull:
+
+```{r}
+data_grid_5 <- read.csv(here("data/model_features/global_grid.csv")) %>%
+  st_drop_geometry() %>%
+  dplyr::select(-geometry_wkt)
+
+eez_lookup_5 <- read.csv(here("data/model_features/eez/eez_lookup_fix.csv"))
+
+eez_5 <- read.csv(here("data/model_features/eez/eez_fix.csv")) %>%
+  left_join(eez_lookup_5)  %>%
+  left_join(data_grid_5)
+
+library(data.table)
+library(terra)
+
+
+# 1) Templates: one with centers at .25/.75 (source), one at .0/.5 (target)
+r_src <- rast(
+  ext(-180, 180, -90, 90),     # boundaries at integers -> centers .25/.75
+  resolution = 0.5, crs = "EPSG:4326"
 )
 
-# Add EEZ sovereign column (equal to flag_fin in this case)
-fishing_access_own_eez$eez_sovereign <- fishing_access$flag_fin
+r_tgt <- rast(data_grid_5 %>% dplyr::select(lon, lat, pixel_id), type = "xyz", crs = "EPSG:4326")
 
-# Set access = 1
-fishing_access_own_eez$access <- 1
+# 2) Build a lookup FROM the .25/.75 grid TO the .0/.5 grid
+#    (use your actual source table of points to limit to cells you actually need)
+src_pts <- vect(catch_df_access, geom = c("lon","lat"), crs = "EPSG:4326")
 
-fishing_access_own_eez <- fishing_access_own_eez %>%
-  left_join(eez_lookup) %>%
-    mutate(eez_sovereign = case_when(
-    eez_sovereign %in% c("VIR", "ASM") ~ "USA",
-    eez_sovereign %in% c("GUF", "PYF") ~ "FRA", 
-    eez_sovereign == "ESG" ~ "MAR", # this is technically not right? I guess it depends on the year 
-    eez_sovereign == "FLK" ~ "ARG",
-    eez_sovereign == "MYT" ~ "FRA", 
-    eez_sovereign %in% c("HKG", "MAC", "TWN") ~ "CHN", # contentious? 
-    eez_sovereign == "UKR" ~ "RUS", # this isnt true... but our EEZ mask excludes disputed areas (like Ukraine). I think we will need to adjust this to include Ukraine and other territories in the data (e.g., madiera, azores, etc.)
-    TRUE ~ eez_sovereign
-  ))
+# for each source point, which target cell contains it?
+tgt_cells <- cellFromXY(r_tgt, crds(src_pts))
+
+# target cell centers (snapped lon/lat)
+tgt_xy <- xyFromCell(r_tgt, tgt_cells)
+
+lookup_src_to_tgt <- tibble::tibble(
+  lon_src  = catch_df_access$lon,
+  lat_src  = catch_df_access$lat,
+  lon_tgt  = tgt_xy[,1],
+  lat_tgt  = tgt_xy[,2]
+) %>%
+  # keep a stable 1-decimal representation (avoids float fuzz)
+  mutate(
+    lon_tgt = as.numeric(sprintf("%.1f", lon_tgt)),
+    lat_tgt = as.numeric(sprintf("%.1f", lat_tgt))
+  ) %>%
+  distinct(lon_src, lat_src, .keep_all = TRUE)
+
+# Example join: snap the effort data to the EEZ scheme
+grid_catch_flag_snap <- catch_df_access %>%
+  rename(lon_old = lon, lat_old = lat) %>%
+  left_join(lookup_src_to_tgt,
+            by = c("lon_old" = "lon_src", "lat_old" = "lat_src")) %>%
+  rename(lon = lon_tgt, lat = lat_tgt)
+
+# Now you can left_join onto eez_5 by c("lon","lat")
+out <- grid_catch_flag_snap %>%
+  left_join(eez_5, by = c("lon","lat"))
+
+# test <- filter(out, is.na(lat)|is.na(lon)) # 0 good! 
+# test <- filter(out, is.na(eez_sovereign)) # ok sooo missing ~<1% of rows 
+# 
+# test <- out %>% 
+#   filter(flag_fin == "IND", 
+#          is.na(eez_sovereign), 
+#          year == 2003) %>%
+#   dplyr::select(lon, lat, year) %>%
+#   rast(., type = "xyz")
+# 
+# plot(test, col = "red") # all coastal..? So maybe I should assign the NAs its closest existent neighbor pixel? 
+
+missing_pixels <- out %>%
+  filter(is.na(pixel_id))
+
+setDT(missing_pixels)
+setDT(data_grid_5)
+
+# Build grid points once
+grid_pts <- vect(data_grid_5, geom = c("lon","lat"), crs = "EPSG:4326")
+
+# Unique lon/lat among the NAs
+uniq_xy <- unique(missing_pixels[is.na(pixel_id), .(lon, lat)])
+uniq_pts <- vect(uniq_xy, geom = c("lon","lat"), crs = "EPSG:4326")
+
+library(FNN)
+
+X <- as.matrix(data_grid_5[, c("lon","lat")])   # reference points
+Q <- as.matrix(uniq_xy[, c("lon","lat")])       # query (unique missing)
+
+kn <- get.knnx(X, Q, k = 1)
+to_idx <- kn$nn.index[, 1]
+
+lookup_nn <- data.table(
+  lon_old      = uniq_xy$lon,
+  lat_old      = uniq_xy$lat,
+  pixel_id = data_grid_5$pixel_id[to_idx]
+) %>%
+  left_join(data_grid_5, by = "pixel_id")
 
 
-catch_access_df <- catch_access_df %>%
-  rbind(fishing_access_own_eez) %>%
-  distinct()
+missing_data_fix <- missing_pixels %>%
+  as.data.frame() %>%
+  dplyr::select(-pixel_id, -eez_id, -eez_sovereign) %>%
+  left_join(lookup_nn, by = c("lon" = "lon_old", "lat" = "lat_old")) %>%
+  dplyr::select(-lon, -lat) %>%
+  dplyr::rename(lon = lon.y, lat = lat.y) %>%
+  left_join(eez_5)
+
+all_data_matched_catch <- out %>%
+  filter(!is.na(pixel_id)) %>%
+  rbind(., missing_data_fix)
+
+
+all_data_distinct_access_catch <- all_data_matched_catch %>% 
+  distinct(year, flag_fin, eez_sovereign, eez_id) %>%
+  mutate(access = 1)
+
 
 ```
 
@@ -205,43 +354,26 @@ Fix Ukraine and Slovenia access data: It is not in the Watson data before 1988 (
  - create a master list of countries where Ukraine and Slovenia fish in from the Watson data from 1990-2000
  - Only include countries in the rousseau data if they are also in the watson data from 1990-2000
 
+We also need to add RAM and RAA to the Watson data, and we will use the data from Rousseau for this, using the same rules. 
+
 ```{r}
 # Ukraine first
-ukraine_watson <- catch_access_df %>%
+ukraine_watson <- all_data_distinct_access_catch %>%
   filter(year %in% c(1990:2000),
          flag_fin == "UKR") %>%
   distinct(flag_fin, eez_sovereign, access, eez_id)
 
 rousseau_access <- qread(here("data/int/prediction_historical_data/fishing_access.qs"))
 
-ukr_rousseau_access <- effort_df %>% 
-    mutate(iso_ter = countrycode(eez_country_name, origin = "country.name", destination = "iso3c")) %>%
-  mutate(iso_ter = ifelse(eez_country_name == "High Seas", "High seas", iso_ter)) %>%
-  left_join(eez_lookup_ids) %>%
-    mutate(eez_country_name = ifelse(eez_country_name == "High Seas", "High seas", eez_country_name))  %>%
-    mutate(eez_sovereign = case_when(
-    eez_country_name == "Dominican Rp" ~ "DOM",
-    eez_country_name == "NethAntilles" ~ "NLD",
-    eez_country_name %in% c("US Virgin Is", "Amer Samoa") ~ "USA",
-    eez_country_name %in% c("Fr Guiana", "Kerguelen Is", "Fr Polynesia") ~ "FRA", 
-    eez_country_name %in% c("Channel Is", "Br Virgin Is", "Br Ind Oc Tr") ~ "GBR", 
-    eez_country_name == "Serbia Montenegro" ~ "MNE", # choosing montenegro here as serbia is landlocked
-    eez_country_name == "West Sahara" ~ "MAR", # this is technically not right? I guess it depends on the year 
-    eez_country_name == "Untd Arab Em" ~ "ARE", 
-    eez_country_name == "Micronesia" ~ "FSM",
-    TRUE ~ eez_sovereign
-  ))  %>%
-  filter(NomActive > 0, 
-        Year >= 1950,
-        Sector == "Industrial") %>%
-  rename(year = Year,  flag_id = SAUP) %>% 
-  left_join(saup_codes, by = c("flag_id" = "SAUP")) %>%
+ukr_rousseau_access <- all_data_matched_effort %>% 
+  filter(NomActiveHours > 0) %>%
+  rename(year = Year) %>% 
   group_by(year, Country, eez_sovereign) %>%
-  summarise(NomActive = sum(NomActive, na.rm = TRUE)) %>%
+  summarise(NomActiveHours = sum(NomActiveHours, na.rm = TRUE)) %>%
   ungroup() %>%
-  dplyr::select(year, flag_fin = Country, eez_sovereign, NomActive) %>%
+  dplyr::select(year, flag_fin = Country, eez_sovereign, NomActiveHours) %>%
   filter(flag_fin == "UKR",
-         NomActive > 100) %>% # maybe filter for >1000 hours when we have to use this? 
+         NomActiveHours > 100) %>% # maybe filter for >100 hours when we have to use this? 
   distinct(year, flag_fin, eez_sovereign) %>%
   mutate(access = 1) %>%
   filter(year < 1988) 
@@ -253,67 +385,61 @@ ukr_access_1950_1987 <- ukr_rousseau_access %>%
 
 
 # Slovenia next 
-
-slovenia_watson <- catch_access_df %>%
+slovenia_watson <- all_data_distinct_access_catch %>%
   filter(year %in% c(1990:2000),
          flag_fin == "SVN") %>%
   distinct(flag_fin, eez_sovereign, access, eez_id)
 
-rousseau_access <- qread(here("data/int/prediction_historical_data/fishing_access.qs"))
-
-svn_rousseau_access <- effort_df %>% 
-    mutate(iso_ter = countrycode(eez_country_name, origin = "country.name", destination = "iso3c")) %>%
-  mutate(iso_ter = ifelse(eez_country_name == "High Seas", "High seas", iso_ter)) %>%
-  left_join(eez_lookup_ids) %>%
-    mutate(eez_country_name = ifelse(eez_country_name == "High Seas", "High seas", eez_country_name))  %>%
-    mutate(eez_sovereign = case_when(
-    eez_country_name == "Dominican Rp" ~ "DOM",
-    eez_country_name == "NethAntilles" ~ "NLD",
-    eez_country_name %in% c("US Virgin Is", "Amer Samoa") ~ "USA",
-    eez_country_name %in% c("Fr Guiana", "Kerguelen Is", "Fr Polynesia") ~ "FRA", 
-    eez_country_name %in% c("Channel Is", "Br Virgin Is", "Br Ind Oc Tr") ~ "GBR", 
-    eez_country_name == "Serbia Montenegro" ~ "MNE", # choosing montenegro here as serbia is landlocked
-    eez_country_name == "West Sahara" ~ "MAR", # this is technically not right? I guess it depends on the year 
-    eez_country_name == "Untd Arab Em" ~ "ARE", 
-    eez_country_name == "Micronesia" ~ "FSM",
-    TRUE ~ eez_sovereign
-  ))  %>%
-  filter(NomActive > 0, 
-        Year >= 1950,
-        Sector == "Industrial") %>%
-  rename(year = Year,  flag_id = SAUP) %>% 
-  left_join(saup_codes, by = c("flag_id" = "SAUP")) %>%
+svn_rousseau_access <- all_data_matched_effort %>% 
+  filter(NomActiveHours > 0) %>%
+  rename(year = Year) %>% 
   group_by(year, Country, eez_sovereign) %>%
-  summarise(NomActive = sum(NomActive, na.rm = TRUE)) %>%
+  summarise(NomActiveHours = sum(NomActiveHours, na.rm = TRUE)) %>%
   ungroup() %>%
-  dplyr::select(year, flag_fin = Country, eez_sovereign, NomActive) %>%
+  dplyr::select(year, flag_fin = Country, eez_sovereign, NomActiveHours) %>%
   filter(flag_fin == "SVN",
-         NomActive > 100) %>% # maybe filter for >1000 hours when we have to use this? 
+         NomActiveHours > 100) %>% # maybe filter for >100 hours when we have to use this? 
   distinct(year, flag_fin, eez_sovereign) %>%
   mutate(access = 1) %>%
   filter(year < 1992) 
 
 
 svn_access_1950_1991 <- svn_rousseau_access %>%
-  filter(eez_sovereign %in% unique(slovenia_watson$eez_sovereign)) %>%
+  filter(eez_sovereign %in% unique(slovenia_watson$eez_sovereign)) %>% # now make sure that we only allow fishing in areas that Watson says they can actually fish, since we trust that more. 
   left_join(eez_lookup)
 
+prt_watson <- all_data_distinct_access_catch %>%
+    filter(
+         flag_fin == "PRT") %>%
+  distinct(flag_fin, eez_sovereign, access, eez_id)
 
-catch_access_fin <- catch_access_df %>%
-  rbind(ukr_access_1950_1987, svn_access_1950_1991) %>%
-    mutate(eez_sovereign = case_when(
-    flag_fin %in% c("RAA", "RAM") ~ "PRT",
-    TRUE ~ eez_sovereign)) %>%
-    mutate(eez_id = case_when(
-    flag_fin %in% c("RAA", "RAM") ~ 2243,
-    TRUE ~ eez_id))  # fix azores and madeira
+RAA_RAM <- all_data_matched_effort %>%
+    filter(NomActiveHours > 0) %>%
+  rename(year = Year) %>% 
+  group_by(year, Country, eez_sovereign) %>%
+  summarise(NomActiveHours = sum(NomActiveHours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  dplyr::select(year, flag_fin = Country, eez_sovereign, NomActiveHours) %>%
+    filter(flag_fin %in% c("RAA", "RAM")) %>%
+  filter(
+         NomActiveHours > 100) %>% # maybe filter for >100 hours when we have to use this? 
+  distinct(year, flag_fin, eez_sovereign) %>%
+  mutate(access = 1) %>%
+  distinct()
 
+ram_raa_df <- RAA_RAM %>%
+    filter(eez_sovereign %in% unique(prt_watson$eez_sovereign)) %>% # now make sure that we only allow fishing in areas that Watson says they can actually fish, since we trust that more. 
+  left_join(eez_lookup)
 
+catch_access_fin <- all_data_distinct_access_catch %>%
+  rbind(ukr_access_1950_1987, svn_access_1950_1991, ram_raa_df)
+  
 # fix faroe islands data 
 fro_access_1951 <- catch_access_fin %>%
   filter(flag_fin == "FRO", 
          year == 1952) %>%
   mutate(year = 1951)
+
 fro_access_1950 <- catch_access_fin %>%
   filter(flag_fin == "FRO", 
          year == 1952) %>%
@@ -323,49 +449,137 @@ fro_access_1950 <- catch_access_fin %>%
 catch_access_fin <- catch_access_fin %>%
   rbind(fro_access_1950, fro_access_1951)
 
-qs::qsave(catch_access_fin, here("data/int/prediction_historical_data/catch_fishing_access.qs"))
+```
+
+
+Assume any access had in from 2013-2017 (last 5 years of data) moves forward to 2024 for each country  
+
+```{r}
+catch_access_future <- catch_access_fin %>%
+  filter(year %in% 2013:2017) %>%
+  distinct(flag_fin, eez_sovereign, access, eez_id) %>%
+  crossing(., year = c(2018:2024))
+```
+
+
+Read in GFW data and assume that if a flag is fishing in a EEZ, they have access
+
+```{r}
+years <- 2015:2024
+gfw_data <- list()
+
+library(glue)
+
+for(yr in years) {
+  # yr = 2015
+  # Load effort proportions
+  effort_props <- qread(file.path(rdsi_dir, glue("prep/gfw_props/deg_one/all_effort_gear_length_props_{yr}.qs"))) %>%
+    mutate(year = yr) %>%
+    filter(fishing_hours > 0)
+
+  
+  # Combine all data
+  year_data <- effort_props %>%
+    dplyr::distinct(
+      year, 
+      flag_fin, 
+      eez_sovereign = iso_sov1
+    )
+  
+#  test <- year_data %>% filter(is.na(eez_sovereign))
+  
+  gfw_data[[as.character(yr)]] <- year_data
+}
+
+# Combine all years
+final_data <- bind_rows(gfw_data) %>%
+  mutate(eez_sovereign = ifelse(eez_sovereign == "HSX", "High seas", eez_sovereign)) %>%
+  mutate(access = 1) %>%
+  filter(eez_sovereign != "LND") %>%
+  filter(!is.na(eez_sovereign)) %>%
+  left_join(eez_lookup)
+
+all_catch_access <- rbind(catch_access_fin, catch_access_future, final_data) %>%
+  distinct()
+
+# qs::qsave(all_catch_access, here("data/int/prediction_historical_data/catch_fishing_access.qs"))
+
+unique(all_catch_access$eez_sovereign)
+unique(all_catch_access$flag_fin)
+
+## ok now we need to make sure EVERY FLAG FOR EVERY YEAR HAS ACCESS TO THEIR OWN EEZ
+
+# all_catch_access <- qs::qread(here("data/int/prediction_historical_data/catch_fishing_access.qs"))
+
+
+own_eez_access <- data.frame(year = NA, flag_fin = NA, eez_sovereign = NA, access = NA)
+
+flags <- unique(all_catch_access$flag_fin)
+years <- c(1950:2024)
+
+for(flag in flags){
+  for(yr in years){
+  
+    own_eez_access <- own_eez_access %>%
+      add_row(year = yr, flag_fin = flag, eez_sovereign = flag, access = 1)
+    
+    
+  }
+}
+
+own_eez_access_fin <- own_eez_access %>%
+  filter(!is.na(year)) %>%
+  left_join(eez_lookup)
+
+all_access_fin <- rbind(all_catch_access, own_eez_access_fin) %>%
+  distinct()
+
+qs::qsave(all_access_fin, here("data/int/prediction_historical_data/catch_fishing_access.qs"))
 
 ```
 
+
+Now do FAO high seas access
+
+
 ```{r}
-catch_access_df_highseas <- catch_df %>%
-    mutate(catch = Reported + IUU + Discards) %>%
-  filter(catch > 0, 
-         Year >= 1950, 
-         eez_country_name == "High Seas",
-         Sector == "industrial") %>%
-    left_join(saup_codes, by = c("SAUP")) %>%
-    mutate(access_fao = 1,
-           eez_country_name = "High seas") %>%
-  left_join(fao_lookup, by = c("fao_area" = "fao_id")) %>%
-  distinct(year = Year, flag_fin = Country, fao_area, fao_area_name = name_en, eez_country_name, access_fao)
+fao_lookup <- read.csv(here("data/model_features/fao/fao_major_ids.csv"))
+
+fao_df <- read.csv(here("data/model_features/fao/fao_fixed.csv"))
+
+catch_access_df_highseas <- all_data_matched_catch %>%
+  filter(
+         year >= 1950, 
+         eez_sovereign == "High seas") %>%
+    mutate(access_fao = 1) %>%
+  left_join(fao_df) %>%
+  left_join(fao_lookup, by = c("fao_id")) %>%
+  distinct(year, flag_fin, fao_id, fao_area_name = name_en, eez_sovereign, access_fao)
 
 ukraine_watson <- catch_access_df_highseas %>%
   filter(year %in% c(1990:2000),
          flag_fin == "UKR") %>%
-  distinct(flag_fin, eez_country_name, fao_area, fao_area_name, access_fao)
+  distinct(flag_fin, eez_sovereign, fao_id, fao_area_name, access_fao)
 
 # fix ukraine 
-ukraine_effort_highseas <- effort_df %>%
+ukraine_effort_highseas <- all_data_matched_effort %>%
   filter(NomActive > 0, 
         Year >= 1950,
-        Sector == "Industrial",
-        eez_country_name == "High Seas") %>%
-  rename(year = Year,  flag_id = SAUP) %>%
-  left_join(saup_codes, by = c("flag_id" = "SAUP")) %>%
-  dplyr::select(year, flag_fin = Country, eez_country_name, fao_area, NomActive) %>%
-    mutate(eez_country_name = ifelse(eez_country_name == "High Seas", "High seas", eez_country_name))  %>%
-  group_by(year, flag_fin, eez_country_name, fao_area) %>%
-  summarise(NomActive = sum(NomActive, na.rm = TRUE)) %>%
+        eez_sovereign == "High seas") %>%
+  rename(year = Year) %>%
+  left_join(fao_df) %>%
+   dplyr::select(year, flag_fin = Country, eez_sovereign, fao_id, NomActiveHours) %>%
+  group_by(year, flag_fin, eez_sovereign, fao_id) %>%
+  summarise(NomActiveHours = sum(NomActiveHours, na.rm = TRUE)) %>%
   ungroup() %>%
-  dplyr::select(year, flag_fin, eez_country_name, fao_area, NomActive) %>%
+  dplyr::select(year, flag_fin, eez_sovereign, fao_id, NomActiveHours) %>%
   filter(flag_fin == "UKR",
-         NomActive > 100) %>% # maybe filter for >1000 hours when we have to use this? 
-  distinct(year, flag_fin, eez_country_name, fao_area) %>%
+         NomActiveHours > 100) %>% # maybe filter for >100 hours when we have to use this? 
+  distinct(year, flag_fin, eez_sovereign, fao_id) %>%
   mutate(access_fao = 1) %>%
   filter(year < 1988) %>%
-  filter(fao_area %in% c(unique(ukraine_watson$fao_area))) %>%
-  left_join(fao_lookup, by = c("fao_area" = "fao_id")) %>%
+  filter(fao_id %in% c(unique(ukraine_watson$fao_id))) %>%
+  left_join(fao_lookup, by = c("fao_id")) %>%
   rename(fao_area_name = name_en) %>%
   dplyr::select(-ocean)
   
@@ -373,34 +587,60 @@ ukraine_effort_highseas <- effort_df %>%
 slovenia_watson <- catch_access_df_highseas %>%
   filter(year %in% c(1990:2000),
          flag_fin == "SVN") %>%
-  distinct(flag_fin, eez_country_name, fao_area, fao_area_name, access_fao)
+  distinct(flag_fin, eez_sovereign, fao_id, fao_area_name, access_fao)
 
-slovenia_effort_highseas <- effort_df %>%
-  filter(NomActive > 0, 
+slovenia_effort_highseas <- all_data_matched_effort %>%
+  filter(NomActiveHours > 0, 
         Year >= 1950,
-        Sector == "Industrial",
-        eez_country_name == "High Seas") %>%
-  rename(year = Year,  flag_id = SAUP) %>%
-  left_join(saup_codes, by = c("flag_id" = "SAUP")) %>%
-  dplyr::select(year, flag_fin = Country, eez_country_name, fao_area, NomActive) %>%
-    mutate(eez_country_name = ifelse(eez_country_name == "High Seas", "High seas", eez_country_name))  %>%
-  group_by(year, flag_fin, eez_country_name, fao_area) %>%
-  summarise(NomActive = sum(NomActive, na.rm = TRUE)) %>%
+        eez_sovereign == "High seas") %>%
+  rename(year = Year) %>%
+  left_join(fao_df) %>%
+  dplyr::select(year, flag_fin = Country, eez_sovereign, fao_id, NomActiveHours) %>%
+  group_by(year, flag_fin, eez_sovereign, fao_id) %>%
+  summarise(NomActiveHours = sum(NomActiveHours, na.rm = TRUE)) %>%
   ungroup() %>%
-  dplyr::select(year, flag_fin, eez_country_name, fao_area, NomActive) %>%
+  dplyr::select(year, flag_fin, eez_sovereign, fao_id, NomActiveHours) %>%
   filter(flag_fin == "SVN",
-         NomActive > 100) %>% # maybe filter for >1000 hours when we have to use this? 
-  distinct(year, flag_fin, eez_country_name, fao_area) %>%
+         NomActiveHours > 100) %>% # maybe filter for >100 hours when we have to use this? 
+  distinct(year, flag_fin, eez_sovereign, fao_id) %>%
   mutate(access_fao = 1) %>%
   filter(year < 1992) %>%
-  filter(fao_area %in% c(unique(slovenia_watson$fao_area))) %>%
-  left_join(fao_lookup, by = c("fao_area" = "fao_id")) %>%
+  filter(fao_id %in% c(unique(slovenia_watson$fao_id))) %>%
+  left_join(fao_lookup, by = c("fao_id")) %>%
+  rename(fao_area_name = name_en) %>%
+  dplyr::select(-ocean)
+
+
+# now do RAA and RAM 
+prt_watson_hs <- catch_access_df_highseas %>%
+    filter(
+         flag_fin == "PRT") %>%
+  distinct(flag_fin, eez_sovereign, fao_id, fao_area_name, access_fao)
+
+RAA_RAM_hs <- all_data_matched_effort %>%
+  filter(NomActiveHours > 0, 
+        Year >= 1950,
+        eez_sovereign == "High seas") %>%
+  rename(year = Year) %>%
+  left_join(fao_df) %>%
+  dplyr::select(year, flag_fin = Country, eez_sovereign, fao_id, NomActiveHours) %>%
+  group_by(year, flag_fin, eez_sovereign, fao_id) %>%
+  summarise(NomActiveHours = sum(NomActiveHours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  dplyr::select(year, flag_fin, eez_sovereign, fao_id, NomActiveHours) %>%
+  filter(flag_fin %in% c("RAA", "RAM"),
+         NomActiveHours > 100) %>% # maybe filter for >100 hours when we have to use this? 
+  distinct(year, flag_fin, eez_sovereign, fao_id) %>%
+  mutate(access_fao = 1) %>%
+  filter(year < 1992) %>%
+  filter(fao_id %in% c(unique(prt_watson_hs$fao_id))) %>%
+  left_join(fao_lookup, by = c("fao_id")) %>%
   rename(fao_area_name = name_en) %>%
   dplyr::select(-ocean)
 
 
 catch_access_df_highseas_fin <- catch_access_df_highseas %>%
-  rbind(ukraine_effort_highseas, slovenia_effort_highseas)
+  rbind(ukraine_effort_highseas, slovenia_effort_highseas, RAA_RAM_hs)
 
 # fix faroe islands data 
 fro_access_1951 <- catch_access_df_highseas_fin %>%
@@ -414,9 +654,67 @@ fro_access_1950 <- catch_access_df_highseas_fin %>%
 
 
 catch_access_df_highseas_fin <- catch_access_df_highseas_fin %>%
-  rbind(fro_access_1950, fro_access_1951)
+  rbind(fro_access_1950, fro_access_1951) %>%
+  filter(flag_fin != "") %>%
+  filter(!is.na(flag_fin))
+
+
+# now do future by just taking hte latest 5 years
+catch_access_hs_future <- catch_access_df_highseas_fin %>%
+  filter(year %in% 2013:2017) %>%
+  distinct(flag_fin, fao_id, fao_area_name, eez_sovereign, access_fao) %>%
+  crossing(., year = c(2018:2024))
+
+
+## now do GFW data 
+years <- 2015:2024
+gfw_data <- list()
+
+data_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
+  dplyr::select(pixel_id, lat, lon)
+
+# read in FAO area spatial csv 
+fao_lookup <- read.csv(here("data/model_features/deg_1_x_1/fao/fao_major_ids.csv"))
+fao_spatial <- read.csv(here("data/model_features/deg_1_x_1/fao/fao_fixed.csv")) %>%
+  left_join(fao_lookup) %>%
+  left_join(data_grid) %>%
+    dplyr::select(fao_area = fao_id, fao_area_name = name_en, x = lon, y = lat) 
+ 
+
+for(yr in years) {
+  # yr = 2015
+  # Load effort proportions
+  effort_props <- qread(file.path(rdsi_dir, glue("prep/gfw_props/deg_one/all_effort_gear_length_props_{yr}.qs"))) %>%
+    mutate(year = yr) %>%
+    filter(fishing_hours > 0) %>%
+    left_join(fao_spatial) %>%
+    filter(iso_sov1 == "HSX")
+
+  
+  # Combine all data
+  year_data <- effort_props %>%
+    dplyr::distinct(
+      year, 
+      flag_fin, 
+      eez_country_name = sovereign1, 
+      fao_area, 
+      fao_area_name
+    ) %>%
+    filter(!is.na(fao_area))
+  
+  gfw_data[[as.character(yr)]] <- year_data
+}
+
+# Combine all years
+final_data <- bind_rows(gfw_data) %>%
+  mutate(access_fao = 1) %>%
+  rename(eez_sovereign = eez_country_name,
+         fao_id = fao_area)
+
+all_catch_access_hs <- rbind(catch_access_df_highseas_fin, catch_access_hs_future, final_data) %>%
+  distinct()
 
 qs::qsave(catch_access_df_highseas_fin, here("data/int/prediction_historical_data/catch_fishing_access_high_seas.qs"))
 
-
 ```
+

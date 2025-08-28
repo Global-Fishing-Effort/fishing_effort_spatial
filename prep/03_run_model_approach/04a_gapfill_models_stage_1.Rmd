@@ -11,14 +11,6 @@ Here we fit stage 1 larger regional models which will be used for gapfilling mis
  - sub continental reported in Rousseau data (SAUPtoCountry.csv)? E.g., [1] "SubAfrica"      "Europe"         "LatinAmerica"   "AustraliaNZ"    "IndianP"        "Caribbean"      "SouthEastAsia" 
  [8] "NorthAmerica"   "NorthEastAsia"  "IslandsNations" "NWAfrica"       "MidEast"     
  
- 
- Ideas for other gapfilling models: 
- - RFMO? Problem with this is 1 country could be in multiple: e.g., USA. Maybe just take both the RFMOs they are in, apply the model, and sum predictions? https://www.pew.org/en/research-and-analysis/fact-sheets/2012/02/23/faq-what-is-a-regional-fishery-management-organization#:~:text=A:%20An%20RFMO%E2%80%94short%20for%20regional%20fisheries%20management,conserving%20fish%20stocks%20in%20a%20particular%20region.&text=RFMOs%20typically%20focus%20only%20on%20a%20limited,even%20with%20significant%20fishing%20activity%2C%20are%20unmanaged. 
- - Low vs high HDI? Very low, low, high, very high, High vs low income countries? 
- - Developed, Developing, LDCs, SIDS
- - Continental regions (according to FAO SOFIA): Asia, Europe, North America (USA, CAN, Greenland), Africa, South & Central America/Caribbean, Oceania
- - LMEs? https://worldoceanreview.com/en/wor-5/improving-coastal-protection/the-art-of-coastal-management/large-marine-ecosystems/
- - Fit model containing each flag country any neighboring (bordering) EEZs aggregated. E.g., Algeria model would include Morocco, Spain, Italy, and Tunisia.
 
 ```{r}
 knitr::opts_chunk$set(echo = TRUE)
@@ -41,6 +33,7 @@ library(broom)
 library(randomForest)
 library(PRROC)
 library(janitor)
+library(ranger)
 
 source(here("R/dir.R"))
 
@@ -53,12 +46,10 @@ elnino <- read.csv(here("data/model_features/enso_index.csv"))
 
 pdo <- read.csv(here("data/model_features/pdo_index.csv"))
 
-world_bank <- read.csv(here("data/model_features/world_bank_regions.csv")) %>%
-  filter(ISO_SOV1 != "GIB") # filter out gibralter bc it is duplicating the UK for some reason
+world_bank <- read.csv(here("data/model_features/world_bank_regions.csv"))
 
 gfi_df <- read.csv(here("data/model_features/global_fishing_index_governance.csv"))
 
-  
 # Load prepared data
 model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
   mutate(year = as.numeric(year)) %>%
@@ -71,17 +62,17 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
   ocean_data <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv")) %>%
   left_join(read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv")), by = c("pixel_id", "year")) %>% 
   left_join(read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv")), by = c("pixel_id", "year")) %>%
-  filter(year %in% c(2015:2017)) 
+  filter(year %in% c(2015:2024)) 
 
 
   spatial_data <- global_grid %>%
     left_join(read.csv(here("data/model_features/deg_1_x_1/gfw_static_spatial_measures.csv")) %>% dplyr::select(-lat, -lon), by = "pixel_id") %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/mesopelagiczones/mesopelagiczones_fixed.csv")), by = "pixel_id") %>%
-   left_join(read.csv(here("data/model_features/deg_1_x_1/eez/eez.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/deg_1_x_1/eez/eez_fix.csv")), by = "pixel_id") %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/fao/fao_fixed.csv")), by = "pixel_id") %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/oceans_fixed.csv")), by = "pixel_id") %>%
     left_join(read.csv(here("data/model_features/deg_1_x_1/seamounts.csv")), by = "pixel_id") %>% 
-   crossing(., year = c(2015:2017)) 
+   crossing(., year = c(2015:2024)) 
   
   
   env_data <- spatial_data %>%
@@ -89,36 +80,15 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
     dplyr::select(-geometry_wkt) %>%
     left_join(elnino) %>%
     left_join(pdo) %>%
-    left_join(world_bank, by = c("eez_id" = "MRGID_SOV1")) %>%
-    mutate(eez_region_world_bank_7 = ifelse(ISO_SOV1 %in% c("High seas", "Land"), "High seas", eez_region_world_bank_7)) %>% 
-    left_join(gfi_df, by = c("ISO_SOV1" = "flag_fin")) %>% # add in global fishing index data here
+    left_join(world_bank, by = c("eez_id")) %>%
+    mutate(eez_region_world_bank_7 = ifelse(eez_sovereign %in% c("High seas", "Land"), "High seas", eez_region_world_bank_7)) %>% 
+    left_join(gfi_df, by = c("eez_sovereign" = "flag_fin")) %>% # add in global fishing index data here
     mutate(gov_score = ifelse(eez_id >= 99999 & is.na(gov_score), "high_seas", gov_score)) %>%
         mutate(gov_score = ifelse(eez_id < 99999 & is.na(gov_score), "no_data", gov_score)) %>%
-    dplyr::select(-ISO_SOV1, -nearest_seamount_id) %>% 
+    dplyr::select(-eez_sovereign, -nearest_seamount_id) %>% 
     distinct() 
-
-
-# Get total fishing hours for a specific year from IMAS data
-get_historical_total_fishing_hours <- function(yr) {
-  # This function would load and process the IMAS data for the given year
-  # Note: Implement based on your IMAS data structure
-  imas_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
-    
-    ## remove artisanal
-    filter(sector == "I") %>%
-    
-    group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
-    summarize(
-      total_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
-      .groups = 'drop'
-    ) %>%
-    filter(year == yr) %>%
-    dplyr::select(flag_fin, year, gear, length_category, total_fishing_hours)
   
-  
-  return(imas_data)
-}
-
+  gfw_reception_data <- read.csv(here("data/model_features/deg_1_x_1/gfw_reception_quality.csv"))
 
 ```
 
@@ -155,20 +125,20 @@ model_formula_rf <- formula(
     pdo_index_mean +  
     pdo_index_sd + 
     nearest_seamount_distance_m + 
-    year
+    year +
+    ais_reception_positions_per_day_class_A +
+    ais_reception_positions_per_day_class_B
 )
   
 env_grid <- env_data %>% 
   dplyr::select(lon, lat) %>% distinct()
 
 
-## OR we could use the regions as described in Rousseau et al, and assigning any landlocked countries to their continent:
+## use the regions as described in Rousseau et al, and assigning any landlocked countries to their continent:
 
 rousseau_regions <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv") %>%
   dplyr::select(-X) %>%
   rename(region = Region) 
-
-
 
 fix_landlocked <- rousseau_regions %>%
   filter(region == "Landlocked") %>%
@@ -215,6 +185,7 @@ fix_landlocked <- rousseau_regions %>%
     Country == "UZB" ~ "MidEast",
     Country == "SRB" ~ "Europe",
     Country == "ZMB" ~ "SubAfrica",
+    Country == "FLK" ~ "LatinAmerica", # CHECK THIS 
     TRUE ~ region
   ))
 
@@ -222,13 +193,22 @@ rousseau_fix <- rousseau_regions %>%
   filter(region != "Landlocked") %>%
   rbind(fix_landlocked) %>%
   dplyr::select(-SAUP) %>%
-  filter(region  != "Unknown")
+  filter(region  != "Unknown") %>%
+    add_row(Country = "ATF", region = "IslandNations") %>%
+    add_row(Country = "VAT", region = "Europe") %>%
+    add_row(Country = "BES", region = "Caribbean") %>%
+    add_row(Country = "CCK", region = "IslandNations")
 
 ## ok we could use the world bank regions
-hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
-    rbind(., get_historical_total_fishing_hours(2016)) %>%
-    rbind(., get_historical_total_fishing_hours(2017)) %>%
-    mutate(log_total_fishing_hours = log1p(total_fishing_hours)) %>%
+hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
+    ## remove artisanal
+    filter(sector == "I") %>%
+    group_by(flag_fin = country, gear = gear_new, length_category) %>%
+    summarize(
+      total_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    dplyr::select(flag_fin, gear, length_category, total_fishing_hours) %>%
     filter(total_fishing_hours > 0) %>%
   left_join(rousseau_fix, by = c("flag_fin" = "Country"))
 
@@ -238,10 +218,6 @@ missing <- hist_fish_data %>%
 
 
 regions_to_run <- unique(hist_fish_data$region) # get the regions we want to run
-
-unique_combinations <- hist_fish_data %>%
-  distinct(year, region, gear, length_category) %>% # we only want to make models for these combinations since these are what is in the IMAS/FAO data 
-  mutate(row_n = row_number())
 
 ```
 
@@ -257,7 +233,7 @@ unique_combinations <- hist_fish_data %>%
  
  NOTE: lets use Area Under the Precision-Recall Curve (AUC-PR) instead of RMSE because RMSE isn't really relevant to classification regression; Higher AUC-PR value is better. 
 
- - Currently takes ~ 45 minutes with 3 cores. 
+ - Currently takes ~ 40 minutes with 12 cores. 
 
 ```{r}
 regions_to_run <- unique(hist_fish_data$region) # get the regions we want to run
@@ -265,15 +241,16 @@ regions_to_run <- unique(hist_fish_data$region) # get the regions we want to run
 model_data_loop <- model_data %>% 
   left_join(rousseau_fix, by = c("flag_fin" = "Country")) %>%
   filter(!is.na(region)) # filter out the unknown flags 
- 
+
+
 # Set up parallel backend
-num_cores <- 3 # Use one less than the total available cores
+num_cores <- 12
 cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 
 
 # Run the loop in parallel
-foreach(region_loop = regions_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc")) %dopar% {
+foreach(region_loop = regions_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "ranger")) %dopar% {
   
     # region_loop = "IndianP"
   model_data_region <- model_data_loop %>%
@@ -285,23 +262,17 @@ foreach(region_loop = regions_to_run, .packages = c("dplyr", "tidyr", "randomFor
   
   full_grid <- tidyr::crossing(env_grid, distinct_cats)
   
-  full_data <- full_grid %>%
+  data_random_forest <- full_grid %>%
     left_join(env_data, by = c("lon", "lat", "year")) %>%
     left_join(model_data_region, by = c("lon", "lat", "year", "region", "gear", "length_category")) %>%
+    left_join(gfw_reception_data) %>%
     mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
-    dplyr::select(-pixel_id)
-  
-  if (nrow(full_data) == 0) {
-    cat(region_loop, "not in data... skipping\n")
-    return(NULL)
-  }
-  
-  data_random_forest <- full_data %>% 
+    dplyr::select(-pixel_id) %>%
     na.omit() %>%
     mutate(presence = as.factor(presence)) %>%
     distinct()
   
-  if (nrow(full_data) == 1) {
+  if (nrow(data_random_forest) == 1) {
     cat(region_loop, "not enough rows\n")
     return(NULL)
   }
@@ -313,10 +284,18 @@ foreach(region_loop = regions_to_run, .packages = c("dplyr", "tidyr", "randomFor
   test <- data_random_forest[-samp, ]
   
   tic()
-  model <- randomForest(model_formula_rf, data = train, type = "classification", proximity = FALSE, ntree = 100, importance = TRUE)
+model <- ranger(
+  formula = model_formula_rf,
+  data = train,
+  num.trees = 100,
+  importance = "impurity",
+  classification = TRUE,
+  probability = TRUE,
+  write.forest = TRUE
+  )
   toc()
   
-  var_imp_i <- importance(model)
+  var_imp_i <- data.frame(importance(model))
   
   n_vars <- nrow(var_imp_i)
   qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models_regional/pruning/stage_1_rf_train_{region_loop}_{n_vars}.qs")))
@@ -325,7 +304,6 @@ foreach(region_loop = regions_to_run, .packages = c("dplyr", "tidyr", "randomFor
 }
 
 stopCluster(cl)
-
 
 ```
 
@@ -340,23 +318,18 @@ Now apply variable selection methods
 
 ## lets try the threshold based selection, where the threshold is 10% of max importance score (i.e. we keep any variable that is above that 10% of max importance score) and rerun the model and test to see if RMSE improves or not 
 
-# Set up parallel backend
-#### NOTE ABOUT PARALLEL: THIS ISN'T WORKING; for some reason it gets hung up when saving the new rf model and saves it as realllllly large and only saves one per flag, which isn't correct. I think it might have to do with the while loops I've included. In theory it should work though... Without it takes ~12 hours to run. 
-
-# num_cores <- 3 # Use one less than the total available cores
-# cl <- makeCluster(num_cores)
-# registerDoParallel(cl)
-
-# Run the loop in parallel
-# foreach(region_loop = regions_test, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "PRROC")) %dopar% {
-  
 regions_to_run <- regions_to_run
 
-for(region_loop in regions_to_run){
-  auc_values <- c()
-  num_vars <- c()
-  
+num_cores <- 12
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+# Run the loop in parallel
+foreach(region_loop = regions_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "ranger", "PRROC")) %dopar% {
+
   # region_loop = "IndianP"
+    auc_values <- c()
+  num_vars <- c()
   model_data_region <- model_data_loop %>%
     dplyr::select(lon, lat, region, gear, length_category, year, presence) %>%
     filter(region == region_loop)
@@ -371,18 +344,12 @@ for(region_loop in regions_to_run){
   
   full_grid <- tidyr::crossing(env_grid, distinct_cats)
   
-  full_data <- full_grid %>%
+  data_random_forest <- full_grid %>%
     left_join(env_data, by = c("lon", "lat", "year")) %>%
     left_join(model_data_region, by = c("lon", "lat", "year", "region", "gear", "length_category")) %>%
     mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
-    dplyr::select(-pixel_id)
-  
-  if (nrow(full_data) == 0) {
-    cat(region_loop, " - Full data is empty... skipping\n")
-    next()
-  }
-  
-  data_random_forest <- full_data %>% 
+    left_join(gfw_reception_data) %>%
+    dplyr::select(-pixel_id) %>%
     na.omit() %>%
     mutate(presence = as.factor(presence)) %>%
     distinct()
@@ -398,39 +365,55 @@ for(region_loop in regions_to_run){
   train <- data_random_forest[samp, ]
   test <- data_random_forest[-samp, ]
   
-  base_model_path <- glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models_regional/pruning/stage_1_rf_train_{region_loop}_24.qs"))
+  base_model_path <- glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models_regional/pruning/stage_1_rf_train_{region_loop}_26.qs"))
   
   # Train or load initial model
   if (!file.exists(base_model_path)) {
     tic()
-    model <- randomForest(model_formula_rf, data = train, type = "classification",
-                          proximity = FALSE, ntree = 100, importance = TRUE)
+      model <- ranger(
+        formula = model_formula_rf,
+        data = train,
+        num.trees = 100,
+        importance = "impurity",
+        classification = TRUE,
+        probability = TRUE,
+        write.forest = TRUE
+      )
     toc()
     qs::qsave(model, base_model_path)
   } else {
     model <- qs::qread(base_model_path)
   }
   
-  var_imp <- importance(model)
+  var_imp <- data.frame(importance(model)) %>%
+    rename("importance" = 1)
   initial_num_vars <- nrow(var_imp)
   num_vars <- c(initial_num_vars)
   
-  threshold <- quantile(var_imp[, 4], 0.10)
+  threshold <- quantile(var_imp[, "importance"], 0.10)
+  
   if (threshold == 0) threshold <- 1e-7
   
-  pred_probs <- predict(model, newdata = test, type = "prob")[, 2]
+    prob <- as.data.frame(predict(model, data = test)$predictions) %>%
+        mutate(presence = ifelse(`1` >= 0.5, 1, 0))
+  pred_probs <- prob[, "presence"]
+  
   true_labels <- as.numeric(as.character(test$presence))
   
   pr_curve <- pr.curve(scores.class0 = pred_probs, weights.class0 = true_labels, curve = TRUE)
   auc_pr <- pr_curve$auc.integral
-  auc_values <- c(auc_pr)
+  auc_values <- c(auc_values, auc_pr)
   
   iteration <- 1
   max_iterations <- 50  # Safety cap to prevent infinite loops
   
 repeat {
     
-    selected_vars <- names(var_imp[, 4][var_imp[, 4] > threshold])
+     selected_vars <- var_imp %>% 
+     filter(importance > threshold) %>%
+      row.names()
+   
+    selected_vars <- unique(c("year", "ais_reception_positions_per_day_class_A", "ais_reception_positions_per_day_class_B", selected_vars)) # always retain year and the ais reception data (for ais data biases)
     
     if (length(selected_vars) < 6) {
       cat(region_loop, " - Fewer than 6 variables remaining. Stopping.\n")
@@ -440,27 +423,53 @@ repeat {
     # Gradually increase threshold until variables are removed
     while (length(selected_vars) == num_vars[length(num_vars)]) {
       threshold <- threshold * 1.01
-      selected_vars <- names(var_imp[, 4][var_imp[, 4] > threshold])
+
+          selected_vars <- var_imp %>% 
+     filter(importance > threshold) %>%
+      row.names()
+   
+    selected_vars <- unique(c("year", "ais_reception_positions_per_day_class_A", "ais_reception_positions_per_day_class_B", selected_vars)) # always retain year and the ais reception data (for ais data biases)
     }
     
     if (length(selected_vars) < 6) break
     
-    model_i <- randomForest(presence ~ ., data = train[, c("presence", selected_vars)],
-                            type = "classification", proximity = FALSE, ntree = 100, importance = TRUE) ## I think the formula might be where the problem is for parallelization? Need to manually write the formula here.
+    ## add a formula here? 
+        file_path <- glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models_regional/pruning/stage_1_rf_train_{region_loop}_{length(selected_vars)}.qs"))
+   
+   if(!file.exists(file_path)){
+   
+     model_i <- ranger(
+        formula = presence ~ .,
+        data = train[, c("presence", selected_vars)],
+        num.trees = 100,
+        importance = "impurity",
+        classification = TRUE,
+        probability = TRUE,
+        write.forest = TRUE
+      )
+     
+   }else{
+     
+     model_i <- qs::qread(file_path)
+   }
+     
+    var_imp <- data.frame(importance(model_i)) %>%
+      rename("importance" = 1)
     
-    var_imp <- importance(model_i)
-    threshold <- quantile(var_imp[, 4], 0.10)
+    threshold <- quantile(var_imp[, 1], 0.10)
+
     if (threshold == 0) threshold <- 1e-7
     
-    pred_probs_i <- predict(model_i, newdata = test, type = "prob")[, 2]
-    pr_curve <- pr.curve(scores.class0 = pred_probs_i, weights.class0 = true_labels, curve = TRUE)
-    auc_pr_i <- pr_curve$auc.integral
+      prob_i <- as.data.frame(predict(model_i, data = test)$predictions) %>%
+          mutate(presence = ifelse(`1` >= 0.5, 1, 0))
+    pred_probs_i <- prob_i[, "presence"]
+    pr_curve_i <- pr.curve(scores.class0 = pred_probs_i, weights.class0 = true_labels, curve = TRUE)
+    auc_pr_i <- pr_curve_i$auc.integral
     
     auc_values <- c(auc_values, auc_pr_i)
     num_vars <- c(num_vars, length(selected_vars))
     
-    file_path <- glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models_regional/pruning/stage_1_rf_train_{region_loop}_{length(selected_vars)}.qs"))
-    
+
     if (!file.exists(file_path)) {
       qs::qsave(model_i, file_path)
     }
@@ -483,7 +492,7 @@ repeat {
 }
 
 # Stop parallel cluster
-# stopCluster(cl)
+stopCluster(cl)
 
 ```
 
@@ -526,7 +535,12 @@ for (region_loop in stage_1_regions) {
   
   # Load model and extract formula
   best_train_model <- qs::qread(file.path(stage_1_path, glue("stage_1_rf_train_{region_loop}_{best_model_n}.qs")))
-  rf_formula <- formula(best_train_model)
+  
+  expanded_formula <- as.formula(
+  paste("presence ~", paste(best_train_model$forest$independent.variable.names, collapse = " + "))
+)
+
+  rf_formula <- as.formula(deparse(formula(expanded_formula)) |> paste(collapse = " "))
   
   formula_text <- deparse(rf_formula)
   formula_text <- paste(formula_text, collapse = " ")
@@ -541,11 +555,11 @@ for (region_loop in stage_1_regions) {
 # PARALLEL LOOP: Run and save final models
 # ----------------------------------------
 
-num_cores <- 2  # Adjust as needed
+num_cores <- 12 
 cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 
-foreach(region_loop = stage_1_regions, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc")) %dopar% {
+foreach(region_loop = stage_1_regions, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "ranger", "strex")) %dopar% {
 
   # region_loop = "Europe"
   
@@ -562,16 +576,14 @@ foreach(region_loop = stage_1_regions, .packages = c("dplyr", "tidyr", "randomFo
   distinct_cats <- model_data_region %>%
     distinct(year, region, gear, length_category)
   
-  full_grid <- tidyr::crossing(env_grid, distinct_cats)
+  # full_grid <- tidyr::crossing(env_grid, distinct_cats)
   
-  full_data <- full_grid %>%
+  data_random_forest <- tidyr::crossing(env_grid, distinct_cats) %>%
     left_join(env_data, by = c("lon", "lat", "year")) %>%
     left_join(model_data_region, by = c("lon", "lat", "year", "region", "gear", "length_category")) %>%
+    left_join(gfw_reception_data) %>%
     mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
-    dplyr::select(-pixel_id)
-  
-  # Prepare data for random forest
-  data_random_forest <- full_data %>% 
+    dplyr::select(-pixel_id) %>%
     na.omit() %>%
     mutate(presence = as.factor(presence)) %>%
     distinct()
@@ -579,11 +591,16 @@ foreach(region_loop = stage_1_regions, .packages = c("dplyr", "tidyr", "randomFo
   # Fit final model
   set.seed(123)
   tic()
-  model <- randomForest(rf_formula, data = data_random_forest, ntree = 100)
   
-  # # Clean the model to avoid large files
-  # model$call <- NULL
-  # model$terms <- NULL
+  model <- ranger(
+  formula = rf_formula,
+  data = data_random_forest,
+  num.trees = 500,
+  importance = "impurity",
+  classification = TRUE,
+  probability = TRUE,
+  write.forest = TRUE
+  )
   toc()
 
   # Save model
@@ -595,43 +612,3 @@ stopCluster(cl)
 
 ```
 
-
-ARCHIVE: 
-
-```{r}
-# ## ok we could use the world bank regions
-# hist_fish_data <- get_historical_total_fishing_hours(2015) %>%
-#     rbind(., get_historical_total_fishing_hours(2016)) %>%
-#     rbind(., get_historical_total_fishing_hours(2017)) %>%
-#     mutate(log_total_fishing_hours = log1p(total_fishing_hours)) %>%
-#     filter(total_fishing_hours > 0) %>%
-#   left_join(world_bank, by = c("flag_fin" = "ISO_SOV1")) %>%
-#   dplyr::select(-MRGID_SOV1) %>%
-#   mutate(eez_region_world_bank_7 = case_when(
-#     flag_fin == "COK" ~ "East Asia & Pacific",
-#     flag_fin == "FRO" ~ "Europe & Central Asia", 
-#     flag_fin == "GLP" ~ "Latin America & Caribbean", 
-#     flag_fin == "GUF" ~ "Latin America & Caribbean",
-#     flag_fin == "HKG" ~ "East Asia & Pacific", 
-#     flag_fin == "MYT" ~ "Sub-Saharan Africa", 
-#     flag_fin == "NCL" ~ "East Asia & Pacific", 
-#     flag_fin == "PYF" ~ "East Asia & Pacific", 
-#     flag_fin == "RAA" ~ "Europe & Central Asia", 
-#     flag_fin == "RAM" ~ "Europe & Central Asia", 
-#     flag_fin == "REU" ~ "Sub-Saharan Africa", 
-#     flag_fin == "TWN" ~ "East Asia & Pacific", 
-#     flag_fin == "UKR" ~ "Europe & Central Asia",
-#     flag_fin == "WLF" ~ "East Asia & Pacific",
-#     flag_fin == "GRL" ~ "North America",
-#     TRUE ~ eez_region_world_bank_7
-#   ))
-#   
-# 
-# regions_to_run <- unique(hist_fish_data$eez_region_world_bank_7) # get the regions we want to run
-# 
-# unique_combinations <- hist_fish_data %>%
-#   distinct(year, eez_region_world_bank_7, gear, length_category) %>% # we only want to make models for these combinations since these are what is in the IMAS/FAO data 
-#   mutate(row_n = row_number())
-```
-
- 

@@ -35,6 +35,8 @@ library(here)
 library(terra)
 library(ncdf4)
 library(strex)
+library(FNN)
+
 source(here::here("prep/02_prep_spatial_layers_model/_functions_data_wrangling_erddap.R"))
 source(here("R/dir.R"))
 
@@ -120,6 +122,76 @@ temporally_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180
 
 ```
 
+There are cells which are missing SST information. For these, we should fill in with nearest neighbor approach 
+
+```{r}
+  sst_data_raw <- lapply(list.files(here("data/model_features/ncdcOisst21Agg_LonPM180"), full.names = TRUE), read.csv) %>%
+        bind_rows()
+
+sst_data <- sst_data_raw %>%
+  dplyr::select(-anom_sst_c_mean, -anom_sst_c_sd) %>%
+  filter(year %in% c(2014:2024)) %>%
+    mutate(sst_c_mean = ifelse(sst_c_mean == 0 & is.na(sst_c_sd), NA, sst_c_mean)) %>%
+  left_join(data_grid %>% st_drop_geometry())
+
+
+missing_data <- sst_data %>%
+  filter(is.na(sst_c_mean)|is.na(sst_c_sd)) %>%
+  mutate(sst_c_mean = ifelse(sst_c_mean == 0, NA, sst_c_mean))
+
+sst_missing <- sst_data %>% filter(is.na(sst_c_mean) | is.na(sst_c_sd))
+
+sst_complete <- sst_data %>% filter(!is.na(sst_c_mean) & !is.na(sst_c_sd))
+
+nrow(sst_missing) + nrow(sst_complete) == nrow(sst_data) # TRUE
+
+
+# 3. Function to fill in missing values for each year
+fill_missing_sst <- function(missing_df, complete_df) {
+  filled <- list()
+  
+  for (yr in unique(missing_df$year)) {
+    miss_year <- missing_df %>% filter(year == yr)
+    comp_year <- complete_df %>% filter(year == yr)
+    
+    if (nrow(miss_year) == 0 || nrow(comp_year) == 0) next
+    
+    # Coordinates for matching
+    miss_coords <- miss_year %>% select(lon, lat) %>% as.matrix()
+    comp_coords <- comp_year %>% select(lon, lat) %>% as.matrix()
+    
+    # Nearest neighbor match
+    nn <- get.knnx(comp_coords, miss_coords, k = 1)
+    
+    # Add values from nearest neighbor
+    miss_year$sst_c_mean <- comp_year$sst_c_mean[nn$nn.index[,1]]
+    miss_year$sst_c_sd <- comp_year$sst_c_sd[nn$nn.index[,1]]
+    
+    filled[[as.character(yr)]] <- miss_year
+  }
+  
+  bind_rows(filled)
+}
+
+# 4. Apply filling function
+sst_filled <- fill_missing_sst(sst_missing, sst_complete)
+
+# 5. Combine filled + complete
+sst_data_imputed <- bind_rows(sst_complete, sst_filled) %>%
+  dplyr::select(-lon, -lat)
+
+# check
+sum(is.na(sst_data_imputed$sst_c_mean))  # Should be 0
+
+nrow(sst_data_imputed) == nrow(sst_data) # TRUE
+
+## save 
+
+write.csv(sst_data_imputed, here("data/model_features/errdap_sst.csv"), row.names = FALSE) # only 85 mb 
+
+```
+
+
 
 # Chlorophyll
 
@@ -145,6 +217,79 @@ temporally_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
 
 ```
 
+Now fill in any missing chl data
+
+```{r}
+chl_data_raw <- lapply(list.files(here("data/model_features/erdMH1chlamday"), full.names = TRUE), read.csv) %>%
+        bind_rows()
+
+chl_data <- chl_data_raw %>%
+  filter(year %in% c(2014:2024)) %>%
+  mutate(chl_mg_per_m3_mean = ifelse(chl_mg_per_m3_mean == 0 & is.na(chl_mg_per_m3_sd), NA, chl_mg_per_m3_mean)) %>%
+  mutate(chl_mg_per_m3_sd = ifelse(!is.na(chl_mg_per_m3_mean) & is.na(chl_mg_per_m3_sd), 0, chl_mg_per_m3_sd)) # if sd is NA but there is a mean, make it 0, meaning there was no variation.
+
+all_pixels <- data_grid %>% st_drop_geometry() %>% select(pixel_id)
+all_years <- chl_data %>% distinct(year)
+pixel_year_grid <- crossing(all_pixels, all_years)
+
+chl_data_full <- pixel_year_grid %>%
+  left_join(chl_data, by = c("pixel_id", "year")) %>%
+  left_join(data_grid %>% st_drop_geometry())
+
+missing_data <- chl_data_full %>%
+  filter(is.na(chl_mg_per_m3_mean)|is.na(chl_mg_per_m3_sd))
+
+
+chl_missing <- chl_data_full %>% filter(is.na(chl_mg_per_m3_mean) | is.na(chl_mg_per_m3_sd))
+
+chl_complete <- chl_data_full %>% filter(!is.na(chl_mg_per_m3_mean) & !is.na(chl_mg_per_m3_sd))
+
+nrow(chl_missing) + nrow(chl_complete) == nrow(chl_data_full) # TRUE
+
+
+# 3. Function to fill in missing values for each year
+fill_missing_chl <- function(missing_df, complete_df) {
+  filled <- list()
+  
+  for (yr in unique(missing_df$year)) {
+    miss_year <- missing_df %>% filter(year == yr)
+    comp_year <- complete_df %>% filter(year == yr)
+    
+    if (nrow(miss_year) == 0 || nrow(comp_year) == 0) next
+    
+    # Coordinates for matching
+    miss_coords <- miss_year %>% select(lon, lat) %>% as.matrix()
+    comp_coords <- comp_year %>% select(lon, lat) %>% as.matrix()
+    
+    # Nearest neighbor match
+    nn <- get.knnx(comp_coords, miss_coords, k = 1)
+    
+    # Add values from nearest neighbor
+    miss_year$chl_mg_per_m3_mean <- comp_year$chl_mg_per_m3_mean[nn$nn.index[,1]]
+    miss_year$chl_mg_per_m3_sd <- comp_year$chl_mg_per_m3_sd[nn$nn.index[,1]]
+    
+    filled[[as.character(yr)]] <- miss_year
+  }
+  
+  bind_rows(filled)
+}
+
+# 4. Apply filling function
+chl_filled <- fill_missing_chl(chl_missing, chl_complete)
+
+# 5. Combine filled + complete
+chl_data_imputed <- bind_rows(chl_complete, chl_filled) %>%
+  dplyr::select(-lon, -lat)
+
+# Optional check
+sum(is.na(chl_data_imputed$chl_mg_per_m3_mean))  # Should be 0
+
+nrow(chl_data_imputed) == nrow(chl_data_full) # TRUE
+
+# ## save 
+write.csv(chl_data_imputed, here("data/model_features/errdap_chl.csv"), row.names = FALSE) # 88 mb
+
+```
 
 # Now we prep the same data to a 1 degree by 1 degree grid
 
@@ -193,16 +338,82 @@ temporally_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180
                                          run_parallel = TRUE,
                                          years_per_chunk = 5)
 
-## now lets merge them all together
-files <- list.files(here("data/model_features/deg_1_x_1/ncdcOisst21Agg_LonPM180/"), full.names = TRUE)
+```
 
-all_sst <- lapply(files, read.csv) %>%
-  bind_rows() 
+There are cells which are missing SST information. For these, we should fill in with nearest neighbor approach 
 
-write.csv(all_sst, here("data/model_features/deg_1_x_1/errdap_sst.csv"), row.names = FALSE)
+```{r}
+  sst_data_raw <- lapply(list.files(here("data/model_features/deg_1_x_1/ncdcOisst21Agg_LonPM180"), full.names = TRUE), read.csv) %>%
+        bind_rows()
+
+sst_data <- sst_data_raw %>%
+  dplyr::select(-anom_sst_c_mean, -anom_sst_c_sd) %>%
+  filter(year %in% c(2014:2024)) %>%
+    mutate(sst_c_mean = ifelse(sst_c_mean == 0 & is.na(sst_c_sd), NA, sst_c_mean)) %>%
+  left_join(data_grid %>% st_drop_geometry())
 
 
-# Spatially aggregate chl data for 2015
+missing_data <- sst_data %>%
+  filter(is.na(sst_c_mean)|is.na(sst_c_sd)) %>%
+  mutate(sst_c_mean = ifelse(sst_c_mean == 0, NA, sst_c_mean))
+
+sst_missing <- sst_data %>% filter(is.na(sst_c_mean) | is.na(sst_c_sd))
+
+sst_complete <- sst_data %>% filter(!is.na(sst_c_mean) & !is.na(sst_c_sd))
+
+nrow(sst_missing) + nrow(sst_complete) == nrow(sst_data) # TRUE
+
+
+# 3. Function to fill in missing values for each year
+fill_missing_sst <- function(missing_df, complete_df) {
+  filled <- list()
+  
+  for (yr in unique(missing_df$year)) {
+    miss_year <- missing_df %>% filter(year == yr)
+    comp_year <- complete_df %>% filter(year == yr)
+    
+    if (nrow(miss_year) == 0 || nrow(comp_year) == 0) next
+    
+    # Coordinates for matching
+    miss_coords <- miss_year %>% select(lon, lat) %>% as.matrix()
+    comp_coords <- comp_year %>% select(lon, lat) %>% as.matrix()
+    
+    # Nearest neighbor match
+    nn <- get.knnx(comp_coords, miss_coords, k = 1)
+    
+    # Add values from nearest neighbor
+    miss_year$sst_c_mean <- comp_year$sst_c_mean[nn$nn.index[,1]]
+    miss_year$sst_c_sd <- comp_year$sst_c_sd[nn$nn.index[,1]]
+    
+    filled[[as.character(yr)]] <- miss_year
+  }
+  
+  bind_rows(filled)
+}
+
+# 4. Apply filling function
+sst_filled <- fill_missing_sst(sst_missing, sst_complete)
+
+# 5. Combine filled + complete
+sst_data_imputed <- bind_rows(sst_complete, sst_filled) %>%
+  dplyr::select(-lon, -lat, -pixel_area_m2)
+
+# check
+sum(is.na(sst_data_imputed$sst_c_mean))  # Should be 0
+
+nrow(sst_data_imputed) == nrow(sst_data) # TRUE
+
+## save 
+
+write.csv(sst_data_imputed, here("data/model_features/deg_1_x_1/errdap_sst.csv"), row.names = FALSE) # 30 mb 
+
+```
+
+
+
+
+```{r}
+# Spatially aggregate chl data
 spatially_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
                                         spatial_aggregation = data_grid,
                                         years = 2016:2024, # choose years you want to run
@@ -212,14 +423,89 @@ temporally_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
                                          temporal_aggregation = "year",
                                          run_parallel = TRUE,
                                          years_per_chunk = 5)
-## now lets merge them all together
-files <- list.files(here("data/model_features/deg_1_x_1/erdMH1chlamday/"), full.names = TRUE)
+# ## now lets merge them all together
+# files <- list.files(here("data/model_features/deg_1_x_1/erdMH1chlamday/"), full.names = TRUE)
+# 
+# all_chl <- lapply(files, read.csv) %>%
+#   bind_rows() 
+# 
+# write.csv(all_chl, here("data/model_features/deg_1_x_1/errdap_chl.csv"), row.names = FALSE)
 
-all_chl <- lapply(files, read.csv) %>%
-  bind_rows() 
 
-write.csv(all_chl, here("data/model_features/deg_1_x_1/errdap_chl.csv"), row.names = FALSE)
+```
 
+
+Now fill in any missing chl data
+
+```{r}
+chl_data_raw <- lapply(list.files(here("data/model_features/deg_1_x_1/erdMH1chlamday"), full.names = TRUE), read.csv) %>%
+        bind_rows()
+
+chl_data <- chl_data_raw %>%
+  filter(year %in% c(2014:2024)) %>%
+  mutate(chl_mg_per_m3_mean = ifelse(chl_mg_per_m3_mean == 0 & is.na(chl_mg_per_m3_sd), NA, chl_mg_per_m3_mean)) %>%
+  mutate(chl_mg_per_m3_sd = ifelse(!is.na(chl_mg_per_m3_mean) & is.na(chl_mg_per_m3_sd), 0, chl_mg_per_m3_sd)) # if sd is NA but there is a mean, make it 0, meaning there was no variation.
+
+all_pixels <- data_grid %>% st_drop_geometry() %>% select(pixel_id)
+all_years <- chl_data %>% distinct(year)
+pixel_year_grid <- crossing(all_pixels, all_years)
+
+chl_data_full <- pixel_year_grid %>%
+  left_join(chl_data, by = c("pixel_id", "year")) %>%
+  left_join(data_grid %>% st_drop_geometry())
+
+missing_data <- chl_data_full %>%
+  filter(is.na(chl_mg_per_m3_mean)|is.na(chl_mg_per_m3_sd))
+
+
+chl_missing <- chl_data_full %>% filter(is.na(chl_mg_per_m3_mean) | is.na(chl_mg_per_m3_sd))
+
+chl_complete <- chl_data_full %>% filter(!is.na(chl_mg_per_m3_mean) & !is.na(chl_mg_per_m3_sd))
+
+nrow(chl_missing) + nrow(chl_complete) == nrow(chl_data_full) # TRUE
+
+
+# 3. Function to fill in missing values for each year
+fill_missing_chl <- function(missing_df, complete_df) {
+  filled <- list()
+  
+  for (yr in unique(missing_df$year)) {
+    miss_year <- missing_df %>% filter(year == yr)
+    comp_year <- complete_df %>% filter(year == yr)
+    
+    if (nrow(miss_year) == 0 || nrow(comp_year) == 0) next
+    
+    # Coordinates for matching
+    miss_coords <- miss_year %>% select(lon, lat) %>% as.matrix()
+    comp_coords <- comp_year %>% select(lon, lat) %>% as.matrix()
+    
+    # Nearest neighbor match
+    nn <- get.knnx(comp_coords, miss_coords, k = 1)
+    
+    # Add values from nearest neighbor
+    miss_year$chl_mg_per_m3_mean <- comp_year$chl_mg_per_m3_mean[nn$nn.index[,1]]
+    miss_year$chl_mg_per_m3_sd <- comp_year$chl_mg_per_m3_sd[nn$nn.index[,1]]
+    
+    filled[[as.character(yr)]] <- miss_year
+  }
+  
+  bind_rows(filled)
+}
+
+# 4. Apply filling function
+chl_filled <- fill_missing_chl(chl_missing, chl_complete)
+
+# 5. Combine filled + complete
+chl_data_imputed <- bind_rows(chl_complete, chl_filled) %>%
+  dplyr::select(-lon, -lat, -pixel_area_m2)
+
+# Optional check
+sum(is.na(chl_data_imputed$chl_mg_per_m3_mean))  # Should be 0
+
+nrow(chl_data_imputed) == nrow(chl_data_full) # TRUE
+
+# ## save 
+write.csv(chl_data_imputed, here("data/model_features/deg_1_x_1/errdap_chl.csv"), row.names = FALSE) # 88 mb
 
 ```
 

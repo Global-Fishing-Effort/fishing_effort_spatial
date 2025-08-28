@@ -241,26 +241,85 @@ chunk_data <- chunk_files %>%
 
 ```
 
+Check to see if any cells are missing information and if they are fill in with nearest neighbor approach
+
+```{r}
+wind_data_raw <- lapply(list.files(here("data/model_features/remss_wind"), full.names = TRUE), read.csv) %>%
+        bind_rows()
+
+wind_data <- wind_data_raw %>%
+  filter(year %in% c(2014:2024)) 
+
+all_pixels <- data_grid %>% st_drop_geometry() %>% select(pixel_id)
+all_years <- wind_data %>% distinct(year)
+pixel_year_grid <- crossing(all_pixels, all_years)
+
+wind_data_full <- pixel_year_grid %>%
+  left_join(wind_data, by = c("pixel_id", "year")) %>%
+  left_join(data_grid %>% st_drop_geometry())
+
+missing_data <- wind_data_full %>%
+  filter(is.na(wind_speed_ms_mean)|is.na(wind_speed_ms_sd)) 
+
+wind_missing <- wind_data_full %>% filter(is.na(wind_speed_ms_mean) | is.na(wind_speed_ms_sd))
+
+wind_complete <- wind_data_full %>% filter(!is.na(wind_speed_ms_mean) & !is.na(wind_speed_ms_sd))
+
+nrow(wind_missing) + nrow(wind_complete) == nrow(wind_data_full) # TRUE
+
+
+# 3. Function to fill in missing values for each year
+fill_missing_wind <- function(missing_df, complete_df) {
+  filled <- list()
+  
+  for (yr in unique(missing_df$year)) {
+    miss_year <- missing_df %>% filter(year == yr)
+    comp_year <- complete_df %>% filter(year == yr)
+    
+    if (nrow(miss_year) == 0 || nrow(comp_year) == 0) next
+    
+    # Coordinates for matching
+    miss_coords <- miss_year %>% select(lon, lat) %>% as.matrix()
+    comp_coords <- comp_year %>% select(lon, lat) %>% as.matrix()
+    
+    # Nearest neighbor match
+    nn <- get.knnx(comp_coords, miss_coords, k = 1)
+    
+    # Add values from nearest neighbor
+    miss_year$wind_speed_ms_mean <- comp_year$wind_speed_ms_mean[nn$nn.index[,1]]
+    miss_year$wind_speed_ms_sd <- comp_year$wind_speed_ms_sd[nn$nn.index[,1]]
+    
+    filled[[as.character(yr)]] <- miss_year
+  }
+  
+  bind_rows(filled)
+}
+
+# 4. Apply filling function
+wind_filled <- fill_missing_wind(wind_missing, wind_complete)
+
+# 5. Combine filled + complete
+wind_data_imputed <- bind_rows(wind_complete, wind_filled) %>%
+  dplyr::select(-lon, -lat)
+
+# Optional check
+sum(is.na(wind_data_imputed$wind_speed_ms_mean))  # Should be 0
+
+nrow(wind_data_imputed) == nrow(wind_data_full) # TRUE
+
+# qs::qsave(wind_data_imputed, here("data/model_features/remss_wind.qs")) # only ~30 MB - cool 
+write.csv(wind_data_imputed, here("data/model_features/remss_wind.csv"), row.names = FALSE) # 76 MB - cool 
+
+```
+
+
+
 # Spatially and temporally aggregated data to 1 by 1 degree cells
 
 ## Defining our global grid
 
 ```{r}
 pixel_size <- 1
-
-# Create polygon rectangle of globe
-# This will serve as basis of grid
-global_polygon_sf <-
-  tibble(lon = c(-180,-180,180,180,-180),
-       lat = c(-90,90,90,-90,-90))%>%
-  as.matrix() %>%
-  list(.) %>%
-  st_polygon() %>%
-  st_sfc(crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
-  st_as_sf()
-
-# Start with global ocean
-starting_shape <- ocean
 
 data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
   st_as_sf(wkt = "geometry_wkt",
@@ -406,13 +465,84 @@ chunk_data <- chunk_files %>%
 }
 
 
-## now lets merge them all together
-files <- list.files(here("data/model_features/deg_1_x_1/remss_wind/"), full.names = TRUE)
+# ## now lets merge them all together
+# files <- list.files(here("data/model_features/deg_1_x_1/remss_wind/"), full.names = TRUE)
+# 
+# all_wind <- lapply(files, read.csv) %>%
+#   bind_rows() 
+# 
+# write.csv(all_wind, here("data/model_features/deg_1_x_1/remss_wind.csv"), row.names = FALSE)
 
-all_wind <- lapply(files, read.csv) %>%
-  bind_rows() 
+```
 
-write.csv(all_wind, here("data/model_features/deg_1_x_1/remss_wind.csv"), row.names = FALSE)
+Check to see if any cells are missing information and if they are fill in with nearest neighbor approach
+
+```{r}
+wind_data_raw <- lapply(list.files(here("data/model_features/deg_1_x_1/remss_wind"), full.names = TRUE), read.csv) %>%
+        bind_rows()
+
+wind_data <- wind_data_raw %>%
+  filter(year %in% c(2014:2024)) 
+
+all_pixels <- data_grid %>% st_drop_geometry() %>% select(pixel_id)
+all_years <- wind_data %>% distinct(year)
+pixel_year_grid <- crossing(all_pixels, all_years)
+
+wind_data_full <- pixel_year_grid %>%
+  left_join(wind_data, by = c("pixel_id", "year")) %>%
+  left_join(data_grid %>% st_drop_geometry())
+
+missing_data <- wind_data_full %>%
+  filter(is.na(wind_speed_ms_mean)|is.na(wind_speed_ms_sd)) 
+
+wind_missing <- wind_data_full %>% filter(is.na(wind_speed_ms_mean) | is.na(wind_speed_ms_sd))
+
+wind_complete <- wind_data_full %>% filter(!is.na(wind_speed_ms_mean) & !is.na(wind_speed_ms_sd))
+
+nrow(wind_missing) + nrow(wind_complete) == nrow(wind_data_full) # TRUE
+
+
+# 3. Function to fill in missing values for each year
+fill_missing_wind <- function(missing_df, complete_df) {
+  filled <- list()
+  
+  for (yr in unique(missing_df$year)) {
+    miss_year <- missing_df %>% filter(year == yr)
+    comp_year <- complete_df %>% filter(year == yr)
+    
+    if (nrow(miss_year) == 0 || nrow(comp_year) == 0) next
+    
+    # Coordinates for matching
+    miss_coords <- miss_year %>% select(lon, lat) %>% as.matrix()
+    comp_coords <- comp_year %>% select(lon, lat) %>% as.matrix()
+    
+    # Nearest neighbor match
+    nn <- get.knnx(comp_coords, miss_coords, k = 1)
+    
+    # Add values from nearest neighbor
+    miss_year$wind_speed_ms_mean <- comp_year$wind_speed_ms_mean[nn$nn.index[,1]]
+    miss_year$wind_speed_ms_sd <- comp_year$wind_speed_ms_sd[nn$nn.index[,1]]
+    
+    filled[[as.character(yr)]] <- miss_year
+  }
+  
+  bind_rows(filled)
+}
+
+# 4. Apply filling function
+wind_filled <- fill_missing_wind(wind_missing, wind_complete)
+
+# 5. Combine filled + complete
+wind_data_imputed <- bind_rows(wind_complete, wind_filled) %>%
+  dplyr::select(-lon, -lat, -pixel_area_m2)
+
+# Optional check
+sum(is.na(wind_data_imputed$wind_speed_ms_mean))  # Should be 0
+
+nrow(wind_data_imputed) == nrow(wind_data_full) # TRUE
+
+# qs::qsave(wind_data_imputed, here("data/model_features/remss_wind.qs")) # only ~30 MB - cool 
+write.csv(wind_data_imputed, here("data/model_features/deg_1_x_1/remss_wind.csv"), row.names = FALSE) # 76 MB - cool 
 
 ```
 

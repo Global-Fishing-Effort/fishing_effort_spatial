@@ -127,7 +127,7 @@ write.csv(wrangle_enso_data, here("data/model_features/enso_index.csv"), row.nam
 
 ```{r}
 
-eez_lookup_ids <- read.csv(here("data/model_features/eez/eez_lookup.csv"))
+eez_lookup_ids <- read.csv(here("data/model_features/eez/eez_lookup_fix.csv"))
 
 eez_region_features <- eez_lookup_ids %>%
     mutate(eez_region_world_bank_7 = countrycode::countrycode(eez_sovereign,"iso3c","region"))%>%

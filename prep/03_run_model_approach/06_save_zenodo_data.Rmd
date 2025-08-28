@@ -18,6 +18,7 @@ library(qs)
 library(here)
 library(countrycode)
 library(strex)
+library(data.table)
 
 source(here("R/dir.R"))
 ```
@@ -29,8 +30,6 @@ Save csv files to upload to Zenodo and the app
 
 ```{r}
 
-# test <- read.csv(file.path("/home/ubuntu/data_storage/prep/random_forest/zenodo_data/mapped_by_flag_country/model_preds_1950_2017_UKR.csv"))
-
   modelled_flags_original <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
 
   modelled_flags_regional <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions_regional/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
@@ -40,13 +39,13 @@ flags_to_gapfill <- setdiff(modelled_flags_regional, modelled_flags_original)
 
 all_flags <- c(modelled_flags_original, flags_to_gapfill)
 
-all_flags <- c("RAA", "RAM")
 
-cl <- makeCluster(2)  # could probably increase this? 
+cl <- makeCluster(24)  # could probably increase this? 
 registerDoParallel(cl)
 
+
 foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
-  # flag = "RAA"
+  # flag = "STP"
   
   
   all_files_flag_original <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions/"), pattern = flag, full.names = TRUE)
@@ -58,16 +57,25 @@ foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "cou
   
 
   all_data_flag_original <- lapply(all_files_flag_original, qread) %>%
-    bind_rows() 
+    bind_rows() %>%
+    mutate(data_type = "flag model")
 
   
   all_data_flag_regional_gf <- lapply(all_files_flag_regional_gf, qread) %>%
-    bind_rows() 
+    bind_rows()  %>%
+    mutate(data_type = "regional model")
   
     if(nrow(all_data_flag_original) == 0){
     
     all_data_flag_original <- all_data_flag_regional_gf %>%
-      mutate(nom_active_fishing_hours = 0, eff_active_fishing_hours = 0, nom_active_fishing_days = 0, eff_active_fishing_days = 0, eff_days_km2 = 0, nom_days_km2 = 0, eff_hours_km2 = 0, nom_hours_km2 = 0)
+      mutate(nom_active_fishing_hours = 0, eff_active_fishing_hours = 0, nom_active_fishing_days = 0, eff_active_fishing_days = 0, eff_days_km2 = 0, nom_days_km2 = 0, eff_hours_km2 = 0, nom_hours_km2 = 0, nv = 0, nv_km2 = 0, data_type = NA)
+    
+    }
+  
+if(nrow(all_data_flag_regional_gf) == 0){
+    
+    all_data_flag_regional_gf <- all_data_flag_original %>%
+      mutate(nom_active_fishing_hours = 0, eff_active_fishing_hours = 0, nom_active_fishing_days = 0, eff_active_fishing_days = 0, eff_days_km2 = 0, nom_days_km2 = 0, eff_hours_km2 = 0, nom_hours_km2 = 0, nv = 0, nv_km2 = 0, data_type = NA)
     
   }
   
@@ -82,7 +90,6 @@ foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "cou
   missing_cats <- regional_cats %>%
    anti_join(original_cats, by = c("year", "flag_country_iso3c", "gear", "length_category"))
 
-  
   data_to_add <- all_data_flag_regional_gf %>%
     semi_join(missing_cats, by = c("flag_country_iso3c", "year", "gear", "length_category"))
   
@@ -97,7 +104,8 @@ foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "cou
       flag_country_iso3c == "RAA" ~ "Azores", 
       flag_country_iso3c == "RAM" ~ "Madeira", 
       TRUE ~ flag_country_name
-    ))
+    )) %>%
+    dplyr::select(-pixel_area_m2, -pixel_id, -eff_days_km2, -eff_hours_km2, -nom_days_km2, -nom_hours_km2, -nv_km2)
   
   # test <- all_data_fin %>%
   #   # filter(year >= 1988) %>%
@@ -118,14 +126,15 @@ foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "cou
 
 stopCluster(cl)
 
+
 ## save as one large csv
 
   all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_by_flag_country/"), full.names = TRUE)
 
-    all_data <- lapply(all_files_flag, read.csv) %>%
+    all_data <- lapply(all_files_flag, fread) %>%
       bind_rows()
     
-write.csv(all_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_industrial_effort_predictions_1950_2017.csv"), row.names = FALSE)
+fwrite(all_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_industrial_effort_predictions_1950_2017.csv"), row.names = FALSE)
 
 all_data_grouped <- all_data %>% 
   group_by(year, flag_country_iso3c, flag_country_name, gear, length_category, eez_sovereign_iso3c, eez_sovereign_name, fao_fishing_id, fao_major_fishing_area, sector) %>%
@@ -136,8 +145,12 @@ all_data_grouped <- all_data %>%
   ungroup()
 
 
-write.csv(all_data_grouped, file.path(rdsi_dir, "prep/random_forest/zenodo_data/industrial_effort_predictions_by_flag_eez_fao_gear_length_1950_2017.csv"), row.names = FALSE)
+fwrite(all_data_grouped, file.path(rdsi_dir, "prep/random_forest/zenodo_data/industrial_effort_predictions_by_flag_eez_fao_gear_length_1950_2017.csv"), row.names = FALSE)
 
+
+
+  all_data_grouped <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/industrial_effort_predictions_by_flag_eez_fao_gear_length_1950_2017.csv"))
+  
 all_data_grouped_2 <- all_data_grouped %>% 
   group_by(year, flag_country_iso3c, flag_country_name, gear, length_category) %>%
     summarise(modeled_eff_active_fishing_hours = sum(eff_active_fishing_hours, na.rm = TRUE), 
@@ -179,14 +192,14 @@ hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
 
 missing_data <- hist_fish_data %>%
   filter(proportion_hours_modeled != 1) %>%
-  filter(proportion_hours_modeled < 0.9999)
+  filter(proportion_hours_modeled < 0.9999) # should be 0 after our gapfilling
+ 
+fwrite(hist_fish_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/known_industrial_effort_rousseau.csv"), row.names = FALSE)
 
-write.csv(hist_fish_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/known_industrial_effort_rousseau.csv"), row.names = FALSE)
 
+fwrite(missing_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/effort_not_modelled.csv"), row.names = FALSE)
 
-write.csv(missing_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/effort_not_modelled.csv"), row.names = FALSE)
-
-test <- read.csv(file.path(rdsi_dir, "prep/random_forest/zenodo_data/effort_not_modelled.csv"))
+test <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/effort_not_modelled.csv"))
 
 
 
@@ -198,65 +211,66 @@ sum(test$modeled_nom_active_fishing_hours) #
 
 ```
 
-Actual CHN, trawlers, 12-24m, 2015 data
+Figure out why HKG is so large
+
 
 ```{r}
+test_hkg_regional <- qread(file.path(rdsi_dir, "prep/random_forest/predictions_regional/model_preds_1950_2017_HKG.qs"))
 
-saup <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv") %>%
-  dplyr::select(-X)
-test <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FishingCountry_LengthBoat_Gear_Sector.csv") %>%
-  filter(Sector == "I", 
-         Gear == "Trawl_Midwater_or_Unsp") %>%
-  dplyr::select(-X) %>%
-  left_join(saup) %>%
-  filter(Country == "IRN", 
-         Year == 2017)
- 
+test_hkg_regular <- qread(file.path(rdsi_dir, "prep/random_forest/predictions/model_preds_1950_2017_HKG.qs"))
 
+test_hkg_regular_2017 <- test_hkg_regular %>%
+  filter(year == 2017) %>%
+  group_by(lon, lat) %>% 
+  summarise(nom = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() 
 
-test <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FishingCountry_LengthBoat_Gear_Sector.csv") %>%
-  filter(Sector == "I") %>%
-  dplyr::select(-X) %>%
-  group_by(Year) %>%
-  summarise(NomActive = sum(NomActive, na.rm = TRUE), 
-            EffActive = sum(EffActive, na.rm = TRUE)) %>%
-  ungroup()
-
-ggplot(test, aes(x = Year, y = NomActive)) + 
-        geom_line()
-
-ggplot(test, aes(x = Year, y = EffActive)) + 
-        geom_line()
- 
-
-    test_gfw_raw <- qs::qread(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v2_aggregated/all_effort_2015.qs")) %>%
-      filter(flag_gfw == "CHN", 
-             vessel_class_gfw == "trawlers",
-             length_m_gfw <=24 & length_m_gfw >=12) %>%
-  group_by(cell_ll_lon, cell_ll_lat) %>%
-  summarise(total_hours = sum(fishing_hours, na.rm = TRUE)) %>% 
-  ungroup()
-
-test_rast <- test_gfw_raw %>%
-  rast(., type = "xyz")
-plot(test_rast, col = "green")
-plot(test_rast)
+rast(test_hkg_regular_2017, type = "xyz") %>% plot() # interesting 
 
 
-    test_gfw_prep <- qs::qread(file.path(rdsi_dir, "prep/gfw_props/deg_one/all_effort_gear_length_props_2015.qs")) %>%
-      filter(flag_fin == "CHN", 
-             gear == "Trawl_Midwater_or_Unsp",
-             length_category == "Over 50m") %>%
-  group_by(x, y) %>%
-  summarise(total_hours = sum(fishing_hours, na.rm = TRUE)) %>% 
-  ungroup()
+test_hkg_regional_2017 <- test_hkg_regional %>%
+  filter(year == 2017) %>%
+  group_by(lon, lat) %>% 
+  summarise(nom = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() 
 
-test_rast <- test_gfw_prep %>%
-  rast(., type = "xyz")
-plot(test_rast, col = "green")
-plot(test_rast)
+rast(test_hkg_regional_2017, type = "xyz") %>% plot() # ok, A LOT more spread out. Does HKG actually have access to those places according to Watson? Is something going wrong in our regional predictions?  
 
+
+test_hkg_regional_2017 <- test_hkg_regional %>%
+  filter(eez_sovereign_iso3c == "HKG") # hmmmm 0. Feels like there should be some allocated there. Are we using the updated EEZ file? 
 
 
 ```
+
+```{r}
+test_aus <- qread(file.path(rdsi_dir, "prep/random_forest/predictions/model_preds_1950_2017_USA.qs"))
+
+test_pixel <- test_aus %>%
+  distinct(lon, lat, pixel_area_km2)
+
+
+test_2 <- test_aus %>%
+ filter(year == 2017) %>%
+  group_by(lon, lat) %>%
+  summarise(eff = sum(nom_active_fishing_hours)) %>%
+  ungroup() %>%
+  left_join(test_pixel) %>%
+  mutate(eff_km2 = eff/pixel_area_km2) %>%
+  rast(., type = "xyz")
+
+plot(test)
+plot(log(test_2+1))
+
+
+test <- all_data %>%
+   filter(year == 2017) %>%
+  group_by(lon, lat) %>%
+  summarise(eff = sum(nom_active_fishing_hours)) %>%
+  ungroup() %>%
+  rast(., type = "xyz")
+
+plot(log(test+1))
+```
+
 

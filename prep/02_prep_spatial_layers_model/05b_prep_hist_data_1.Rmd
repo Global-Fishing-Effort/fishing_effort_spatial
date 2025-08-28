@@ -143,8 +143,66 @@ sst_1950_2014_yearly <- sst_1950_2014_monthly %>%
             sst_c_sd = sd(sst, na.rm = TRUE)) %>% 
   ungroup()
 
-qs::qsave(sst_1950_2014_yearly, here("data/int/prediction_historical_data/isimip_sst/sst_yearly_1950_2014.qs")) # NICE! Only 32 MB
+## now we need to fill in any missing pixels with nearest neighbor approach
+all_pixels <- data_grid %>% st_drop_geometry() %>% dplyr::select(pixel_id)
+all_years <- sst_1950_2014_yearly %>% distinct(year)
+pixel_year_grid <- crossing(all_pixels, all_years)
 
+sst_data_full <- pixel_year_grid %>%
+  left_join(sst_1950_2014_yearly, by = c("pixel_id", "year")) %>%
+  left_join(data_grid %>% st_drop_geometry())
+
+
+missing_data <- sst_data_full %>%
+  filter(is.na(sst_c_mean)|is.na(sst_c_sd)) 
+
+sst_missing <- sst_data_full %>% filter(is.na(sst_c_mean) | is.na(sst_c_sd))
+
+sst_complete <- sst_data_full %>% filter(!is.na(sst_c_mean) & !is.na(sst_c_sd))
+
+nrow(sst_missing) + nrow(sst_complete) == nrow(sst_data_full) # TRUE
+
+# 3. Function to fill in missing values for each year
+fill_missing_sst <- function(missing_df, complete_df) {
+  filled <- list()
+  
+  for (yr in unique(missing_df$year)) {
+    miss_year <- missing_df %>% filter(year == yr)
+    comp_year <- complete_df %>% filter(year == yr)
+    
+    if (nrow(miss_year) == 0 || nrow(comp_year) == 0) next
+    
+    # Coordinates for matching
+    miss_coords <- miss_year %>% dplyr::select(lon, lat) %>% as.matrix()
+    comp_coords <- comp_year %>% dplyr::select(lon, lat) %>% as.matrix()
+    
+    # Nearest neighbor match
+    nn <- get.knnx(comp_coords, miss_coords, k = 1)
+    
+    # Add values from nearest neighbor
+    miss_year$sst_c_mean <- comp_year$sst_c_mean[nn$nn.index[,1]]
+    miss_year$sst_c_sd <- comp_year$sst_c_sd[nn$nn.index[,1]]
+    
+    filled[[as.character(yr)]] <- miss_year
+  }
+  
+  bind_rows(filled)
+}
+
+# 4. Apply filling function
+sst_filled <- fill_missing_sst(sst_missing, sst_complete)
+
+# 5. Combine filled + complete
+sst_data_imputed <- bind_rows(sst_complete, sst_filled) %>%
+  dplyr::select(-lon, -lat)
+
+# Optional check
+sum(is.na(sst_data_imputed$sst_c_mean))  # Should be 0
+
+nrow(sst_data_imputed) == nrow(sst_data_full) # TRUE
+
+
+qs::qsave(sst_data_imputed, here("data/int/prediction_historical_data/one_degree/sst_yearly_1950_2014.qs")) # NICE! Only 32 MB
 
 ```
 
@@ -246,8 +304,65 @@ chl_1950_2014_yearly <- chl_1950_2014_monthly %>%
             chl_mg_per_m3_sd = sd(chl, na.rm = TRUE)) %>% 
   ungroup()
 
-qs::qsave(chl_1950_2014_yearly, here("data/int/prediction_historical_data/chl_yearly_1950_2014.qs")) # NICE! Only 32 MB
+## now we need to fill in any missing pixels with nearest neighbor approach
+all_pixels <- data_grid %>% st_drop_geometry() %>% dplyr::select(pixel_id)
+all_years <- chl_1950_2014_yearly %>% distinct(year)
+pixel_year_grid <- crossing(all_pixels, all_years)
 
+chl_data_full <- pixel_year_grid %>%
+  left_join(chl_1950_2014_yearly, by = c("pixel_id", "year")) %>%
+  left_join(data_grid %>% st_drop_geometry())
+
+
+missing_data <- chl_data_full %>%
+  filter(is.na(chl_mg_per_m3_mean)|is.na(chl_mg_per_m3_sd)) 
+
+chl_missing <- chl_data_full %>% filter(is.na(chl_mg_per_m3_mean) | is.na(chl_mg_per_m3_sd))
+
+chl_complete <- chl_data_full %>% filter(!is.na(chl_mg_per_m3_mean) & !is.na(chl_mg_per_m3_sd))
+
+nrow(chl_missing) + nrow(chl_complete) == nrow(chl_data_full) # TRUE
+
+# 3. Function to fill in missing values for each year
+fill_missing_chl <- function(missing_df, complete_df) {
+  filled <- list()
+  
+  for (yr in unique(missing_df$year)) {
+    miss_year <- missing_df %>% filter(year == yr)
+    comp_year <- complete_df %>% filter(year == yr)
+    
+    if (nrow(miss_year) == 0 || nrow(comp_year) == 0) next
+    
+    # Coordinates for matching
+    miss_coords <- miss_year %>% dplyr::select(lon, lat) %>% as.matrix()
+    comp_coords <- comp_year %>% dplyr::select(lon, lat) %>% as.matrix()
+    
+    # Nearest neighbor match
+    nn <- get.knnx(comp_coords, miss_coords, k = 1)
+    
+    # Add values from nearest neighbor
+    miss_year$chl_mg_per_m3_mean <- comp_year$chl_mg_per_m3_mean[nn$nn.index[,1]]
+    miss_year$chl_mg_per_m3_sd <- comp_year$chl_mg_per_m3_sd[nn$nn.index[,1]]
+    
+    filled[[as.character(yr)]] <- miss_year
+  }
+  
+  bind_rows(filled)
+}
+
+# 4. Apply filling function
+chl_filled <- fill_missing_chl(chl_missing, chl_complete)
+
+# 5. Combine filled + complete
+chl_data_imputed <- bind_rows(chl_complete, chl_filled) %>%
+  dplyr::select(-lon, -lat)
+
+# Optional check
+sum(is.na(chl_data_imputed$chl_mg_per_m3_mean))  # Should be 0
+
+nrow(chl_data_imputed) == nrow(chl_data_full) # TRUE
+
+qs::qsave(chl_data_imputed, here("data/int/prediction_historical_data/one_degree/chl_yearly_1950_2014.qs")) # NICE! Only 32 MB
 
 ```
 
@@ -486,9 +601,71 @@ hist_files_sd <- list.files(file.path(rdsi_raw_dir, "ISIMIP/wind/"), pattern = "
 
 
   
-  hist_rast_all <- hist_rast_df_mean %>%
+  wind_data <- hist_rast_df_mean %>%
     left_join(hist_rast_df_sd)
   
-  qs::qsave(hist_rast_all, here("data/int/prediction_historical_data/wind_yearly_1950_2014.qs"))
+
+all_pixels <- data_grid %>% st_drop_geometry() %>% dplyr::select(pixel_id)
+all_years <- wind_data %>% distinct(year)
+pixel_year_grid <- crossing(all_pixels, all_years)
+
+wind_data_full <- pixel_year_grid %>%
+  left_join(wind_data, by = c("pixel_id", "year")) %>%
+  left_join(data_grid %>% st_drop_geometry())
+
+
+missing_data <- wind_data_full %>%
+  filter(is.na(wind_speed_ms_mean)|is.na(wind_speed_ms_sd)) 
+
+wind_missing <- wind_data_full %>% filter(is.na(wind_speed_ms_mean) | is.na(wind_speed_ms_sd))
+
+wind_complete <- wind_data_full %>% filter(!is.na(wind_speed_ms_mean) & !is.na(wind_speed_ms_sd))
+
+nrow(wind_missing) + nrow(wind_complete) == nrow(wind_data_full) # TRUE
+
+
+# 3. Function to fill in missing values for each year
+fill_missing_wind <- function(missing_df, complete_df) {
+  filled <- list()
+  
+  for (yr in unique(missing_df$year)) {
+    miss_year <- missing_df %>% filter(year == yr)
+    comp_year <- complete_df %>% filter(year == yr)
+    
+    if (nrow(miss_year) == 0 || nrow(comp_year) == 0) next
+    
+    # Coordinates for matching
+    miss_coords <- miss_year %>% dplyr::select(lon, lat) %>% as.matrix()
+    comp_coords <- comp_year %>% dplyr::select(lon, lat) %>% as.matrix()
+    
+    # Nearest neighbor match
+    nn <- get.knnx(comp_coords, miss_coords, k = 1)
+    
+    # Add values from nearest neighbor
+    miss_year$wind_speed_ms_mean <- comp_year$wind_speed_ms_mean[nn$nn.index[,1]]
+    miss_year$wind_speed_ms_sd <- comp_year$wind_speed_ms_sd[nn$nn.index[,1]]
+    
+    filled[[as.character(yr)]] <- miss_year
+  }
+  
+  bind_rows(filled)
+}
+
+# 4. Apply filling function
+wind_filled <- fill_missing_wind(wind_missing, wind_complete)
+
+# 5. Combine filled + complete
+wind_data_imputed <- bind_rows(wind_complete, wind_filled) %>%
+  dplyr::select(-lon, -lat)
+
+# Optional check
+sum(is.na(wind_data_imputed$wind_speed_ms_mean))  # Should be 0
+
+nrow(wind_data_imputed) == nrow(wind_data_full) # TRUE
+  
+  test <- wind_data_imputed %>%
+    filter(year == 1950) # looks good 
+  
+  qs::qsave(wind_data_imputed, here("data/int/prediction_historical_data/one_degree/wind_yearly_1950_2014.qs"))
   
 ```

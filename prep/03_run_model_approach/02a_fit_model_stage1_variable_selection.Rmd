@@ -34,13 +34,14 @@ library(strex)
 library(broom)
 library(randomForest)
 library(PRROC)
+library(ranger)
 
 source(here("R/dir.R"))
 
 
 ```
 
-## Functions to prepare enviro and effort data  
+## Read in environment and effort data  
 
 ```{r}
 elnino <- read.csv(here("data/model_features/enso_index.csv"))
@@ -63,13 +64,13 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
   ocean_data <- read.csv(here("data/model_features/deg_1_x_1/errdap_chl.csv")) %>%
       left_join(read.csv(here("data/model_features/deg_1_x_1/errdap_sst.csv")), by = c("pixel_id", "year")) %>% 
       left_join(read.csv(here("data/model_features/deg_1_x_1/remss_wind.csv")), by = c("pixel_id", "year")) %>%
-      filter(year %in% c(2015:2024)) 
+      filter(year %in% c(2015:2024))
 
 
   spatial_data <- global_grid %>%
     left_join(read.csv(here("data/model_features/deg_1_x_1/gfw_static_spatial_measures.csv")) %>% dplyr::select(-lat, -lon), by = "pixel_id") %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/mesopelagiczones/mesopelagiczones_fixed.csv")), by = "pixel_id") %>%
-   left_join(read.csv(here("data/model_features/deg_1_x_1/eez/eez.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/deg_1_x_1/eez/eez_fix.csv")), by = "pixel_id") %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/fao/fao_fixed.csv")), by = "pixel_id") %>%
    left_join(read.csv(here("data/model_features/deg_1_x_1/oceans_fixed.csv")), by = "pixel_id") %>%
     left_join(read.csv(here("data/model_features/deg_1_x_1/seamounts.csv")), by = "pixel_id") %>% 
@@ -88,6 +89,8 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
         mutate(gov_score = ifelse(eez_id < 99999 & is.na(gov_score), "no_data", gov_score)) %>%
     dplyr::select(-eez_sovereign, -nearest_seamount_id) %>% 
     distinct() 
+  
+  gfw_reception_data <- read.csv(here("data/model_features/deg_1_x_1/gfw_reception_quality.csv"))
 
 ```
 
@@ -124,7 +127,9 @@ model_formula_rf <- formula(
     pdo_index_mean +  # pacific decadal oscillation
     pdo_index_sd + 
     nearest_seamount_distance_m + 
-    year
+    year +
+    ais_reception_positions_per_day_class_A +
+    ais_reception_positions_per_day_class_B
 )
   
 
@@ -162,28 +167,27 @@ env_grid <- env_data %>%
 Run full models first 
 
 ```{r}
-
+# ~45 mins with 24 cores
 flags <- unique(hist_fish_data$flag_fin)
 
 missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
 length(missing_flags) #  #  "DOM" "MYT" "RAA" "RAM"; 4 these are flags that are in the rousseau data but not in the gfw data, meaning we can't fit a model or make predictions on them.
 
-vessel_info <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/fishing-vessels-v3.csv")) %>%
-  distinct(flag_gfw) # check to make sure they actually don't exist in GFW
-
 flags <- setdiff(flags, missing_flags) # 147 flags to run now
 
-flags_to_run <- setdiff(flags, "GNB") # add any flags we've already run
+# done_flags <- unique(str_after_last(str_before_last(list.files(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/")), "_"), "_"))
+
+flags_to_run <- setdiff(flags, "") # add any flags we've already run
 
 # Set up parallel backend
-num_cores <- 3 
+num_cores <- 24
 cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 
 # Run the loop in parallel
-foreach(flag = flags_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc")) %dopar% {
+foreach(flag = flags_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "ranger")) %dopar% {
   
-    # flag = "GNB"
+    # flag = "GUF"
   model_data_flag <- model_data %>%
     dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
     filter(flag_fin == flag)
@@ -193,23 +197,17 @@ foreach(flag = flags_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs
   
   full_grid <- tidyr::crossing(env_grid, distinct_cats)
   
-  full_data <- full_grid %>%
+  data_random_forest <- full_grid %>%
     left_join(env_data, by = c("lon", "lat", "year")) %>%
     left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
     mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
-    dplyr::select(-pixel_id)
-
-  if (nrow(full_data) == 0) {
-    cat(flag, "not in data... skipping\n")
-    return(NULL)
-  }
-  
-  data_random_forest <- full_data %>% 
+    left_join(gfw_reception_data) %>%
+    dplyr::select(-pixel_id) %>%
     na.omit() %>%
     mutate(presence = as.factor(presence)) %>%
     distinct()
   
-  if (nrow(full_data) == 1) {
+  if (nrow(data_random_forest) == 1) {
     cat(flag, "not enough rows\n")
     return(NULL)
   }
@@ -220,13 +218,22 @@ foreach(flag = flags_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs
   train <- data_random_forest[samp, ]
   test <- data_random_forest[-samp, ]
   
-  tic()
-  model <- randomForest(model_formula_rf, data = train, type = "classification", proximity = FALSE, ntree = 100, importance = TRUE)
-  toc()
-  
- # model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_25.qs")))
+    tic()
+  model <- ranger(
+  formula = model_formula_rf,
+  data = train,
+  num.trees = 100,
+  importance = "impurity",
+  classification = TRUE,
+  probability = TRUE,
+  write.forest = TRUE
+)
+    toc()
+    
 
-  var_imp_i <- importance(model)
+ # model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_27.qs")))
+
+      var_imp_i <- data.frame(importance(model))
   
   n_vars <- nrow(var_imp_i)
   qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_{n_vars}.qs")))
@@ -235,9 +242,11 @@ foreach(flag = flags_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs
 
 stopCluster(cl)
 
+  
 ```
  
 Now apply variable selection methods 
+ - Takes ~1 hours with 24 cores
 
 ```{r}
 # Threshold-Based Selection: Remove variables with importance scores below a certain threshold (e.g., the median or a predefined percentage of the highest importance value).
@@ -246,29 +255,23 @@ Now apply variable selection methods
 ## lets try the threshold based selection, where the threshold is 10% of max importance score (i.e. we keep any variable that is above that 10% of max importance score) and rerun the model and test to see if RMSE improves or not. BUT KEEP YEAR IN NO MATTER WHAT
 
 # Set up parallel backend
-#### NOTE ABOUT PARALLEL: THIS ISN'T WORKING; for some reason it gets hung up when saving the new rf model and saves it as realllllly large and only saves one per flag, which isn't correct. I think it might have to do with the while loops I've included. In theory it should work though... Without it takes ~12 hours to run. 
-# num_cores <- 3 # Use one less than the total available cores
-# cl <- makeCluster(num_cores)
-# registerDoParallel(cl)
+
+num_cores <- 30
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
 
 # Run the loop in parallel
-# foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc")) %dopar% {
+foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "ranger", "PRROC")) %dopar% {
 
-flags_to_run <- setdiff(flags, "")
-
-  auc_values <- c()
-  num_vars <- c()
-  
-for(flag in flags_to_run){
-  
-    # flag = "GNB"
+   # flag = "HKG"
+      auc_values <- c()
+    num_vars <- c()
   model_data_flag <- model_data %>%
     dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
     filter(flag_fin == flag)
   
   if(nrow(model_data_flag) == 1){
-    cat(flag, "not enough categories to model... skipping\n") # should i keep track of the flags we are missing? 
-    # return(NULL)
+    cat(flag, "not enough categories to model... skipping\n")
     next()
   }
   
@@ -277,24 +280,17 @@ for(flag in flags_to_run){
   
   full_grid <- tidyr::crossing(env_grid, distinct_cats)
   
-  full_data <- full_grid %>%
+  data_random_forest <- full_grid %>%
     left_join(env_data, by = c("lon", "lat", "year")) %>%
     left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
     mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
-    dplyr::select(-pixel_id)
-  
-  if (nrow(full_data) == 0) {
-    cat(flag, "not in data... skipping\n")
-    # return(NULL)
-    next()
-  }
-  
-  data_random_forest <- full_data %>% 
+    left_join(gfw_reception_data) %>%
+    dplyr::select(-pixel_id) %>%
     na.omit() %>%
     mutate(presence = as.factor(presence)) %>%
     distinct()
   
-  if (nrow(full_data) == 1) {
+  if (nrow(data_random_forest) == 1) {
     cat(flag, "not enough rows\n")
     # return(NULL)
     next()
@@ -307,26 +303,39 @@ for(flag in flags_to_run){
   test <- data_random_forest[-samp, ]
   
   ## if the file doesn't exist for some reason, run this. They should all be there from the previous chunk though.
-  if(!file.exists((glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_25.qs"))))){
+  if(!file.exists((glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_27.qs"))))){
     
-  tic()
-  model <- randomForest(model_formula_rf, data = train, type = "classification", proximity = FALSE, ntree = 100, importance = TRUE)
-  toc()
+        
+    tic()
+  model <- ranger(
+        formula = model_formula_rf,
+        data = train,
+        num.trees = 100,
+        importance = "impurity",
+        classification = TRUE,
+        probability = TRUE,
+        write.forest = TRUE
+      )
+    toc()
   
   }else{ 
-    model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_25.qs")))
+    model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_27.qs")))
 }
   
-  var_imp_i <- importance(model)
+  var_imp_i <- data.frame(importance(model)) %>%
+     rename("importance" = 1)
   num_vars <- c(nrow(var_imp_i))
-  threshold_i <- quantile(var_imp_i[, 4], 0.10)  # Use the 10th percentile instead of a fixed multiplier
-  
+  threshold_i <- quantile(var_imp_i[, "importance"], 0.10)  # Use the 10th percentile instead of a fixed multiplier
+
   if (threshold_i == 0) {
     threshold_i <- 0.0000001
   }
   
   
-  pred_probs <- predict(model, newdata = test, type = "prob")[, 2]
+
+  prob <- as.data.frame(predict(model, data = test)$predictions) %>%
+        mutate(presence = ifelse(`1` >= 0.5, 1, 0))
+  pred_probs <- prob[, "presence"]
   
   true_labels <- as.numeric(as.character(test$presence))  # Replace with the actual labels in your test data
 
@@ -337,45 +346,70 @@ for(flag in flags_to_run){
   
   iteration <- 1
  while (TRUE) {
-    
-   # selected_vars <- names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i])
-    selected_vars <- unique(c("year", names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i])))
+
+   selected_vars <- var_imp_i %>% 
+     filter(importance > threshold_i) %>%
+      row.names()
+   
+    selected_vars <- unique(c("year", "ais_reception_positions_per_day_class_A", "ais_reception_positions_per_day_class_B", selected_vars)) # always retain year and the ais reception data (for ais data biases)
     
      if (length(selected_vars) < 6) break  # Ensure at least 5 variables remain
     
         # Increase the threshold iteratively until at least one variable is removed
     while (length(selected_vars) == num_vars[length(num_vars)]) {
         threshold_i <- threshold_i * 1.01  # Increase threshold by 1%
-        selected_vars <- unique(c("year", names(var_imp_i[, 4][var_imp_i[, 4] > threshold_i])))
-    }
+   
+   selected_vars <- var_imp_i %>% 
+     filter(importance > threshold_i) %>%
+      row.names()
+   
+    selected_vars <- unique(c("year", "ais_reception_positions_per_day_class_A", "ais_reception_positions_per_day_class_B", selected_vars)) # always retain year and the ais reception data (for ais data biases)
+   }
+
+       n_vars <- length(selected_vars)
+    file_path <- glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_{n_vars}.qs"))
+   
+   if(!file.exists(file_path)){
+   
+     model_i <- ranger(
+        formula = presence ~ .,
+        data = train[, c("presence", selected_vars)],
+        num.trees = 100,
+        importance = "impurity",
+        classification = TRUE,
+        probability = TRUE,
+        write.forest = TRUE
+      )
+     
+   }else{
+     
+     model_i <- qs::qread(file_path)
+   }
     
-    model_i <- randomForest(presence ~ ., data = train[, c("presence", selected_vars)], 
-                            type = "classification", proximity = FALSE, 
-                            ntree = 100, importance = TRUE)
-    
-    var_imp_i <- importance(model_i)
+    var_imp_i <- data.frame(importance(model_i)) %>% 
+      rename("importance" = 1)
     
     # Compute a new threshold dynamically based on the 10th percentile
-    threshold_i <- quantile(var_imp_i[, 4], 0.10)  # Use the 10th percentile instead of a fixed multiplier
+      threshold_i <- quantile(var_imp_i[, 1], 0.10)  # Use the 10th percentile instead of a fixed multiplier
 
-    pred_probs_i <- predict(model_i, newdata = test, type = "prob")[, 2]
+        prob_i <- as.data.frame(predict(model_i, data = test)$predictions) %>%
+          mutate(presence = ifelse(`1` >= 0.5, 1, 0))
+  pred_probs_i <- prob_i[, "presence"]
 
    true_labels_i <- as.numeric(as.character(test$presence))  # Replace with the actual labels in your test data
 
-  pr_curve <- pr.curve(scores.class0 = pred_probs_i, weights.class0 = true_labels_i, curve = TRUE)
-  auc_pr_i <- pr_curve$auc.integral # higher auc_pr is BETTER. So if it gets lower, then we don't want the next model 
+  pr_curve_i <- pr.curve(scores.class0 = pred_probs_i, weights.class0 = true_labels_i, curve = TRUE)
+  auc_pr_i <- pr_curve_i$auc.integral # higher auc_pr is BETTER. So if it gets lower, then we don't want the next model 
 
   auc_values <- c(auc_values, auc_pr_i)
     
   num_vars <- c(num_vars, length(selected_vars))
     
-    n_vars <- length(selected_vars)
-    file_path <- glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_{n_vars}.qs"))
 
     if(!file.exists(file_path)){
 
           qs::qsave(model_i, file_path)
-    }
+     }
     
     if (length(auc_values) > 1) {
       
@@ -391,15 +425,15 @@ for(flag in flags_to_run){
 }
 
 # Stop parallel cluster
-#stopCluster(cl)
-
-
+stopCluster(cl)
 
 
 ```
 
 
 Now write code to select the "best" model per the variable selection from above. We will rerun the model with just those variables on the FULL dataset to leverage all of the data from GFW and save
+ - Around 1 hour with 30 cores and 100 trees
+ - XX horus with 500 trees
 
 ```{r}
 # grab the flags that were run in the folder
@@ -414,14 +448,15 @@ stage_1_flags_done <- unique(sub(".*stage_1_rf_model_full_data_([A-Z]{3})_.*", "
 
 stage_1_flags <- setdiff(stage_1_flags, stage_1_flags_done)
 
-# num_cores <- 3 # Use one less than the total available cores
-# cl <- makeCluster(num_cores)
-# registerDoParallel(cl)
-# foreach(flag = stage_1_flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "strex", "stats")) %dopar% {
+# stage_1_flags <- unique(c("CHN", stage_1_flags)) # move CHN and USA to the front of the list since they take the longest to run...
 
-for(flag in stage_1_flags) {
+num_cores <- 2
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
 
-#  flag = "ALB"
+foreach(flag = stage_1_flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "strex", "stats", "ranger", "PRROC")) %dopar% {
+
+#  flag = "IRL"
   flag_files <- list.files(stage_1_path, pattern = glue("_{flag}_"))
   # select the model with the next to lowest number of variables. E.g., if the final model run for ZAF is 17, then we want to grab the model with the next to lowest number of variables, which is 19. 
   n_variables <- as.numeric(str_before_first(str_after_last(flag_files, "_"), "\\."))
@@ -434,7 +469,11 @@ for(flag in stage_1_flags) {
   
   best_train_model <- qs::qread(file.path(stage_1_path, glue("stage_1_rf_train_{flag}_{best_model_n}.qs")))
   
-  rf_formula <- as.formula(deparse(formula(best_train_model)) |> paste(collapse = " "))
+expanded_formula <- as.formula(
+  paste("presence ~", paste(best_train_model$forest$independent.variable.names, collapse = " + "))
+)
+
+  rf_formula <- as.formula(deparse(formula(expanded_formula)) |> paste(collapse = " "))
   
   model_data_flag <- model_data %>%
     dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
@@ -446,14 +485,12 @@ for(flag in stage_1_flags) {
   
   full_grid <- tidyr::crossing(env_grid, distinct_cats)
   
-  full_data <- full_grid %>%
+  data_random_forest <- full_grid %>%
     left_join(env_data, by = c("lon", "lat", "year")) %>%
     left_join(model_data_flag, by = c("lon", "lat", "year", "flag_fin", "gear", "length_category")) %>%
+    left_join(gfw_reception_data) %>%
     mutate(presence = ifelse(is.na(presence), 0, presence)) %>%
-    dplyr::select(-pixel_id)
-
-  
-  data_random_forest <- full_data %>% 
+    dplyr::select(-pixel_id) %>%
     na.omit() %>%
     mutate(presence = as.factor(presence)) %>%
     distinct()
@@ -462,16 +499,24 @@ for(flag in stage_1_flags) {
   set.seed(123)
   
   tic()
-  model <- randomForest(rf_formula, data = data_random_forest, type = "classification", proximity = FALSE, ntree = 100)
+    model <- ranger(
+        formula = rf_formula,
+        data = data_random_forest,
+        num.trees = 500, # change this to 500 trees
+        importance = "impurity",
+        classification = TRUE,
+        probability = TRUE,
+        write.forest = TRUE
+      )
+    
   toc()
 
   qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/stage_1_rf_model_full_data_{flag}_{best_model_n}.qs")))
 
-
 }
- # stopCluster(cl)
+
+stopCluster(cl)
  
-  
 
 ```
 
