@@ -68,9 +68,13 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
     left_join(read.csv(here("data/model_features/deg_1_x_1/seamounts.csv")), by = "pixel_id") %>% 
    crossing(., year = c(2015:2024)) 
   
+    mpa_data <- qs::qread(here("data/model_features/deg_1_x_1/mpa/mpa_data_all.qs")) %>%
+    filter(year >= 2015)
+  
   
   env_data <- spatial_data %>%
     left_join(ocean_data) %>% # cool.
+    left_join(mpa_data) %>%
     dplyr::select(-geometry_wkt) %>%
     left_join(elnino) %>%
     left_join(pdo) %>%
@@ -133,7 +137,9 @@ full_model_formula <- formula(
     # Year effect
     year +
     ais_reception_positions_per_day_class_A +
-    ais_reception_positions_per_day_class_B
+    ais_reception_positions_per_day_class_B + 
+    nearest_mpa_distance_m + 
+    nearest_mpa_years_since_designation
 )
 
 ```
@@ -154,6 +160,8 @@ full_model_formula <- formula(
 NOTE: need to check on flags which have very little data. Some of the flags have only ~5 rows of data (flag == "SVN" for example only has 2 rows), so obviously the predictions for these would be horrible. Maybe we want to exclude these and gapfill with something later on? Maybe add a sample size filter? Check to see if these even ran for the classification. If they didn't, we probably won't include them anyways. 
 
 Save full models first 
+
+ - takes ~2 mins
 
 ```{r}
 flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 167 of them
@@ -252,7 +260,7 @@ train <- model_data_flag[samp, ]
 test <- model_data_flag[-samp, ]
 
 
-if(!file.exists(glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_27.qs")))){
+if(!file.exists(glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_29.qs")))){
 tic()
   model <- ranger(
   formula = full_model_formula,
@@ -265,7 +273,7 @@ tic()
 toc() # half a second for NZL; 45 secs for CHN
 }else{
   
-  model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_27.qs")))
+  model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_2_models/pruning/stage_2_rf_train_{flag}_29.qs")))
   
 }
 

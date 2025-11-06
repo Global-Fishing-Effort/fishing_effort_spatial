@@ -74,9 +74,14 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
     left_join(read.csv(here("data/model_features/deg_1_x_1/seamounts.csv")), by = "pixel_id") %>% 
    crossing(., year = c(2015:2024)) 
   
+    
+  mpa_data <- qs::qread(here("data/model_features/deg_1_x_1/mpa/mpa_data_all.qs")) %>%
+    filter(year >= 2015)
+  
   
   env_data <- spatial_data %>%
     left_join(ocean_data) %>% # cool.
+    left_join(mpa_data) %>%
     dplyr::select(-geometry_wkt) %>%
     left_join(elnino) %>%
     left_join(pdo) %>%
@@ -127,7 +132,9 @@ model_formula_rf <- formula(
     nearest_seamount_distance_m + 
     year +
     ais_reception_positions_per_day_class_A +
-    ais_reception_positions_per_day_class_B
+    ais_reception_positions_per_day_class_B +    
+    nearest_mpa_distance_m + 
+    nearest_mpa_years_since_designation
 )
   
 env_grid <- env_data %>% 
@@ -365,7 +372,7 @@ foreach(region_loop = regions_to_run, .packages = c("dplyr", "tidyr", "randomFor
   train <- data_random_forest[samp, ]
   test <- data_random_forest[-samp, ]
   
-  base_model_path <- glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models_regional/pruning/stage_1_rf_train_{region_loop}_26.qs"))
+  base_model_path <- glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models_regional/pruning/stage_1_rf_train_{region_loop}_28.qs"))
   
   # Train or load initial model
   if (!file.exists(base_model_path)) {

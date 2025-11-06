@@ -74,10 +74,14 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
     gfw_reception_data <- read.csv(here("data/model_features/deg_1_x_1/gfw_reception_quality.csv"))
     
     sea_ice_df <- qs::qread(here("data/model_features/deg_1_x_1/sea_ice_features_lit.qs"))
+    
+  mpa_data <- qs::qread(here("data/model_features/deg_1_x_1/mpa/mpa_data_all.qs"))
+  
   
   env_data <- spatial_data %>%
     left_join(sea_ice_df) %>%
     left_join(ocean_data_all) %>% # cool.
+    left_join(mpa_data) %>%
     left_join(elnino) %>%
     left_join(pdo) %>% 
     left_join(gfw_reception_data) %>%
@@ -199,13 +203,14 @@ data_to_run <- hist_fish_data %>%
 
 flags_to_run <- unique(data_to_run$flag_fin) #17 missing
 years_to_run <- unique(data_to_run$year) # the same
-flags_to_run <- setdiff(flags, flags_to_run)
+flags_to_run <- setdiff(flags_to_run, "DOM")
+
 
 cl <- makeCluster(38) 
 registerDoParallel(cl)
 
  foreach(flag = flags_to_run, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
-    #  flag = "STP"
+    #  flag = "BEN"
    
    #### Read in models 
    # read in stage 2 model! 
@@ -221,9 +226,9 @@ if (length(matching_files) > 0) {
   stage2_model <- qs::qread(matching_files[1])  # Read the first matching file
 } else if (flag %in% c("RAM", "RAA")){
   
-  stage2_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_2_models/", "stage_2_rf_model_full_data_PRT_24.qs"))
+  stage2_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_2_models/", "stage_2_rf_model_full_data_PRT_26.qs"))
  } else if (flag %in% c("MYT")) {
-      stage2_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_2_models/", "stage_2_rf_model_full_data_FRA_24.qs"))
+      stage2_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_2_models/", "stage_2_rf_model_full_data_FRA_26.qs"))
 
   }  else{
   stop("No matching file found for flag: ", flag)
@@ -242,9 +247,9 @@ if (length(matching_files) > 0) {
   stage1_model <- qs::qread(matching_files[1])  # Read the first matching file
 }  else if (flag %in% c("RAM", "RAA")){
   
-  stage1_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_1_models/", "stage_1_rf_model_full_data_PRT_27.qs"))
+  stage1_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_1_models/", "stage_1_rf_model_full_data_PRT_26.qs"))
  } else if (flag %in% c("MYT")) {
-      stage1_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_1_models/", "stage_1_rf_model_full_data_FRA_27.qs"))
+      stage1_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_1_models/", "stage_1_rf_model_full_data_FRA_26.qs"))
 
   } else {
   stop("No matching file found for flag: ", flag)
@@ -383,7 +388,7 @@ nv_conversion <- qs::qread(here("data/model_features/rousseau_ind_effort_nv_conv
 data_grid_area <- data_grid_area %>%
 st_drop_geometry()
 
-cl <- makeCluster(46)  # could probably increase this? 
+cl <- makeCluster(30)  # could probably increase this? 
 registerDoParallel(cl)
 
 foreach(flag = flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {

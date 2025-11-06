@@ -76,8 +76,11 @@ model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
     left_join(read.csv(here("data/model_features/deg_1_x_1/seamounts.csv")), by = "pixel_id") %>% 
    crossing(., year = c(2015:2024)) 
   
+  mpa_data <- qs::qread(here("data/model_features/deg_1_x_1/mpa/mpa_data_all.qs")) %>%
+    filter(year >= 2015)
   
   env_data <- spatial_data %>%
+    left_join(mpa_data) %>%
     left_join(ocean_data) %>% # cool.
     dplyr::select(-geometry_wkt) %>%
     left_join(elnino) %>%
@@ -129,7 +132,9 @@ model_formula_rf <- formula(
     nearest_seamount_distance_m + 
     year +
     ais_reception_positions_per_day_class_A +
-    ais_reception_positions_per_day_class_B
+    ais_reception_positions_per_day_class_B +
+    nearest_mpa_distance_m + 
+    nearest_mpa_years_since_designation
 )
   
 
@@ -246,7 +251,7 @@ stopCluster(cl)
 ```
  
 Now apply variable selection methods 
- - Takes ~1 hours with 24 cores
+ - Takes ~2 hours with 30 cores
 
 ```{r}
 # Threshold-Based Selection: Remove variables with importance scores below a certain threshold (e.g., the median or a predefined percentage of the highest importance value).
@@ -303,7 +308,7 @@ foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glu
   test <- data_random_forest[-samp, ]
   
   ## if the file doesn't exist for some reason, run this. They should all be there from the previous chunk though.
-  if(!file.exists((glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_27.qs"))))){
+  if(!file.exists((glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_29.qs"))))){
     
         
     tic()
@@ -319,7 +324,7 @@ foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glu
     toc()
   
   }else{ 
-    model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_27.qs")))
+    model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_29.qs")))
 }
   
   var_imp_i <- data.frame(importance(model)) %>%
@@ -427,13 +432,12 @@ foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glu
 # Stop parallel cluster
 stopCluster(cl)
 
-
 ```
 
 
 Now write code to select the "best" model per the variable selection from above. We will rerun the model with just those variables on the FULL dataset to leverage all of the data from GFW and save
  - Around 1 hour with 30 cores and 100 trees
- - XX horus with 500 trees
+ - XX hours with 500 trees
 
 ```{r}
 # grab the flags that were run in the folder
@@ -448,9 +452,9 @@ stage_1_flags_done <- unique(sub(".*stage_1_rf_model_full_data_([A-Z]{3})_.*", "
 
 stage_1_flags <- setdiff(stage_1_flags, stage_1_flags_done)
 
-# stage_1_flags <- unique(c("CHN", stage_1_flags)) # move CHN and USA to the front of the list since they take the longest to run...
+stage_1_flags <- unique(c("CHN", "USA", stage_1_flags)) # move CHN and USA to the front of the list since they take the longest to run...
 
-num_cores <- 2
+num_cores <- 24
 cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 
@@ -592,50 +596,4 @@ for (i in 1:length(all_models)) {
  auc_pr_scores # ok this makes sense. The next to last model run (in this case, the second number in the list) is the highest. 
   
 ```
-
-
-
-**How the model from McDonald et al works:**
-
-**Overview of the Model**
-The researchers developed a two-stage hurdle random forest model to predict fishing effort:
-
-Stage 1 (Classification/Extensive Margin): Predicts whether any fishing occurs in a pixel (binary outcome: 0 or 1)
-Stage 2 (Regression/Intensive Margin): Predicts the intensity of fishing effort if fishing occurred (continuous outcome: hours/m²)
-
-**Data Used in Both Stages**
-Both stages use the same set of input features, which include:
-
-1. MPA implementation features (11 features): Distance to nearest MPA, years since MPA designation, fraction of MPA coverage, etc.
-2. Environmental features (12 features): Sea surface temperature, chlorophyll-A, wind speed, etc.
-3. Geographic features (7 features): Latitude, longitude, distance to shore, distance to seamount, bathymetry depth, etc.
-4. Governance features (6 features): EEZ presence, governance capacity scores, etc.
-5. Economic features (3 features): Distance to port, fuel prices, etc.
-6. Technological features (2 features): AIS reception quality metrics
-7. Residual effects features: Lagged fishing effort from previous years, year variable
-
-**Relationship Between Stage 1 and Stage 2**
-Training Process: The stages are trained independently but with different subsets of data:
-
- - Stage 1 uses all observations from the training dataset
- - Stage 2 only uses observations where fishing effort is non-zero (conditional on fishing occurring)
- 
-Prediction Process: When making predictions, the outputs from both stages are combined:
-
- - The paper explicitly states: "We combine each Stage 1 and Stage 2 out-of-sample predictions into full hurdle model predictions. For each observation, we simply multiply the stage 1 classification prediction (0 or 1) by the stage 2 prediction (h/m² of fishing effort)."
-  
-Data Flow: The Stage 1 model does not directly feed data into Stage 2 during training. Instead:
-
- - Stage 1 determines IF fishing occurs (probability of fishing)
- - Stage 2 determines HOW MUCH fishing occurs (intensity of fishing)
- - The final prediction multiplies these two outputs together
- 
-This is a classic hurdle model approach where the first stage models the "hurdle" of whether an event occurs at all, and the second stage models the intensity given that the hurdle is crossed.
-
-**Performance Metrics**
- - Stage 1 (Classification): Evaluated using ROC area-under-curve (~0.97), F1 score (~0.91), precision, and recall
- - Stage 2 (Regression): Evaluated using R² (~0.8), RMSE, and normalized RMSE
- 
-**Summary**
-The two stages work together but are trained separately. Stage 1 doesn't directly feed data into Stage 2 during training, but their outputs are multiplied together during prediction. This approach allows the model to separately handle the binary question of "does fishing occur?" and the continuous question of "how much fishing occurs?" which is particularly useful when dealing with data that has many zeros (areas with no fishing).
 

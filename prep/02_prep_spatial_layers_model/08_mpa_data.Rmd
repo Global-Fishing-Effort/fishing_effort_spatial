@@ -1,0 +1,398 @@
+---
+title: "Data wrangling - MPA"
+author: "Gage Clawson (IMAS)"
+date: '`r format(Sys.time(), "%m/%d/%Y")`'
+output: 
+  pdf_document: 
+    number_sections: yes
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: console
+---
+
+# Summary
+
+Prep spatial MPA data to calculate the nearest MPA to each cell and years since the nearest MPA was established
+
+```{r echo = FALSE}
+# This chunk sets up default settings for all chunks below
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,fig.width = 7.5,fig.height = 5,dev = 'png',dpi=300)
+```
+
+```{r include=FALSE}
+# Load all necessary packages
+library(tidyverse)
+library(sf)
+library(glue)
+library(terra)
+library(data.table)
+library(here)
+library(janitor)
+library(lubridate)
+library(nngeo)
+library(purrr)
+library(rnaturalearth)
+library(parallel)
+library(tibble)
+
+options(scipen = 20)
+
+source(here("R/dir.R"))
+
+data_directory <- rdsi_raw_dir
+
+```
+
+# Defining our global grid
+
+```{r}
+mollweide_projection <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+
+# Read in data_grid, generated in data_wrangling.Rmd
+# We will do spatial joining in Mollweide, for proper calculations
+# Note that data grid still retains lat and lon columns, for joining with non-spatial tibbles
+# For Mollweide, always wrap around dateline, then transform, then calculate areas at end
+
+data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
+  dplyr::select(-geometry_wkt)
+
+data_grid_rast <- data_grid %>%
+  dplyr::select(lon, lat, pixel_id) %>%
+  rast(., type = "xyz")
+```
+
+```{r}
+mpa_atlas_raw <- st_read(file.path(rdsi_raw_dir, "mpa_atlas/mpatlas_summary_export_2025-10-24.gdb")) 
+
+mpa_atlas_df <- mpa_atlas_raw %>%
+  st_drop_geometry() %>%
+  mutate(mpa_date = case_when(
+    implemented_date == "" & designated_date != "" ~ designated_date,
+    implemented_date == "" & designated_date == "" ~ proposed_date,
+    TRUE ~ implemented_date
+  )) %>%
+  filter(mpa_date != "")
+
+mpa_atlas_prep <- mpa_atlas_raw %>%
+    mutate(mpa_date = case_when(
+    implemented_date == "" & designated_date != "" ~ designated_date,
+    implemented_date == "" & designated_date == "" ~ proposed_date,
+    TRUE ~ implemented_date
+  )) %>%
+  filter(mpa_date != "") %>%
+  mutate(year = as.numeric(year(mpa_date))) %>%
+  vect()
+
+
+mpa_rast <- rasterize(mpa_atlas_prep, data_grid_rast, field = "year")
+
+plot(mpa_rast)
+
+
+mpa_df <- mpa_rast %>%
+  as.data.frame(., xy = TRUE)
+
+
+# 1) If a cell has multiple MPA years, keep the earliest establishment year
+mpa_year_by_cell <- mpa_df %>%
+  group_by(x, y) %>%
+  summarise(est_year = min(year, na.rm = TRUE), .groups = "drop")
+
+
+
+# 2) Build full panel 1950–2024 for every ocean cell
+panel <- tidyr::crossing(data_grid %>% st_drop_geometry() %>% dplyr::select(lon, lat), year = 1950:2024) %>%
+  left_join(mpa_year_by_cell, by = c("lon" = "x", "lat" = "y")) %>%
+  mutate(mpa = as.integer(!is.na(est_year) & year >= est_year)) %>%
+  select(lon, lat, year, mpa)
+
+# build raster stack
+yrs <- 1950:2024
+r_stack <- rast(data_grid_rast, nlyrs = length(yrs))
+names(r_stack) <- paste0("y", yrs)
+
+# map each (x,y) to its cell index once
+cell_ids <- cellFromXY(data_grid_rast, as.matrix(panel[, c("lon", "lat")]))
+
+# fill each layer
+for (i in seq_along(yrs)) {
+  vi <- panel$mpa[panel$year == yrs[i]]
+  r_i <- setValues(rast(data_grid_rast), NA_real_)
+  r_i[cell_ids[panel$year == yrs[i]]] <- vi
+  r_stack[[i]] <- r_i
+}
+
+names(r_stack) <- 1950:2024
+
+plot(r_stack[[75]])
+
+panel_save <- panel %>%
+  filter(mpa == 1) %>% # only save cells with mpa in them, will make it smaller for saving.
+  left_join(data_grid)
+
+qs::qsave(panel_save, here("data/model_features/deg_1_x_1/mpa/mpa_data.qs"))
+
+test <- panel_save %>%
+  filter(year == 2024) %>%
+  dplyr::select(lon, lat, mpa) %>%
+  rast(., type = "xyz")
+
+plot(test) # cool 
+
+```
+
+Now we need to calcaulte the nearest MPA distance (m) for each cell for each year
+
+```{r}
+mpa_data <- data_grid %>%
+  dplyr::select(-lon, -lat) %>%
+  expand(pixel_id, year = c(1950:2024)) %>%
+  left_join(qs::qread(here("data/model_features/deg_1_x_1/mpa/mpa_data.qs")) %>% dplyr::select(pixel_id, year, mpa)) %>%
+  mutate(mpa = ifelse(is.na(mpa), 0, mpa)) %>%
+  left_join(data_grid)
+
+mpa_est <- mpa_data %>%
+  group_by(pixel_id) %>%
+  summarise(
+    est_year = ifelse(any(mpa == 1), min(year[mpa == 1]), NA_integer_),
+    lon = first(lon),
+    lat = first(lat),
+    .groups = "drop"
+  )
+
+grid_sf <- st_as_sf(data_grid, coords = c("lon", "lat"), crs = 4326)
+years   <- sort(unique(mpa_data$year))
+
+
+```
+
+
+```{r}
+# 1° template derived from your panel
+lon_vals <- sort(unique(mpa_data$lon))
+lat_vals <- sort(unique(mpa_data$lat))
+
+res_x <- median(diff(lon_vals))  # should be 1
+res_y <- median(diff(lat_vals))  # should be 1
+
+ext_ll <- ext(
+  min(lon_vals) - res_x/2,
+  max(lon_vals) + res_x/2,
+  min(lat_vals) - res_y/2,
+  max(lat_vals) + res_y/2
+)
+
+template_ll <- rast(ext_ll, resolution = c(res_x, res_y), crs = "EPSG:4326")
+
+# land/sea mask in lon/lat
+land_sf   <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf")
+land_vect <- vect(land_sf)
+
+land_r <- rasterize(land_vect, template_ll, field = 1, background = 0)
+
+sea_mask_ll <- land_r
+sea_mask_ll[land_r == 1] <- NA  # land
+sea_mask_ll[land_r == 0] <- 1   # sea
+
+mollweide_projection <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+
+sea_mask <- project(sea_mask_ll, mollweide_projection, method = "near")
+
+
+# establishment year per pixel (first year mpa==1)
+mpa_est <- mpa_data %>%
+  arrange(pixel_id, year) %>%
+  group_by(pixel_id) %>%
+  mutate(mpa = as.integer(cummax(mpa))) %>%
+  ungroup() %>%
+  group_by(pixel_id) %>%
+  summarise(
+    est_year = ifelse(any(mpa == 1), min(year[mpa == 1]), NA_integer_),
+    lon = first(lon),
+    lat = first(lat),
+    .groups = "drop"
+  )
+
+## pixel ↔ lon/lat template cell
+cell_ll <- cellFromXY(template_ll,
+                      as.matrix(data_grid[, c("lon", "lat")]))
+
+pixel_cell_ll_lookup <- data.frame(
+  pixel_id = data_grid$pixel_id,
+  cell_ll  = cell_ll
+)
+
+## pixel ↔ sea_mask cell (for extracting distances later)
+pts_ll   <- vect(data_grid, geom = c("lon", "lat"), crs = "EPSG:4326")
+pts_proj <- project(pts_ll, sea_mask)
+cell_proj <- cells(sea_mask, pts_proj)[, "cell"]
+
+est_years <- sort(unique(na.omit(mpa_est$est_year)))
+n_cores   <- min(detectCores() - 1, length(est_years))
+
+dist_by_estyear_list <- mclapply(
+  est_years,
+  function(e_year) {
+
+    # Pixels whose MPA was designated in this exact year
+    mpa_pix_ll <- mpa_est %>%
+      filter(est_year == e_year) %>%
+      inner_join(pixel_cell_ll_lookup, by = "pixel_id") %>%
+      filter(!is.na(cell_ll))
+
+    if (nrow(mpa_pix_ll) == 0) {
+      # no MPAs this year → all NA distances
+      return(rep(NA_real_, nrow(data_grid)))
+    }
+
+    # 1) MPA raster in lon/lat
+    mpa_ll <- rast(template_ll)
+    values(mpa_ll) <- 0
+    mpa_ll[mpa_pix_ll$cell_ll] <- 1
+
+    # 2) Project onto sea_mask grid
+    mpa_proj <- project(mpa_ll, sea_mask, method = "near")
+
+    # 3) Cost raster: 1 = sea, 2 = MPA, NA = land
+    year_r <- sea_mask
+    year_r[mpa_proj == 1 & !is.na(sea_mask)] <- 2
+
+    # 4) Sea-only distance to MPAs designated in e_year
+    dist_r <- gridDist(year_r, target = 2)
+
+    # 5) Extract distances for all pixels
+    dists <- as.data.frame(terra::extract(dist_r, cell_proj))
+
+    # dists  # numeric vector, length = nrow(data_grid)
+  },
+  mc.cores = n_cores
+)
+
+# combine into pixel × est_year matrix
+dist_mat <- do.call(cbind, dist_by_estyear_list)
+colnames(dist_mat) <- est_years    # one column per implementation year
+n_pixels <- nrow(dist_mat)
+
+
+years    <- sort(unique(mpa_data$year))
+n_cores2 <- min(detectCores() - 1, length(years))
+
+mpa_sea_features_list <- mclapply(
+  years,
+  function(yr) {
+    # yr = 2024
+    allowed <- est_years <= yr
+
+    if (!any(allowed)) {
+      return(tibble(
+        pixel_id = data_grid$pixel_id,
+        year     = yr,
+        nearest_mpa_distance_m              = NA_real_,
+        nearest_mpa_years_since_designation = NA_integer_
+      ))
+    }
+
+    sub_mat <- dist_mat[, allowed, drop = FALSE]
+
+    min_dist <- apply(sub_mat, 1, function(v) {
+      if (all(is.na(v))) NA_real_ else min(v, na.rm = TRUE)
+    })
+
+    idx_min <- apply(sub_mat, 1, function(v) {
+      if (all(is.na(v))) NA_integer_ else which.min(v)
+    })
+
+    nearest_est_year_vec <- ifelse(
+      is.na(idx_min),
+      NA_integer_,
+      est_years[allowed][idx_min]
+    )
+
+    years_since <- ifelse(
+      is.na(nearest_est_year_vec),
+      NA_integer_,
+      pmax(0L, yr - nearest_est_year_vec)
+    )
+
+  test <-  tibble(
+      pixel_id = data_grid$pixel_id,
+      year     = yr,
+      nearest_mpa_distance_m              = min_dist,
+      nearest_mpa_years_since_designation = years_since
+    )
+  },
+  mc.cores = n_cores2
+)
+
+mpa_sea_features <- dplyr::bind_rows(mpa_sea_features_list)
+
+
+test <- mpa_sea_features %>%
+  filter(year == 2024) %>%
+  # filter(is.na(nearest_mpa_distance_m)) %>%
+  left_join(data_grid) %>%
+ # mutate(nearest_mpa_distance_m = 1) %>%
+  dplyr::select(lon, lat, nearest_mpa_distance_m) %>%
+  rast(., type = "xyz")
+
+```
+
+Now we need to fill in any NAs with nearest neighbor values
+
+```{r}
+# turn your panel into sf points (projected)
+mpa_sf <- mpa_sea_features %>%
+  left_join(data_grid) %>%
+  st_as_sf(coords = c("lon", "lat"), crs = 4326) %>%
+  st_transform(6933)   # or your mollweide_projection CRS
+
+# split by year
+mpa_by_year <- split(mpa_sf, mpa_sf$year)
+
+filled_list <- lapply(mpa_by_year, function(g) {
+  # rows that are missing the distance (and thus years-since)
+  idx_na <- is.na(g$nearest_mpa_distance_m)
+
+  # nothing to fill
+  if (!any(idx_na)) return(g)
+
+  # if *all* are NA for this year (no MPAs exist yet), just return as-is
+  if (all(idx_na)) return(g)
+
+  # donors = cells with non-NA values
+  src <- g[!idx_na, ]
+  trg <- g[idx_na, ]
+
+  # nearest-neighbor from NA-cells to non-NA cells
+  nn <- st_nn(trg, src, k = 1, returnDist = FALSE)
+  nn_idx <- vapply(nn, function(v) v[1], integer(1))
+
+  # fill distance and years-since from nearest neighbor
+  g$nearest_mpa_distance_m[idx_na] <-
+    src$nearest_mpa_distance_m[nn_idx]
+
+  g$nearest_mpa_years_since_designation[idx_na] <-
+    src$nearest_mpa_years_since_designation[nn_idx]
+
+  g
+})
+
+# recombine and drop geometry
+mpa_sf_filled <- do.call(rbind, filled_list)
+mpa_data_filled <- mpa_sf_filled %>%
+  st_drop_geometry()
+
+test <- mpa_data_filled %>%
+  filter(is.na(nearest_mpa_distance_m))  # perfect
+
+test <- mpa_data_filled %>%
+  filter(year == 2024) %>%
+  left_join(data_grid) %>%
+  dplyr::select(lon, lat, nearest_mpa_distance_m) %>%
+  rast(., type = "xyz")
+
+qs::qsave(mpa_data_filled, here("data/model_features/deg_1_x_1/mpa/mpa_data_all.qs"))
+
+```
+

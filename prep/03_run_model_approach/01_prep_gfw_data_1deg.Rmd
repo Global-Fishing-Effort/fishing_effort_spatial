@@ -23,7 +23,6 @@ grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv"))
 ```
 
 ```{r}
-elnino <- read.csv(here("data/model_features/enso_index.csv"))
 
 years <- 2015:2024
 model_data <- list()
