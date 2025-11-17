@@ -152,6 +152,10 @@ global_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv")) %
 access_data <- qs::qread(here("data/int/prediction_historical_data/catch_fishing_access.qs"))
 access_data_high_seas <- qs::qread(here("data/int/prediction_historical_data/catch_fishing_access_high_seas.qs"))
 
+test <- access_data %>%
+  filter(year == 2017, 
+         flag_fin == "BEN")
+
 env_grid <- env_data %>% 
   dplyr::select(lon, lat) %>% distinct()
 
@@ -209,7 +213,7 @@ flags_to_run <- setdiff(flags_to_run, "DOM")
 cl <- makeCluster(38) 
 registerDoParallel(cl)
 
- foreach(flag = flags_to_run, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
+ foreach(flag = model_flags, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
     #  flag = "BEN"
    
    #### Read in models 
@@ -266,7 +270,7 @@ if (length(matching_files) > 0) {
    #   next()
    # }
 
-# yr = 2005
+# yr = 2017
 
 # get combination of categories we need to run through our models
 model_data_flag <- hist_fish_data %>%
@@ -427,8 +431,7 @@ foreach(flag = flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "country
 stopCluster(cl)
 
 
-test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/predictions/model_preds_1950_2017_IND.qs") %>%
-  filter(year == 2017) %>%
+test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/predictions/model_preds_1950_2017_BEN.qs") %>%
   dplyr::group_by(lon, lat) %>%
   summarise(nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
   ungroup() %>% 

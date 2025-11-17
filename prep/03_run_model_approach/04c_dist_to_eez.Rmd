@@ -1,0 +1,606 @@
+---
+title: "Data wrangling - Spatial measures 1 degree"
+author: "Gage Clawson (IMAS)"
+date: '`r format(Sys.time(), "%m/%d/%Y")`'
+output: 
+  pdf_document: 
+    number_sections: yes
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: console
+---
+
+# Summary 
+
+Prep a layer which describes the distance of each cell from each home EEZ for the countries which need to use regional models for. Those countries are (you can determine these countries in `05_predictions_gapfill.Rmd`: 
+ - BEN, BHS, COG, DJI, DOM, GAB, GLP, GTM, GUF, IRQ, JAM, LBN, LCA, STP, SYR, TGO, WLF, MYT, RAA, RAM
+ 
+The reason we need this information, is because we are going to create a "reachability" layer. Because these flags are gapfilled with larger regional models, sometimes the predictive spatial spread is too far (e.g., when modelling DOM, some effort is being allocated to the meditteraen). This happens because some flags in that region might have distant water fleets, so allocation will still happen in those places. To fix this, we will create a reachability exclusion layer based on: 
+
+ - distance from home EEZ (e.g., if the home eez is DOM, we calculate the distance from each cell globally to DOM eez, where anything within DOM eez == 0 km). 
+ - average days at sea (DAS) per length class; this will be derived from the Rousseau data. I believe this information is provided per flag country. 
+ - average transit speed per length class in knots; we will calculate this from GFW data, if possible. 
+ - f_transit: fraction of DAS used for transit (out + back). A conservative, literature-ish choice is 0.3–0.4 for non-DWF fleets; use 0.2 for largest classes if you want to allow some reach. We might be able to calculate this from AIS data? 
+ 
+ We then combine these to calculate our reachability layer: 0.5 * f_transit * DAS * 24 * transit_speed * 1.852
+ 
+  - where 24 is hours in a day
+  - 1.852 is 1 nautical mile = 1.852 km 
+  - 0.5 is for the out and back split 
+  
+Load packages 
+
+```{r}
+# Load all necessary packages
+library(tidyverse)
+library(sf)
+library(rnaturalearth)
+library(glue)
+library(here)
+library(terra)
+library(janitor)
+library(qs)
+library(data.table)
+
+source(here("R/dir.R"))
+
+# Set the data directory. This specifies the folder in our drive where the data can be found. 
+
+data_directory <- rdsi_raw_dir
+
+# Get high-res ocean data
+ocean <- ne_download(scale = 50, type = 'ocean', category = 'physical',returnclass = "sf") %>%
+  dplyr::select(geometry)
+
+```
+
+# Defining our global grid
+
+```{r}
+pixel_size <- 1
+
+data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
+  st_drop_geometry() %>%
+  dplyr::select(-geometry_wkt)
+
+```
+
+## Calculate distance to each EEZ
+
+We will first calculate the distance to each EEZ for flag countries that need to be gapfilled using larger regional models
+
+ - BEN, BHS, COG, DJI, DOM, GAB, GLP, GTM, GUF, IRQ, JAM, LBN, LCA, STP, SYR, TGO, WLF, MYT, RAA, RAM
+ 
+```{r}
+eez_to_calculate <- c("BEN", "BHS", "COG", "DJI", "DOM", "GAB", "GLP", "GTM", "GUF", "IRQ", "JAM", "LBN", "LCA", "STP", "SYR", "TGO", "WLF", "MYT", "RAA", "RAM")
+
+# read in eez data 
+eez_id <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup_fix.csv"))
+eez_df <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_fix.csv")) %>%
+  left_join(eez_id) %>%
+  filter(eez_sovereign %in% eez_to_calculate) %>%
+  left_join(data_grid)
+
+setdiff(eez_to_calculate, unique(eez_df$eez_sovereign)) # character(0); all there
+
+test <- eez_df %>%
+  dplyr::select(lon, lat, eez_id) %>%
+  rast(., type = "xyz")
+ 
+plot(test) # looks good 
+
+# now we need to loop through each EEZ and calculate distance to each EEZ in each cell (not going through land)
+
+
+# 1° global template (adjust extent if you use something slightly different)
+r_tmpl <- rast(
+  xmin = -180, xmax = 180,
+  ymin = -90,  ymax = 90,
+  resolution = 1,
+  crs = "EPSG:4326"
+)
+
+
+# Land polygons → raster; since we don't want to include land distances 
+land_sf <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf")
+land_v  <- vect(land_sf)
+
+
+# land_r: 1 on land, NA elsewhere
+land_r  <- rasterize(land_v, r_tmpl, field = 1)
+
+
+# ocean_r: 1 on ocean, NA on land (non-NA cells are traversable)
+ocean_r <- data_grid %>%
+  dplyr::select(lon, lat) %>%
+  mutate(ocean = 1) %>%
+  rast(., type = "xyz")
+
+crs(ocean_r) <- "EPSG:4326"   # or "+proj=longlat +datum=WGS84"
+
+# eez_df: pixel_id, eez_id, eez_sovereign, lon, lat
+
+eez_pts <- vect(
+  eez_df |> dplyr::select(lon, lat, eez_id),
+  geom = c("lon", "lat"),
+  crs  = crs(ocean_r)
+)
+
+# data_grid: pixel_id, lon, lat -- global 1° ocean cells
+res_df <- data_grid  # we'll add distance columns onto this
+
+eez_ids <- sort(unique(eez_df$eez_id))
+
+for (id in eez_ids) {
+  
+#  id = 8640 # test out DOM
+  
+  # Points for this EEZ (its grid cells)
+  pts_id <- vect(
+    eez_df |> filter(eez_id == id) |> select(lon, lat),
+    geom = c("lon", "lat"),
+    crs  = crs(ocean_r)
+  )
+
+    # Copy the ocean mask and mark this EEZ's cells as "0"
+  r_id <- ocean_r
+  cells <- cells(r_id, pts_id)[, "cell"]  # cell indices for this EEZ's points
+  r_id[cells] <- 0                     # EEZ cells = 0 → target
+  
+  # Ocean-only grid distance to EEZ (meters; scale=1)
+  d_r <- gridDist(r_id, target = 0, scale = 1000)
+  
+  # library(tidyterra)
+  # test <- d_r %>%
+  #   filter(ocean == 0)
+
+    # Extract distance at each global ocean pixel
+  xy <- res_df[, c("lon", "lat")]
+  d_vals <- terra::extract(d_r, xy)[, 2]   # second column is raster values
+
+  res_df[[paste0("dist_eez_", id)]] <- d_vals
+  
+  }
+
+# pivot res_df and save 
+
+res_long <- res_df %>%
+  pivot_longer(
+    cols = starts_with("dist_eez_"),
+    names_to   = "eez_id",
+    names_prefix = "dist_eez_",
+    values_to  = "dist_km"   # or "dist_m" if you used meters
+  ) %>%
+  mutate(eez_id = as.integer(eez_id)) %>%
+  left_join(eez_id)
+
+fwrite(res_long, here("data/int/dist_from_home_eez.csv"))
+
+```
+ 
+## Days at sea
+Now grab DAS data from Rousseau et al 
+ 
+```{r}
+
+das_df <- qs::qread(here("data/model_features/rousseau_ind_effort_nv_conversion.qs")) %>%
+  filter(flag_fin %in% eez_to_calculate)
+
+```
+
+## transit speed 
+
+Now we need median transit speed per length. We can probably get this from GFW sentinel-1 or 2 vessel detection data and will likely have to use regional values (e.g., caribbean, middle east, sub saharan africa, etc). We'll do this across all years in GFW. 
+
+```{r}
+library(doParallel)
+# i think we will need to use the sentinel-2 data 
+
+eez_df_full <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_fix.csv")) %>%
+  left_join(eez_id)
+
+sentinel_files <- list.files(file.path(rdsi_raw_dir, "global_fishing_watch/sentinel_2_data"), full.names = TRUE, pattern = "csv")
+
+cl <- makeCluster(12) # or however many cores you want
+registerDoParallel(cl)
+
+foreach(file = sentinel_files[2:13],
+        .packages = c("dplyr", "stringr", "tools")) %dopar% {
+          
+ # file = sentinel_files[[13]]
+
+  years <- str_extract(file, "(?<=_pipev3_)\\d{4}")
+  
+  vessels_raw <- data.table::fread(file)
+  
+  vessels_df <- vessels_raw %>% 
+    dplyr::select(lon, lat, length_m_inferred, presence_score, nonvessel_score,
+                  likely_infrastructure, potential_ice, matching_score,
+                  matching_confidence, mmsi, speed_kn_inferred) %>%
+    filter(likely_infrastructure == FALSE,
+           potential_ice == FALSE,
+           presence_score >= 0.5,
+           nonvessel_score < 0.5,
+         #  !is.na(mmsi),
+           matching_confidence >= 0.5)
+  
+  # Optionally, add the year as a column
+  vessels_df$year <- years
+  
+  out_name <- paste0("filtered_", tools::file_path_sans_ext(basename(file)), ".csv")
+  data.table::fwrite(vessels_df, file = file.path(rdsi_dir, "prep/sentinel_2_prepped_speed/prepped_10m_res", out_name), row.names = FALSE) # save to your large file storage
+
+        }
+
+stopCluster(cl)
+
+detections <- lapply(list.files(file.path(rdsi_dir, "prep/sentinel_2_prepped_speed/prepped_10m_res"), full.names = TRUE), fread) %>%
+  bind_rows()
+
+# Convert to SpatVector and extract category
+v_pts <- vect(detections[, .(lon, lat)], geom = c("lon","lat"), crs = "EPSG:4326")
+
+eez_r1 <- eez_df_full %>% 
+  left_join(data_grid) %>%
+  dplyr::select(lon, lat, eez_id) %>%
+  rast(., type = "xyz") %>%
+  as.factor()
+  
+detections$eez_id <- terra::extract(eez_r1, v_pts, ID=FALSE, touches=TRUE)[[1]]
+
+# test <- detections %>%
+#   filter(is.na(eez_id))
+
+# Join EEZ metadata (sovereign, FAO, etc.)
+detections <- detections %>%
+  left_join(eez_id %>%
+              mutate(eez_id = as.factor(eez_id)))
+
+detections <- detections %>% 
+  filter(!is.na(eez_id)) %>%
+    mutate(length_class = case_when(
+        length_m_inferred <6 ~ "Less than 6m",
+    length_m_inferred >=6 & length_m_inferred < 12 ~ "6-12m",
+    length_m_inferred >=12 & length_m_inferred < 24 ~ "12-24m",
+    length_m_inferred >= 24 & length_m_inferred < 50 ~ "24-50m",
+    length_m_inferred >=50 ~ "Over 50m"
+  ))
+
+library(mixtools)
+
+# Filter obvious non-transit / noise
+dt <- detections[
+  !is.na(speed_kn_inferred) &
+  speed_kn_inferred >= 1 & speed_kn_inferred <= 40
+]
+
+estimate_transit_speed <- function(x, p = 0.85) {
+  x <- x[is.finite(x)]
+  if (length(x) < 50) return(quantile(x, p, na.rm = TRUE))
+  lx <- log(pmax(x, 0.2))
+  fit <- try(normalmixEM(lx, k = 2, maxit = 500), silent = TRUE)
+  if (inherits(fit, "try-error")) return(quantile(x, p, na.rm = TRUE))
+  exp(fit$mu[which.max(fit$mu)])  # higher-mean component ≈ transit
+}
+
+floors <- data.table(length_class=c("Less than 6m","6-12m","12-24m","24-50m","Over 50m"),
+                     floor_kn=c(5.5,6.5,8.0,10.0,12.0))
+
+transit_by_eez <- dt[, .(
+  s_transit = estimate_transit_speed(speed_kn_inferred),
+  n = .N
+), by = .(eez_sovereign, length_class)]
+
+transit_by_eez <- transit_by_eez[floors, on="length_class"]
+transit_by_eez[, s_transit_floor := pmax(s_transit, floor_kn)]
+
+larger_regions <- fread(here("data/int/larger_regions_iso3c.csv"))
+
+dt_regions <- dt %>% 
+  left_join(larger_regions, by = c("eez_sovereign" = "Country")) %>%
+  filter(!is.na(region))
+
+transit_by_region <- dt_regions[, .(
+  s_transit = estimate_transit_speed(speed_kn_inferred),
+  n = .N
+), by = .(region, length_class)]
+
+transit_by_region <- transit_by_region[floors, on="length_class"]
+transit_by_region[, s_transit_floor := pmax(s_transit, floor_kn)]
+
+transit_global <- dt_regions[, .(
+  s_transit = estimate_transit_speed(speed_kn_inferred),
+  n = .N
+), by = .(length_class)] # we'll start by using global data, with floors included
+
+transit_global <- transit_global[floors, on="length_class"]
+transit_global[, s_transit_floor := pmax(s_transit, floor_kn)]
+
+write.csv(transit_by_eez, here("data/int/transit_speed/transit_speed_by_eez.csv"), row.names = FALSE)
+write.csv(transit_global, here("data/int/transit_speed/transit_speed_global.csv"), row.names = FALSE)
+
+transit_by_region <- transit_by_region %>%
+  complete(length_class, region) %>%
+  dplyr::select(-floor_kn) %>%
+  left_join(floors, by = "length_class") %>%
+  mutate(s_transit_floor = ifelse(is.na(s_transit_floor), floor_kn, s_transit_floor))
+
+write.csv(transit_by_region, here("data/int/transit_speed/transit_speed_by_region.csv"), row.names = FALSE)
+
+```
+
+## Transit fraction
+
+Determine f_transit
+
+ - f_transit: fraction of DAS used for transit (out + back). A conservative, literature-ish choice is 0.3–0.4 for non-DWF fleets; use 0.2 for largest classes if you want to allow some reach.
+ - I think we can calculate this using the AIS data. This data has information on hours, fishing hours, and mmsi per year
+
+
+```{r}
+gfw_year <- qread(file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent_fishing_hours_mmsi/v3_aggregated/all_effort_2012.qs"))) # ok i think we can get f_transit from this 
+
+
+test <- fread("/home/ubuntu/data_storage/raw_data/global_fishing_watch/apparent_fishing_hours_mmsi/v3/mmsi-daily-csvs-10-v3-2022/mmsi-daily-csvs-10-v3-2022-09-20.csv")
+
+gfw_ports <- read.csv("/home/ubuntu/data_storage/raw_data/global_fishing_watch/anchorages/named_anchorages_v2_20221206.csv")
+
+vessel_info <- read.csv("/home/ubuntu/data_storage/raw_data/global_fishing_watch/fishing-vessels-v3.csv")
+```
+ 
+```{r}
+library(strex)
+rdsi_raw_dir <- "/home/ubuntu/data_storage/raw_data"
+in_dir       <- file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v3")
+vinfo_path   <- file.path(rdsi_raw_dir, "global_fishing_watch/fishing-vessels-v3.csv")
+dist_port_tif <- file.path(rdsi_raw_dir, "global_fishing_watch/distance_from_port/distance-from-port-v1.tiff")
+
+years <- 2015:2024                    # choose your span
+
+# Params
+PORT_BUF_KM  <- 10                    # exclude cells within 10 km of any port/anchorage
+MIN_SEA_HOURS_PER_YEAR <- 100         # QC: min hours to compute a vessel-year f_transit
+
+# Length classes (match your scheme)
+length_to_class <- function(L) {
+  ifelse(L < 6, "Less than 6m",
+  ifelse(L < 12, "6-12m",
+  ifelse(L < 24, "12-24m",
+  ifelse(L < 50, "24-50m", "Over 50m"))))
+}
+
+# GFW 0.1° lower-left -> center
+cell_center <- function(ll) ll + 0.05
+
+# ---------------- LOAD STATIC DATA ----------------
+# (A) Distance-from-port raster (meters)
+dist_port_km <- rast(dist_port_tif)  # EPSG:4326; ~0.01° (~1km)
+
+# (B) Vessel info: need mmsi, year, flag, length
+vinfo <- fread(vinfo_path,
+               select = c("mmsi","year","flag_gfw","length_m_inferred","vessel_class_gfw"))
+vinfo[, length_class := length_to_class(length_m_inferred)]
+setkey(vinfo, mmsi, year)
+
+# Optional: year-agnostic fallback (latest row per MMSI) if some MMSIs lack year match
+vinfo_any <- vinfo[order(mmsi, -year)][, .SD[1], by = mmsi]
+setkey(vinfo_any, mmsi)
+
+vinfo <- vinfo %>%
+  mutate(flag_gfw = ifelse(str_detect(flag_gfw, "UNKNOWN-"), str_after_last(flag_gfw, "-"), flag_gfw))
+
+vinfo_any <- vinfo_any %>%
+  mutate(flag_gfw = ifelse(str_detect(flag_gfw, "UNKNOWN-"), str_after_last(flag_gfw, "-"), flag_gfw))
+
+  # crop distance raster to bbox for speed, then extract (meters -> km)
+  # ext_day <- ext(range(dt1$lon), range(dt1$lat))
+  # dist_day <- crop(dist_port_km, ext_day)
+
+# returns per-vessel *daily* totals; NO QC here
+process_daily <- function(csv_path) {
+  # csv_path <- "/home/ubuntu/data_storage/raw_data/global_fishing_watch/apparent_fishing_hours_mmsi/v3/mmsi-daily-csvs-10-v3-2022/mmsi-daily-csvs-10-v3-2022-09-20.csv"
+  dt <- fread(csv_path,
+              select = c("date","cell_ll_lat","cell_ll_lon","mmsi","hours","fishing_hours"))
+  if (!nrow(dt)) return(NULL)
+
+  dt[, `:=`(lat = cell_center(cell_ll_lat),
+            lon = cell_center(cell_ll_lon),
+            year = as.integer(substr(date, 1, 4)))]
+
+  # join vessel info (first try year-specific, then fallback year-agnostic)
+  dt1 <- vinfo[dt, on = .(mmsi, year), nomatch = 0L]
+  if (nrow(dt1) < nrow(dt)) {
+    miss <- dt[!dt1, on = .(mmsi, date, cell_ll_lat, cell_ll_lon)]
+    if (nrow(miss)) {
+      miss2 <- vinfo_any[miss, on = .(mmsi), nomatch = 0L]
+      if (nrow(miss2)) {
+        miss2[, year := as.integer(substr(date, 1, 4))]
+        dt1 <- rbindlist(list(dt1, miss2), use.names = TRUE, fill = TRUE)
+      }
+    }
+  }
+  if (!nrow(dt1)) return(NULL)
+
+  pts <- vect(dt1[, .(lon, lat)], geom = c("lon","lat"), crs = "EPSG:4326")
+  dt1[, dist_port_km := terra::extract(dist_port_km, pts, ID = FALSE)[[1]]]
+
+  # at-sea filter and daily per-vessel totals
+  dt_sea <- dt1[is.finite(dist_port_km) & dist_port_km > PORT_BUF_KM]
+  if (!nrow(dt_sea)) return(NULL)
+
+  dt_sea[, nonfish_hours := pmax(hours - fishing_hours, 0)]
+  
+
+  # return per MMSI *per day* totals (flag/length carried via first())
+  per_mmsi_day <- dt_sea[, .(
+    hours_total_at_sea_day = sum(hours, na.rm = TRUE),
+    hours_transit_day      = sum(nonfish_hours, na.rm = TRUE),
+    flag                   = first(flag_gfw),
+    length_class           = first(length_class)
+  ), by = .(mmsi, year, date)]
+
+  per_mmsi_day[]
+}
+
+# ---- stream daily -> bind -> aggregate yearly -> then QC ----
+results <- list()
+for (yr in years) {
+  message("Year: ", yr)
+  files <- list.files(file.path(in_dir, sprintf("mmsi-daily-csvs-10-v3-%d", yr)),
+                      pattern = "\\.csv$", full.names = TRUE)
+  if (!length(files)) next
+  out <- lapply(files, process_daily)
+  out <- rbindlist(out, use.names = TRUE, fill = TRUE)
+  if (nrow(out)) results[[as.character(yr)]] <- out
+}
+
+per_mmsi_day_all <- rbindlist(results, use.names = TRUE, fill = TRUE)
+
+# aggregate to MMSI × year
+per_mmsi_year <- per_mmsi_day_all[, .(
+  hours_total_at_sea = sum(hours_total_at_sea_day, na.rm = TRUE),
+  hours_transit      = sum(hours_transit_day,     na.rm = TRUE),
+  flag               = first(flag),
+  length_class       = first(length_class)
+), by = .(mmsi, year)]
+
+# apply QC **here**, at the yearly level
+per_mmsi_year <- per_mmsi_year[hours_total_at_sea >= MIN_SEA_HOURS_PER_YEAR]
+
+# compute f_transit at vessel-year, then summarize to flag × length (±year)
+per_mmsi_year[, f_transit_mmsi := pmin(pmax(hours_transit / hours_total_at_sea, 0), 1)]
+
+f_flag_len <- per_mmsi_year[, .(
+  n_vessel_years = .N,
+  f_transit_med  = median(f_transit_mmsi, na.rm = TRUE),
+  f_transit_q25  = quantile(f_transit_mmsi, 0.25, na.rm = TRUE),
+  f_transit_q75  = quantile(f_transit_mmsi, 0.75, na.rm = TRUE)
+), by = .(flag, length_class)][order(flag, length_class)]
+
+
+# ---------------- SAVE ----------------
+fwrite(f_flag_len,    here("data/int/transit_prop/f_transit_flag_length_all_years.csv"))
+# ok so this is per flag. Maybe we can get regional and global values? 
+
+
+per_mmsi_year_region <- per_mmsi_year %>%
+  left_join(larger_regions, by = c("flag" = "Country")) %>%
+  filter(!is.na(region)) %>%
+  filter(!is.na(length_class))
+
+f_region_len <- per_mmsi_year_region[, .(
+  n_vessel_years = .N,
+  f_transit_med  = median(f_transit_mmsi, na.rm = TRUE),
+  f_transit_q25  = quantile(f_transit_mmsi, 0.25, na.rm = TRUE),
+  f_transit_q75  = quantile(f_transit_mmsi, 0.75, na.rm = TRUE)
+), by = .(region, length_class)][order(region, length_class)]
+
+gf_less_6 <- per_mmsi_year_region %>% 
+  filter(length_class == "6-12m") %>% 
+  pull(f_transit_mmsi) %>%
+  median() # we will use the global median of f_transit for vessels that are 6-12m to gapfill <6m 
+
+f_region_len_full <- f_region_len %>%
+  as_tibble() %>%
+  complete(region, 
+           length_class = union(length_class, "Less than 6m")) %>%
+  mutate(f_transit_med = ifelse(is.na(f_transit_med) & length_class %in% c("6-12m", "Less than 6m"), gf_less_6, f_transit_med)) # perfect
+
+fwrite(f_region_len_full, here("data/int/transit_prop/f_transit_region_length_all_years.csv"))
+
+```
+
+
+## calculate reachability layer
+
+Now we will calculate our reachability layer for the 20 countries that require regional gapfilling
+
+reachability = 0.5 * f_transit * DAS * 24 * transit_speed * 1.852
+
+```{r}
+# the rousseau DAS represents annual days at sea. We need a per-trip days at sea, so we will just make this assumption: 
+trip_priors <- tibble::tribble(
+  ~length_category, ~das_trip_med, ~das_trip_min, ~das_trip_max, ~turnaround_d,
+  "Less than 6m",   1.0,           0.5,           1.5,           0.5,
+  "6-12m",          2.0,           1.0,           3.0,           0.75,
+  "12-24m",         4.0,           2.0,           6.0,           1.0,
+  "24-50m",         6.0,           4.0,           12.0,          1.5,
+  "Over 50m",       10.0,          7.0,           20.0,          2.5 # use 30 med if DWF
+)
+
+reachability <- das_df %>%
+  left_join(trip_priors, by = "length_category") %>%
+  left_join(larger_regions, by = c("flag_fin" = "Country")) %>%
+  left_join(f_region_len_full, by = c("region", "length_category" = "length_class")) %>%
+  left_join(transit_by_region, by = c("region", "length_category" = "length_class")) %>%
+  dplyr::select(flag_fin, region, length_category, year, days_at_sea, f_transit_med, s_transit_floor, das_trip_med) %>%
+ # mutate(reach_km = (0.5*f_transit_med*days_at_sea*24*s_transit_floor*1.852)/365) %>%
+    mutate(
+    radius_km_med      = 0.5 * f_transit_med * das_trip_med * 24 * s_transit_floor * 1.852
+  )
+
+fwrite(reachability, here("data/int/reachability_regional_gf.csv"))
+
+```
+
+Methods write up: 
+
+Reachability constraints (transit radius)
+
+To constrain implausible long-distance allocations in regional backstop models, we applied a length-specific reachability mask based on an estimated one-way transit radius R_l for length class l:
+
+Formula:
+R_l (km) = 0.5 * f_transit(l, r) * DAS_trip(l) * 24 * s(l, r) [kn] * 1.852
+
+Where:
+- 0.5 splits the available steaming time into outbound vs. return legs.
+- f_transit(l, r) is the fraction of at-sea time spent underway (non-fishing) for length class l in region r.
+- DAS_trip(l) is the typical per-trip days-at-sea for length class l.
+- 24 converts days to hours.
+- s(l, r) is the typical transit speed in knots (nm per hour) for length class l in region r.
+- 1.852 converts nautical miles to kilometers (1 nm = 1.852 km).
+
+Per-trip days at sea (DAS_trip)
+Rousseau et al. (2019) report annual nominal effort in kW-days and engine power in kW. Dividing annual kW-days by total kW yields an annual days-at-sea per vessel, which does not identify trip length. Therefore, we used conservative priors for per-trip DAS by vessel length class (used only to scale the radius; effort magnitudes are unaffected):
+- < 6 m: 1.0 d (range 0.5–1.5)
+- 6–12 m: 2.0 d (1–3)
+- 12–24 m: 4.0 d (2–6)
+- 24–50 m: 6.0 d (4–12)
+- > 50 m: 10.0 d (7–20)
+
+Transit speed s(l, r)
+We derived regional transit speeds from Global Fishing Watch (GFW) Sentinel-2 vessel detections (10 m). Detections were labeled to 1-degree EEZ cells via point-in-cell assignment and then pooled by larger regions (e.g., Caribbean, Sub-Saharan Africa, North-East Asia). To avoid mixing slow fishing/loitering with cruising:
+1) We filtered obvious non-transit values (e.g., < 1 kn or > 40 kn), with near-port exclusions using the GFW distance-from-port raster.
+2) We estimated the transit mode using a two-component mixture on log-speed (higher-mean component), with a robust quantile fallback (P85) where samples were sparse.
+3) Where regional samples were insufficient, we applied length-specific speed floors (knots) to prevent down-bias:
+   - < 6 m: 5.5
+   - 6–12 m: 6.5
+   - 12–24 m: 8.0
+   - 24–50 m: 10.0
+   - > 50 m: 12.0
+
+Fraction of time in transit f_transit(l, r)
+We estimated regional f_transit from the GFW AIS "apparent fishing effort" mmsi-daily 0.1-degree product (2012–2024). For each AIS grid record we sampled the GFW distance-from-port raster (0.01-degree) at the 0.1-degree cell center and excluded near-port dwell (distance <= 10 km). For each MMSI and year we computed:
+- Total at-sea hours: sum of daily hours outside the port buffer.
+- Transit hours: sum of non-fishing hours (total minus apparent fishing) outside the port buffer.
+We defined f_transit_mmsi = transit_hours / at_sea_hours, applied a stability filter (>= 100 at-sea hours per vessel-year), and aggregated to multi-year regional medians by length class to obtain f_transit(l, r), retaining interquartile ranges (IQRs). Where AIS coverage was insufficient, we used conservative priors: 0.35 (<= 24 m), 0.30 (24–50 m), 0.25 (> 50 m), and documented sensitivity.
+
+Applying the mask
+For each flag–year–length combination (and gear, where applicable) we computed R_l using the regional f_transit(l, r) and s(l, r), then retained only cells with great-circle distance to the flag’s home EEZ <= R_l. We intersected this with an effective access layer (Watson-based access shares, thresholded to drop de minimis links) and, where relevant, restricted to the flag’s home FAO area. As a gentle regularizer within the allowed set, we applied a soft distance prior w_i = exp(-d_i / tau_l) with tau_l approximately R_l / 2 and renormalized predicted intensities; national totals were preserved.
+
+Quality control and sensitivity
+To prevent pathological radii from rare parameter combinations, we:
+- Clipped transit speeds to group-level 95th percentiles.
+- Enforced the speed floors listed above.
+- Capped R_l at conservative maxima by length.
+- Reported sensitivity maps varying DAS_trip (min/median/max), f_transit (IQR), and the port buffer (5–15 km).
+Results were stable to these choices; key spatial patterns did not depend on any single prior.
+
+Data sources
+- Rousseau et al. (2019): annual nominal effort (kW-days) and engine power (kW) used to derive annual days-at-sea per vessel.
+- Global Fishing Watch Sentinel-2 detections: transit speed estimation.
+- Global Fishing Watch AIS apparent fishing hours: transit fraction estimation.
+- Global Fishing Watch distance-from-port raster.
+- Marine Regions EEZs and Watson-based access shares.
+

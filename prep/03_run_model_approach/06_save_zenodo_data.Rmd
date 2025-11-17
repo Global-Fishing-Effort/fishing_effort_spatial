@@ -244,33 +244,26 @@ test_hkg_regional_2017 <- test_hkg_regional %>%
 ```
 
 ```{r}
-test_aus <- qread(file.path(rdsi_dir, "prep/random_forest/predictions/model_preds_1950_2017_USA.qs"))
+test_aus <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_by_flag_country/model_preds_1950_2017_STP.csv"))
 
 test_pixel <- test_aus %>%
   distinct(lon, lat, pixel_area_km2)
 
 
 test_2 <- test_aus %>%
- filter(year == 2017) %>%
+ filter(year == 2000) %>%
   group_by(lon, lat) %>%
   summarise(eff = sum(nom_active_fishing_hours)) %>%
   ungroup() %>%
-  left_join(test_pixel) %>%
-  mutate(eff_km2 = eff/pixel_area_km2) %>%
+  full_join(data_grid_area %>% st_drop_geometry) %>%
+  mutate(eff = ifelse(is.na(eff), 0, eff)) %>%
+  mutate(eff_km2 = eff/(pixel_area_m2/1000000)) %>%
+  dplyr::select(lon, lat, eff_km2) %>%
   rast(., type = "xyz")
 
-plot(test)
+plot(test_2)
 plot(log(test_2+1))
 
-
-test <- all_data %>%
-   filter(year == 2017) %>%
-  group_by(lon, lat) %>%
-  summarise(eff = sum(nom_active_fishing_hours)) %>%
-  ungroup() %>%
-  rast(., type = "xyz")
-
-plot(log(test+1))
 ```
 
 

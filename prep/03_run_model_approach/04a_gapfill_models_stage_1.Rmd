@@ -206,6 +206,8 @@ rousseau_fix <- rousseau_regions %>%
     add_row(Country = "BES", region = "Caribbean") %>%
     add_row(Country = "CCK", region = "IslandNations")
 
+fwrite(rousseau_fix, here("data/int/larger_regions_iso3c.csv"))
+
 ## ok we could use the world bank regions
 hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
     ## remove artisanal

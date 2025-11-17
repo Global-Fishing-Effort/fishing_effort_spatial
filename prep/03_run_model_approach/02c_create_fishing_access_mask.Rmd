@@ -18,6 +18,8 @@ library(here)
 library(countrycode)
 library(sf)
 library(qs)
+library(data.table)
+library(terra)
 
 source(here("R/dir.R"))
 ```
@@ -47,8 +49,6 @@ eez_5 <- read.csv(here("data/model_features/eez/eez_fix.csv")) %>%
   left_join(data_grid_5)
 
 options(timeout = 1000)
-library(data.table)
-library(terra)
 
 url <- "https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/GriddedEffortby_FishingCountry.csv"
 grid_effort_flag_raw <- fread(url, showProgress = TRUE)  # very fast parser
@@ -224,9 +224,32 @@ c_codes <- read_xlsx("/home/ubuntu/gem/private/users/yannickr/Reg_catchData/2022
   distinct(flag_fin, country_name, c_number)
 
 catch_df_access <- watson_industrial_catch %>% 
+  # distinct(year, lon, lat, c_number) %>%
+  left_join(c_codes) %>%
+ # distinct(year, lon, lat, flag_fin)
+  group_by(year, lon, lat, flag_fin) %>%
+  summarise(catch = sum(catch, na.rm = TRUE)) %>%
+  ungroup()
+
+
+
+test <- watson_industrial_catch %>% 
   distinct(year, lon, lat, c_number) %>%
   left_join(c_codes) %>%
-  distinct(year, lon, lat, flag_fin)
+ distinct(year, lon, lat, flag_fin)
+
+test <- watson_industrial_catch %>% 
+  filter(year == 2017) %>%
+  left_join(c_codes) %>%
+  filter(country_name == "Benin")
+
+test_r <- test %>%
+  group_by(lon, lat) %>%
+  summarise(catch = sum(catch, na.rm = TRUE)) %>%
+  ungroup() %>%
+  rast(., type = "xyz")
+plot(test_r, col = "red") # ok weird, this is mostly in west africa... so is our access mask wrong? I think it is maybe that some of the catch is in one cell in China for example. A simple threshold would probably work (e.g., <1% of a flag country's catch, then don't consider it?)
+
 ```
 
 Now apply the same methodology as above for the catch data pull:
@@ -241,9 +264,6 @@ eez_lookup_5 <- read.csv(here("data/model_features/eez/eez_lookup_fix.csv"))
 eez_5 <- read.csv(here("data/model_features/eez/eez_fix.csv")) %>%
   left_join(eez_lookup_5)  %>%
   left_join(data_grid_5)
-
-library(data.table)
-library(terra)
 
 
 # 1) Templates: one with centers at .25/.75 (source), one at .0/.5 (target)
@@ -342,11 +362,26 @@ all_data_matched_catch <- out %>%
   rbind(., missing_data_fix)
 
 
+# all_data_distinct_access_catch <- all_data_matched_catch %>%
+#   distinct(year, flag_fin, eez_sovereign, eez_id) %>%
+#   mutate(access = 1)
+
 all_data_distinct_access_catch <- all_data_matched_catch %>% 
-  distinct(year, flag_fin, eez_sovereign, eez_id) %>%
-  mutate(access = 1)
+  group_by(year, flag_fin, eez_sovereign, eez_id) %>%
+  summarise(catch = sum(catch, na.rm = TRUE)) %>%
+  ungroup() %>%
+  group_by(year, flag_fin) %>%
+  mutate(flag_catch = sum(catch, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(prop_flag_catch = catch/flag_catch) %>%
+  mutate(access = ifelse(prop_flag_catch >= 0.01 | catch >= 100, 1, 0)) %>%
+  filter(access == 1) # doing it this way removes ~2/3 of the rows 
 
-
+test_ben <- all_data_distinct_access_catch %>%
+  filter(year == 2017,
+         flag_fin == "USA") %>%
+  filter(prop_flag_catch >= 0.01|catch >= 100)
+  
 ```
 
 Fix Ukraine and Slovenia access data: It is not in the Watson data before 1988 (Ukraine) and 1992 (Slovenia), so we will use the Rousseau effort data for those years
@@ -371,9 +406,13 @@ ukr_rousseau_access <- all_data_matched_effort %>%
   group_by(year, Country, eez_sovereign) %>%
   summarise(NomActiveHours = sum(NomActiveHours, na.rm = TRUE)) %>%
   ungroup() %>%
-  dplyr::select(year, flag_fin = Country, eez_sovereign, NomActiveHours) %>%
-  filter(flag_fin == "UKR",
-         NomActiveHours > 100) %>% # maybe filter for >100 hours when we have to use this? 
+  group_by(year, Country) %>%
+  mutate(effort_flag = sum(NomActiveHours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(prop_flag_effort = NomActiveHours/effort_flag) %>%
+  dplyr::select(year, flag_fin = Country, eez_sovereign, NomActiveHours, prop_flag_effort) %>%
+  filter(flag_fin == "UKR") %>% # maybe filter for >100 hours when we have to use this? 
+  filter(NomActiveHours >= 100|prop_flag_effort >= 0.01) %>%
   distinct(year, flag_fin, eez_sovereign) %>%
   mutate(access = 1) %>%
   filter(year < 1988) 
@@ -396,9 +435,13 @@ svn_rousseau_access <- all_data_matched_effort %>%
   group_by(year, Country, eez_sovereign) %>%
   summarise(NomActiveHours = sum(NomActiveHours, na.rm = TRUE)) %>%
   ungroup() %>%
-  dplyr::select(year, flag_fin = Country, eez_sovereign, NomActiveHours) %>%
-  filter(flag_fin == "SVN",
-         NomActiveHours > 100) %>% # maybe filter for >100 hours when we have to use this? 
+    group_by(year, Country) %>%
+  mutate(effort_flag = sum(NomActiveHours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(prop_flag_effort = NomActiveHours/effort_flag) %>%
+  dplyr::select(year, flag_fin = Country, eez_sovereign, NomActiveHours, prop_flag_effort) %>%
+  filter(flag_fin == "SVN") %>% # maybe filter for >100 hours when we have to use this? 
+    filter(NomActiveHours >= 100|prop_flag_effort >= 0.01) %>%
   distinct(year, flag_fin, eez_sovereign) %>%
   mutate(access = 1) %>%
   filter(year < 1992) 
@@ -419,10 +462,13 @@ RAA_RAM <- all_data_matched_effort %>%
   group_by(year, Country, eez_sovereign) %>%
   summarise(NomActiveHours = sum(NomActiveHours, na.rm = TRUE)) %>%
   ungroup() %>%
-  dplyr::select(year, flag_fin = Country, eez_sovereign, NomActiveHours) %>%
-    filter(flag_fin %in% c("RAA", "RAM")) %>%
-  filter(
-         NomActiveHours > 100) %>% # maybe filter for >100 hours when we have to use this? 
+      group_by(year, Country) %>%
+  mutate(effort_flag = sum(NomActiveHours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(prop_flag_effort = NomActiveHours/effort_flag) %>%
+  dplyr::select(year, flag_fin = Country, eez_sovereign, NomActiveHours, prop_flag_effort) %>%
+    filter(flag_fin %in% c("RAA", "RAM")) %>% # maybe filter for >100 hours when we have to use this? 
+      filter(NomActiveHours >= 100|prop_flag_effort >= 0.01) %>%
   distinct(year, flag_fin, eez_sovereign) %>%
   mutate(access = 1) %>%
   distinct()
@@ -432,7 +478,11 @@ ram_raa_df <- RAA_RAM %>%
   left_join(eez_lookup)
 
 catch_access_fin <- all_data_distinct_access_catch %>%
+  dplyr::distinct(year, flag_fin, eez_sovereign, access, eez_id) %>%
   rbind(ukr_access_1950_1987, svn_access_1950_1991, ram_raa_df)
+
+# colnames(all_data_distinct_access_catch)
+# colnames(ukr_access_1950_1987)
   
 # fix faroe islands data 
 fro_access_1951 <- catch_access_fin %>%
@@ -448,6 +498,10 @@ fro_access_1950 <- catch_access_fin %>%
 
 catch_access_fin <- catch_access_fin %>%
   rbind(fro_access_1950, fro_access_1951)
+
+test <- catch_access_fin %>%
+  filter(flag_fin == "BEN", 
+         year == 2017)
 
 ```
 
@@ -465,41 +519,41 @@ catch_access_future <- catch_access_fin %>%
 Read in GFW data and assume that if a flag is fishing in a EEZ, they have access
 
 ```{r}
-years <- 2015:2024
-gfw_data <- list()
+# years <- 2015:2024
+# gfw_data <- list()
+# 
+# library(glue)
+# 
+# for(yr in years) {
+#   # yr = 2015
+#   # Load effort proportions
+#   effort_props <- qread(file.path(rdsi_dir, glue("prep/gfw_props/deg_one/all_effort_gear_length_props_{yr}.qs"))) %>%
+#     mutate(year = yr) %>%
+#     filter(fishing_hours > 0)
+# 
+#   
+#   # Combine all data
+#   year_data <- effort_props %>%
+#     dplyr::distinct(
+#       year, 
+#       flag_fin, 
+#       eez_sovereign = iso_sov1
+#     )
+#   
+# #  test <- year_data %>% filter(is.na(eez_sovereign))
+#   
+#   gfw_data[[as.character(yr)]] <- year_data
+# }
+# 
+# # Combine all years
+# final_data <- bind_rows(gfw_data) %>%
+#   mutate(eez_sovereign = ifelse(eez_sovereign == "HSX", "High seas", eez_sovereign)) %>%
+#   mutate(access = 1) %>%
+#   filter(eez_sovereign != "LND") %>%
+#   filter(!is.na(eez_sovereign)) %>%
+#   left_join(eez_lookup)
 
-library(glue)
-
-for(yr in years) {
-  # yr = 2015
-  # Load effort proportions
-  effort_props <- qread(file.path(rdsi_dir, glue("prep/gfw_props/deg_one/all_effort_gear_length_props_{yr}.qs"))) %>%
-    mutate(year = yr) %>%
-    filter(fishing_hours > 0)
-
-  
-  # Combine all data
-  year_data <- effort_props %>%
-    dplyr::distinct(
-      year, 
-      flag_fin, 
-      eez_sovereign = iso_sov1
-    )
-  
-#  test <- year_data %>% filter(is.na(eez_sovereign))
-  
-  gfw_data[[as.character(yr)]] <- year_data
-}
-
-# Combine all years
-final_data <- bind_rows(gfw_data) %>%
-  mutate(eez_sovereign = ifelse(eez_sovereign == "HSX", "High seas", eez_sovereign)) %>%
-  mutate(access = 1) %>%
-  filter(eez_sovereign != "LND") %>%
-  filter(!is.na(eez_sovereign)) %>%
-  left_join(eez_lookup)
-
-all_catch_access <- rbind(catch_access_fin, catch_access_future, final_data) %>%
+all_catch_access <- rbind(catch_access_fin, catch_access_future) %>%
   distinct()
 
 # qs::qsave(all_catch_access, here("data/int/prediction_historical_data/catch_fishing_access.qs"))
@@ -541,7 +595,6 @@ qs::qsave(all_access_fin, here("data/int/prediction_historical_data/catch_fishin
 
 Now do FAO high seas access
 
-
 ```{r}
 fao_lookup <- read.csv(here("data/model_features/fao/fao_major_ids.csv"))
 
@@ -551,10 +604,21 @@ catch_access_df_highseas <- all_data_matched_catch %>%
   filter(
          year >= 1950, 
          eez_sovereign == "High seas") %>%
-    mutate(access_fao = 1) %>%
   left_join(fao_df) %>%
   left_join(fao_lookup, by = c("fao_id")) %>%
-  distinct(year, flag_fin, fao_id, fao_area_name = name_en, eez_sovereign, access_fao)
+  dplyr::select(year, flag_fin, fao_id, fao_area_name = name_en, eez_sovereign, catch) %>%
+  group_by(year, flag_fin, fao_id, fao_area_name, eez_sovereign) %>%
+  summarise(catch = sum(catch, na.rm = TRUE)) %>%
+  ungroup() %>%
+  group_by(year, flag_fin) %>%
+  mutate(flag_catch = sum(catch, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(prop_flag = catch/flag_catch) %>%
+  mutate(access_fao = ifelse(prop_flag >= 0.01|catch >= 100, 1, 0))
+
+test_chn <- catch_access_df_highseas %>%
+  filter(flag_fin == "BEN",
+         year == 2017)
 
 ukraine_watson <- catch_access_df_highseas %>%
   filter(year %in% c(1990:2000),
@@ -573,8 +637,12 @@ ukraine_effort_highseas <- all_data_matched_effort %>%
   summarise(NomActiveHours = sum(NomActiveHours, na.rm = TRUE)) %>%
   ungroup() %>%
   dplyr::select(year, flag_fin, eez_sovereign, fao_id, NomActiveHours) %>%
-  filter(flag_fin == "UKR",
-         NomActiveHours > 100) %>% # maybe filter for >100 hours when we have to use this? 
+  group_by(year, flag_fin) %>%
+  mutate(flag_eff = sum(NomActiveHours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(prop_flag_eff = NomActiveHours/flag_eff) %>%
+  filter(flag_fin == "UKR") %>% # maybe filter for >100 hours when we have to use this? 
+  filter(NomActiveHours >= 100|prop_flag_eff >= 0.01) %>%
   distinct(year, flag_fin, eez_sovereign, fao_id) %>%
   mutate(access_fao = 1) %>%
   filter(year < 1988) %>%
@@ -600,8 +668,12 @@ slovenia_effort_highseas <- all_data_matched_effort %>%
   summarise(NomActiveHours = sum(NomActiveHours, na.rm = TRUE)) %>%
   ungroup() %>%
   dplyr::select(year, flag_fin, eez_sovereign, fao_id, NomActiveHours) %>%
-  filter(flag_fin == "SVN",
-         NomActiveHours > 100) %>% # maybe filter for >100 hours when we have to use this? 
+    group_by(year, flag_fin) %>%
+  mutate(flag_eff = sum(NomActiveHours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(prop_flag_eff = NomActiveHours/flag_eff) %>%
+  filter(flag_fin == "SVN") %>% # maybe filter for >100 hours when we have to use this? 
+    filter(NomActiveHours >= 100|prop_flag_eff >= 0.01) %>%
   distinct(year, flag_fin, eez_sovereign, fao_id) %>%
   mutate(access_fao = 1) %>%
   filter(year < 1992) %>%
@@ -628,8 +700,12 @@ RAA_RAM_hs <- all_data_matched_effort %>%
   summarise(NomActiveHours = sum(NomActiveHours, na.rm = TRUE)) %>%
   ungroup() %>%
   dplyr::select(year, flag_fin, eez_sovereign, fao_id, NomActiveHours) %>%
-  filter(flag_fin %in% c("RAA", "RAM"),
-         NomActiveHours > 100) %>% # maybe filter for >100 hours when we have to use this? 
+      group_by(year, flag_fin) %>%
+  mutate(flag_eff = sum(NomActiveHours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(prop_flag_eff = NomActiveHours/flag_eff) %>%
+  filter(flag_fin %in% c("RAA", "RAM")) %>% # maybe filter for >100 hours when we have to use this? 
+      filter(NomActiveHours >= 100|prop_flag_eff >= 0.01) %>%
   distinct(year, flag_fin, eez_sovereign, fao_id) %>%
   mutate(access_fao = 1) %>%
   filter(year < 1992) %>%
@@ -640,7 +716,9 @@ RAA_RAM_hs <- all_data_matched_effort %>%
 
 
 catch_access_df_highseas_fin <- catch_access_df_highseas %>%
-  rbind(ukraine_effort_highseas, slovenia_effort_highseas, RAA_RAM_hs)
+  dplyr::select(year, flag_fin, eez_sovereign, fao_id, access_fao, fao_area_name) %>%
+  rbind(ukraine_effort_highseas, slovenia_effort_highseas, RAA_RAM_hs) %>%
+  filter(access_fao == 1)
 
 # fix faroe islands data 
 fro_access_1951 <- catch_access_df_highseas_fin %>%
@@ -666,52 +744,52 @@ catch_access_hs_future <- catch_access_df_highseas_fin %>%
   crossing(., year = c(2018:2024))
 
 
-## now do GFW data 
-years <- 2015:2024
-gfw_data <- list()
+# ## now do GFW data 
+# years <- 2015:2024
+# gfw_data <- list()
+# 
+# data_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
+#   dplyr::select(pixel_id, lat, lon)
+# 
+# # read in FAO area spatial csv 
+# fao_lookup <- read.csv(here("data/model_features/deg_1_x_1/fao/fao_major_ids.csv"))
+# fao_spatial <- read.csv(here("data/model_features/deg_1_x_1/fao/fao_fixed.csv")) %>%
+#   left_join(fao_lookup) %>%
+#   left_join(data_grid) %>%
+#     dplyr::select(fao_area = fao_id, fao_area_name = name_en, x = lon, y = lat) 
+#  
+# 
+# for(yr in years) {
+#   # yr = 2015
+#   # Load effort proportions
+#   effort_props <- qread(file.path(rdsi_dir, glue("prep/gfw_props/deg_one/all_effort_gear_length_props_{yr}.qs"))) %>%
+#     mutate(year = yr) %>%
+#     filter(fishing_hours > 0) %>%
+#     left_join(fao_spatial) %>%
+#     filter(iso_sov1 == "HSX")
+# 
+#   
+#   # Combine all data
+#   year_data <- effort_props %>%
+#     dplyr::distinct(
+#       year, 
+#       flag_fin, 
+#       eez_country_name = sovereign1, 
+#       fao_area, 
+#       fao_area_name
+#     ) %>%
+#     filter(!is.na(fao_area))
+#   
+#   gfw_data[[as.character(yr)]] <- year_data
+# }
+# 
+# # Combine all years
+# final_data <- bind_rows(gfw_data) %>%
+#   mutate(access_fao = 1) %>%
+#   rename(eez_sovereign = eez_country_name,
+#          fao_id = fao_area)
 
-data_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
-  dplyr::select(pixel_id, lat, lon)
-
-# read in FAO area spatial csv 
-fao_lookup <- read.csv(here("data/model_features/deg_1_x_1/fao/fao_major_ids.csv"))
-fao_spatial <- read.csv(here("data/model_features/deg_1_x_1/fao/fao_fixed.csv")) %>%
-  left_join(fao_lookup) %>%
-  left_join(data_grid) %>%
-    dplyr::select(fao_area = fao_id, fao_area_name = name_en, x = lon, y = lat) 
- 
-
-for(yr in years) {
-  # yr = 2015
-  # Load effort proportions
-  effort_props <- qread(file.path(rdsi_dir, glue("prep/gfw_props/deg_one/all_effort_gear_length_props_{yr}.qs"))) %>%
-    mutate(year = yr) %>%
-    filter(fishing_hours > 0) %>%
-    left_join(fao_spatial) %>%
-    filter(iso_sov1 == "HSX")
-
-  
-  # Combine all data
-  year_data <- effort_props %>%
-    dplyr::distinct(
-      year, 
-      flag_fin, 
-      eez_country_name = sovereign1, 
-      fao_area, 
-      fao_area_name
-    ) %>%
-    filter(!is.na(fao_area))
-  
-  gfw_data[[as.character(yr)]] <- year_data
-}
-
-# Combine all years
-final_data <- bind_rows(gfw_data) %>%
-  mutate(access_fao = 1) %>%
-  rename(eez_sovereign = eez_country_name,
-         fao_id = fao_area)
-
-all_catch_access_hs <- rbind(catch_access_df_highseas_fin, catch_access_hs_future, final_data) %>%
+all_catch_access_hs <- rbind(catch_access_df_highseas_fin, catch_access_hs_future) %>%
   distinct()
 
 qs::qsave(catch_access_df_highseas_fin, here("data/int/prediction_historical_data/catch_fishing_access_high_seas.qs"))
