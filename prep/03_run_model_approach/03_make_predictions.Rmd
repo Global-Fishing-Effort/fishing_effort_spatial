@@ -443,7 +443,41 @@ test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/prediction
 plot(test_preds)
 plot(log(test_preds+1)) # Cool!
 
+test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/predictions/yearly/model_preds_COG_2015.qs") %>%
+  dplyr::group_by(lon, lat) %>%
+  summarise(nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() %>% 
+  left_join(data_grid_area) %>%
+  mutate(hours_km2 = nom_active_fishing_hours/(pixel_area_m2/1000000)) %>%
+  dplyr::select(lon, lat, hours_km2) %>%
+  rast(., type = "xyz")
+
+plot(test_preds)
+plot(log(test_preds+1)) # Cool!
+
 ```
+
+```{r}
+test <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
+  mutate(year = as.numeric(year)) # i think we need to adjust the prepared data to include cells which have no fishing effort in them. We can do this in the loop below? 
+
+test_cog <- test %>% 
+  filter(flag_fin == "COG") %>%
+  #filter(year == 2017) %>% 
+  full_join(data_grid_area) %>%
+  dplyr::select(lon, lat, prop_fishing_hours_cell) %>% 
+  rast(., type = "xyz")
+
+plot(test_cog)
+
+test_sample_size <- test %>%
+  group_by(flag_fin) %>%
+  summarise(sample_size = n()) %>%
+  ungroup() %>%
+  filter(flag_fin %in% flags)
+
+```
+
 
 
 

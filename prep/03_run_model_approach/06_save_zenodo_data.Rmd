@@ -19,14 +19,31 @@ library(here)
 library(countrycode)
 library(strex)
 library(data.table)
+library(sf)
 
 source(here("R/dir.R"))
+
+
+  global_grid <- read.csv(here("data/model_features/deg_1_x_1/global_grid.csv"))
+mollweide_projection <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+
+data_grid_area <- global_grid %>%
+    st_as_sf(wkt = "geometry_wkt",
+           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")%>% 
+  st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% 
+  st_transform(mollweide_projection) %>%
+  mutate(pixel_area_m2 = st_area(geometry_wkt)%>%
+           units::drop_units()) 
+
 ```
 
 
 Save csv files to upload to Zenodo and the app 
 
  - We need to grab any gapfilled flags that are not in the flag level modelling from the regional level modelling 
+ 
+ We gap fill using regional models where 1) a flag country is not included at all in the AIS data (e.g., DOM, MYT, RAA, RAM), where a flag country has less than 100 observations across all years of data (e.g., GLP, COG, COG, JAM), or 3) where the flag-specific model was unable to predict any presence for a specific flag/gear/length combination (e.g., GTM bottom trawls 2015-2017). 
+
 
 ```{r}
 
@@ -39,13 +56,22 @@ flags_to_gapfill <- setdiff(modelled_flags_regional, modelled_flags_original)
 
 all_flags <- c(modelled_flags_original, flags_to_gapfill)
 
+low_sample_flags <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
+  group_by(flag_fin) %>%
+  summarise(n_obs = n()) %>%
+  ungroup() %>%
+  filter(flag_fin %in% all_flags) %>%
+  filter(n_obs < 100) %>%
+  pull(flag_fin) %>%
+  unique()
+                
 
 cl <- makeCluster(24)  # could probably increase this? 
 registerDoParallel(cl)
 
 
 foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
-  # flag = "STP"
+  # flag = "TGO"
   
   
   all_files_flag_original <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions/"), pattern = flag, full.names = TRUE)
@@ -59,13 +85,19 @@ foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "cou
   all_data_flag_original <- lapply(all_files_flag_original, qread) %>%
     bind_rows() %>%
     mutate(data_type = "flag model")
+  
+  if(flag == "GAB"){
+    
+    all_data_flag_original <- all_data_flag_original %>%
+      filter(year != 2017)
+  }
 
   
   all_data_flag_regional_gf <- lapply(all_files_flag_regional_gf, qread) %>%
     bind_rows()  %>%
     mutate(data_type = "regional model")
   
-    if(nrow(all_data_flag_original) == 0){
+    if(nrow(all_data_flag_original) == 0|flag %in% c(low_sample_flags)){
     
     all_data_flag_original <- all_data_flag_regional_gf %>%
       mutate(nom_active_fishing_hours = 0, eff_active_fishing_hours = 0, nom_active_fishing_days = 0, eff_active_fishing_days = 0, eff_days_km2 = 0, nom_days_km2 = 0, eff_hours_km2 = 0, nom_hours_km2 = 0, nv = 0, nv_km2 = 0, data_type = NA)
@@ -103,23 +135,25 @@ if(nrow(all_data_flag_regional_gf) == 0){
     mutate(flag_country_name = case_when(
       flag_country_iso3c == "RAA" ~ "Azores", 
       flag_country_iso3c == "RAM" ~ "Madeira", 
+      flag_country_iso3c == "COG" ~ "Republic of the Congo",
+      flag_country_iso3c == "COD" ~ "Democratic Republic of the Congo",
       TRUE ~ flag_country_name
     )) %>%
     dplyr::select(-pixel_area_m2, -pixel_id, -eff_days_km2, -eff_hours_km2, -nom_days_km2, -nom_hours_km2, -nv_km2)
   
-  # test <- all_data_fin %>%
-  #   # filter(year >= 1988) %>%
-  #   group_by(flag_country_iso3c, gear, length_category) %>%
-  #   summarise(total_effort = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
-  #   ungroup()
-  # 
-  # test2 <- hist_fish_data %>%
-  #       #filter(year >= 1988) %>%
-  #   filter(flag_country_iso3c == "IDN")  %>%
-  #       group_by(flag_country_iso3c, gear, length_category) %>%
-  #   summarise(total_effort = sum(total_nominal_fishing_hours, na.rm = TRUE)) %>%
-  #   ungroup()
-  # 
+  
+# 
+# test <- all_data_fin %>%
+#  filter(year == 2017) %>%
+#   group_by(lon, lat) %>%
+#   summarise(eff = sum(nom_active_fishing_hours)) %>%
+#   ungroup() %>%
+#   dplyr::select(lon, lat, eff) %>%
+#   rast(., type = "xyz")
+# 
+# plot(test)
+# plot(log(test+1))
+
   
   write.csv(all_data_fin, file.path(rdsi_dir, glue("prep/random_forest/zenodo_data/mapped_by_flag_country/model_preds_1950_2017_{flag}.csv")), row.names = FALSE)
 }
@@ -137,7 +171,7 @@ stopCluster(cl)
 fwrite(all_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_industrial_effort_predictions_1950_2017.csv"), row.names = FALSE)
 
 all_data_grouped <- all_data %>% 
-  group_by(year, flag_country_iso3c, flag_country_name, gear, length_category, eez_sovereign_iso3c, eez_sovereign_name, fao_fishing_id, fao_major_fishing_area, sector) %>%
+  group_by(year, flag_country_iso3c, flag_country_name, gear, length_category, eez_sovereign_iso3c, eez_sovereign_name, fao_fishing_id, fao_major_fishing_area, sector, model_type = data_type) %>%
   summarise(eff_active_fishing_hours = sum(eff_active_fishing_hours, na.rm = TRUE), 
             eff_active_fishing_days = sum(eff_active_fishing_days, na.rm = TRUE), 
             nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE), 
@@ -160,7 +194,9 @@ all_data_grouped_2 <- all_data_grouped %>%
   ungroup() %>%
     mutate(flag_country_name = case_when(
           flag_country_iso3c == "RAM" ~ "Madeira",
-          flag_country_iso3c == "RAA" ~ "Azores", 
+          flag_country_iso3c == "RAA" ~ "Azores",     
+          flag_country_iso3c == "COG" ~ "Republic of the Congo",
+      flag_country_iso3c == "COD" ~ "Democratic Republic of the Congo",
           TRUE ~ flag_country_name
   ))
 
@@ -181,6 +217,8 @@ hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
   mutate(flag_country_name = case_when(
           flag_country_iso3c == "RAM" ~ "Madeira",
           flag_country_iso3c == "RAA" ~ "Azores", 
+                flag_country_iso3c == "COG" ~ "Republic of the Congo",
+      flag_country_iso3c == "COD" ~ "Democratic Republic of the Congo",
           TRUE ~ flag_country_name
   )) %>% 
   left_join(all_data_grouped_2) %>%
@@ -244,14 +282,13 @@ test_hkg_regional_2017 <- test_hkg_regional %>%
 ```
 
 ```{r}
-test_aus <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_by_flag_country/model_preds_1950_2017_STP.csv"))
+test_aus <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_by_flag_country/model_preds_1950_2017_GAB.csv"))
 
 test_pixel <- test_aus %>%
   distinct(lon, lat, pixel_area_km2)
 
-
 test_2 <- test_aus %>%
- filter(year == 2000) %>%
+ filter(year == 2017) %>%
   group_by(lon, lat) %>%
   summarise(eff = sum(nom_active_fishing_hours)) %>%
   ungroup() %>%

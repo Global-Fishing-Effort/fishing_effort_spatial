@@ -14,8 +14,9 @@ editor_options:
 # Summary 
 
 Prep a layer which describes the distance of each cell from each home EEZ for the countries which need to use regional models for. Those countries are (you can determine these countries in `05_predictions_gapfill.Rmd`: 
- - BEN, BHS, COG, DJI, DOM, GAB, GLP, GTM, GUF, IRQ, JAM, LBN, LCA, STP, SYR, TGO, WLF, MYT, RAA, RAM
- 
+  - [1] "DOM" "RAA" "RAM" "LBN" "BHS" "WLF" "GLP" "TGO" "MYT" "BEN" "STP" "IRQ" "SYR" "JAM" "LCA" "DJI" "GTM" "GUF" "COG" "GAB" "BGD" "BRN" "COD"
+[24] "CUB" "GMB" "GNB" "GNQ" "GUY" "KWT" "MDG" "MNE" "ROU" "SUR" "SVN" "TON" 
+
 The reason we need this information, is because we are going to create a "reachability" layer. Because these flags are gapfilled with larger regional models, sometimes the predictive spatial spread is too far (e.g., when modelling DOM, some effort is being allocated to the meditteraen). This happens because some flags in that region might have distant water fleets, so allocation will still happen in those places. To fix this, we will create a reachability exclusion layer based on: 
 
  - distance from home EEZ (e.g., if the home eez is DOM, we calculate the distance from each cell globally to DOM eez, where anything within DOM eez == 0 km). 
@@ -70,11 +71,17 @@ data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_
 
 We will first calculate the distance to each EEZ for flag countries that need to be gapfilled using larger regional models
 
- - BEN, BHS, COG, DJI, DOM, GAB, GLP, GTM, GUF, IRQ, JAM, LBN, LCA, STP, SYR, TGO, WLF, MYT, RAA, RAM
+ -  [1] "DOM" "RAA" "RAM" "LBN" "BHS" "WLF" "GLP" "TGO" "MYT" "BEN" "STP" "IRQ" "SYR" "JAM" "LCA" "DJI" "GTM" "GUF" "COG" "GAB" "BGD" "BRN" "COD"
+[24] "CUB" "GMB" "GNB" "GNQ" "GUY" "KWT" "MDG" "MNE" "ROU" "SUR" "SVN" "TON"
  
 ```{r}
-eez_to_calculate <- c("BEN", "BHS", "COG", "DJI", "DOM", "GAB", "GLP", "GTM", "GUF", "IRQ", "JAM", "LBN", "LCA", "STP", "SYR", "TGO", "WLF", "MYT", "RAA", "RAM")
-
+eez_to_calculate <- c(
+  "DOM", "RAA", "RAM", "LBN", "BHS", "WLF", "GLP", "TGO", "MYT", "BEN", 
+  "STP", "IRQ", "SYR", "JAM", "LCA", "DJI", "GTM", "GUF", "COG", "GAB", 
+  "BGD", "BRN", "COD", "CUB", "GMB", "GNB", "GNQ", "GUY", "KWT", "MDG", 
+  "MNE", "ROU", "SUR", "SVN", "TON"
+)
+                
 # read in eez data 
 eez_id <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup_fix.csv"))
 eez_df <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_fix.csv")) %>%
@@ -519,6 +526,11 @@ Now we will calculate our reachability layer for the 20 countries that require r
 reachability = 0.5 * f_transit * DAS * 24 * transit_speed * 1.852
 
 ```{r}
+
+f_region_len_full <- fread(here("data/int/transit_prop/f_transit_region_length_all_years.csv"))
+transit_by_region <- fread(here("data/int/transit_speed/transit_speed_by_region.csv"))
+
+
 # the rousseau DAS represents annual days at sea. We need a per-trip days at sea, so we will just make this assumption: 
 trip_priors <- tibble::tribble(
   ~length_category, ~das_trip_med, ~das_trip_min, ~das_trip_max, ~turnaround_d,
@@ -542,6 +554,8 @@ reachability <- das_df %>%
 
 fwrite(reachability, here("data/int/reachability_regional_gf.csv"))
 
+test <- read.csv(here("data/int/reachability_regional_gf.csv"))
+unique(test$flag_fin)
 ```
 
 Methods write up: 

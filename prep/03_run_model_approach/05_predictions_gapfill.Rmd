@@ -26,6 +26,8 @@ library(strex)
 library(ranger)
 library(randomForest)
 library(parallel)
+library(data.table)
+
 
 source(here("R/dir.R"))
 ```
@@ -306,18 +308,30 @@ regions_missing <- hist_fish_data %>%
   unique() # ok only 7 regions missing, so that's good 
   
 
-years_missing <- unique(missing_data$year) # all years missing, beacuse of Hong Kong for example...
+years_missing <- unique(missing_data$year) # all years missing, because of DOM for example
 
 regions_missing_df_2 <- hist_fish_data %>%
   filter(flag_fin %in% c(flags_missing)) %>%
   distinct(flag_fin, year)
+
+## now read get sample size based flags that we need to fill. Any flag with <100 observations will be fully gapfilled, so we need to run those models here. 
+
+sample_size_flags <- model_data %>%
+  group_by(flag_fin) %>%
+  summarise(n_obs = n()) %>%
+  ungroup() %>%
+  filter(flag_fin %in% unique(hist_fish_data$flag_fin)) %>%
+  filter(n_obs < 100) %>%
+  pull(flag_fin) %>%
+  unique()
+
+flags_missing_fin <- unique(c(flags_missing, sample_size_flags))
 
 ```
 
 Reachability
 
 ```{r}
-library(data.table)
 reach <- fread(here("data/int/reachability_regional_gf.csv"))
 
 dist_eez <- fread(here("data/int/dist_from_home_eez.csv")) %>%
@@ -338,17 +352,18 @@ regions_missing_string <- paste0(regions_missing, collapse = "|")
 
 flags_finished <- unique(str_after_last(str_before_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions_regional/yearly/")), "_"), "_"))
   
-flags_to_run <- sort(setdiff(flags_missing, flags_finished))
+flags_to_run <- sort(setdiff(flags_missing_fin, flags_finished))
 
 #  [1] "BEN" "BHS" "COG" "DJI" "DOM" "GAB" "GLP" "GTM" "GUF" "IRQ" "JAM" "LBN" "LCA" "STP" "SYR" "TGO" "WLF"
 # [1] "MYT" "RAA" "RAM"
 
+## need to fix: GAB (2017), TGO (2016, 2017)
 
-cl <- parallel::makeCluster(20)
+cl <- parallel::makeCluster(15)
 doParallel::registerDoParallel(cl)
   
- foreach(flag = flags_missing, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
-    #  flag = "STP"
+ foreach(flag = flags_to_run, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
+    #  flag = "TGO"
    
    regional_name <- hist_fish_data %>%
      filter(flag_fin == flag) %>%
@@ -371,13 +386,7 @@ matching_files <- list.files(
 # Check if a matching file exists
 if (length(matching_files) > 0) {
   stage2_model <- qs::qread(matching_files[1])  # Read the first matching file
-} else if (flag %in% c("RAM", "RAA")){
-  
-  stage2_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_2_models/", "stage_2_rf_model_full_data_PRT_26.qs"))
- } else if (flag %in% c("MYT")) {
-      stage2_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_2_models/", "stage_2_rf_model_full_data_FRA_26.qs"))
-
-  }  else{
+}   else{
   stop("No matching file found for flag: ", flag)
 }
 
@@ -392,13 +401,7 @@ matching_files <- list.files(
 # Check if a matching file exists
 if (length(matching_files) > 0) {
   stage1_model <- qs::qread(matching_files[1])  # Read the first matching file
-}  else if (flag %in% c("RAM", "RAA")){
-  
-  stage1_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_1_models/", "stage_1_rf_model_full_data_PRT_26.qs"))
- } else if (flag %in% c("MYT")) {
-      stage1_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_1_models/", "stage_1_rf_model_full_data_FRA_26.qs"))
-
-  } else {
+}    else {
   stop("No matching file found for flag: ", flag)
 }
 
@@ -567,8 +570,6 @@ if(nrow(all_preds) == 0){
 }
 
 # test_preds <- all_preds %>%
-#   # filter(gear == "Trawl_Midwater_or_Unsp") %>%
-#   # filter(eez_sovereign == "USA") %>%
 #   dplyr::group_by(lon, lat) %>%
 #   summarise(nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
 #   ungroup() %>%
@@ -608,7 +609,7 @@ st_drop_geometry()
 cl <- makeCluster(30) 
 registerDoParallel(cl)
 
-foreach(flag = flags_missing, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
+foreach(flag = flags_missing_fin, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
   # flag = "UKR"
   
   all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_regional/yearly/"), pattern = flag, full.names = TRUE)
@@ -661,7 +662,7 @@ Do some testing:
 
   all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_regional/"), pattern = ".qs", full.names = TRUE)
 
-test <- qread(file.path(rdsi_dir, "prep/random_forest/predictions_regional/model_preds_1950_2017_BEN.qs"))
+test <- qread(file.path(rdsi_dir, "prep/random_forest/predictions_regional/model_preds_1950_2017_GAB.qs"))
 
 test_r <- test %>%
   filter(year == 2017) %>%
@@ -677,7 +678,20 @@ access_data_loop <- qs::qread(here("data/int/prediction_historical_data/catch_fi
 
 access_ben <- access_data_loop %>%
   filter(year == 2017,
-         flag_fin == "BEN")
+         flag_fin == "COG")
+
+test <- qread(file.path(rdsi_dir, "prep/random_forest/predictions/model_preds_1950_2017_COG.qs"))
+
+test_r <- test %>%
+  filter(year == 2014) %>%
+  group_by(lon, lat) %>%
+  summarise(effort = sum(nom_active_fishing_days, na.rm = TRUE)) %>%
+  ungroup() %>%
+  rast(., type = "xyz")
+
+plot(test_r)
+
+
 
 ```
 
