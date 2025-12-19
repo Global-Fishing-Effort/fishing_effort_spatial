@@ -172,8 +172,6 @@ After the models are fit, we make predictions on ALL DATA. So stage 1 is in samp
 
  - Takes ~3.5 hours with 38 cores.. Can we speed this up?!
  
-  - note: "In the three cases where flag countries were represented in Rousseau but not GFW (Azores, Madeira, and Mayotte), we used the models from these flag’s sovereign state (e.g., for Azores and Madeira we used the Portugal model). We limited the predictions of these missing flags to areas where they can fish, according to the Watson database, just like our normal methods described above."
-
 ```{r}
 stage_1_path <- file.path(rdsi_dir, "prep/random_forest/stage_1_models/")
 stage_1_files <- list.files(stage_1_path, full.names = TRUE)
@@ -190,11 +188,9 @@ model_flags <- intersect(stage_1_flags, stage_2_flags) # 147
 
 setdiff(flags, model_flags) # [1] "DOM" "RAA" "RAM" "MYT";  missing 4; these will be gapfilled with regional modelling
 
-## MYT, RAA, and RAM will use their sovereign countries' (FRA and PRT) models and we will limit access to what Rousseau/Watson say for access rights. DOM will be filled in with regional modelling.
-
 years <- c(1950:2017)
 
-out_dir <- file.path(rdsi_dir, "prep/random_forest/predictions/yearly")
+out_dir <- file.path(rdsi_dir, "prep/random_forest/predictions_flag_no_access/yearly")
 
 tasks <- CJ(flag = flags, year = years)
 tasks[, out_file := file.path(out_dir, sprintf("model_preds_%s_%d.qs", flag, year))]
@@ -207,14 +203,13 @@ data_to_run <- hist_fish_data %>%
 
 flags_to_run <- unique(data_to_run$flag_fin) #17 missing
 years_to_run <- unique(data_to_run$year) # the same
-flags_to_run <- setdiff(flags_to_run, "DOM")
 
 
 cl <- makeCluster(38) 
 registerDoParallel(cl)
 
  foreach(flag = model_flags, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
-    #  flag = "BEN"
+    #  flag = "ALB"
    
    #### Read in models 
    # read in stage 2 model! 
@@ -228,13 +223,7 @@ matching_files <- list.files(
 # Check if a matching file exists
 if (length(matching_files) > 0) {
   stage2_model <- qs::qread(matching_files[1])  # Read the first matching file
-} else if (flag %in% c("RAM", "RAA")){
-  
-  stage2_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_2_models/", "stage_2_rf_model_full_data_PRT_26.qs"))
- } else if (flag %in% c("MYT")) {
-      stage2_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_2_models/", "stage_2_rf_model_full_data_FRA_26.qs"))
-
-  }  else{
+} else {
   stop("No matching file found for flag: ", flag)
 }
 
@@ -249,13 +238,7 @@ matching_files <- list.files(
 # Check if a matching file exists
 if (length(matching_files) > 0) {
   stage1_model <- qs::qread(matching_files[1])  # Read the first matching file
-}  else if (flag %in% c("RAM", "RAA")){
-  
-  stage1_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_1_models/", "stage_1_rf_model_full_data_PRT_26.qs"))
- } else if (flag %in% c("MYT")) {
-      stage1_model <- qs::qread(file.path(rdsi_dir, "prep/random_forest/stage_1_models/", "stage_1_rf_model_full_data_FRA_26.qs"))
-
-  } else {
+}  else {
   stop("No matching file found for flag: ", flag)
 }
 
@@ -277,13 +260,13 @@ model_data_flag <- hist_fish_data %>%
   dplyr::select(flag_fin, gear, length_category, year, total_nominal_fishing_hours ) %>%
   filter(flag_fin == flag, year == yr)
 
-access_data_loop <- access_data %>%
-  filter(flag_fin == flag, 
-         year == yr)
-
-access_data_hs_loop <- access_data_high_seas %>%
-  filter(flag_fin == flag, 
-         year == yr)
+# access_data_loop <- access_data %>%
+#   filter(flag_fin == flag, 
+#          year == yr)
+# 
+# access_data_hs_loop <- access_data_high_seas %>%
+#   filter(flag_fin == flag, 
+#          year == yr)
   
 distinct_cats <- model_data_flag %>%
     distinct(flag_fin, gear, length_category) 
@@ -291,15 +274,15 @@ distinct_cats <- model_data_flag %>%
 full_data <- tidyr::crossing(env_grid_fishing_areas, distinct_cats) %>% 
   crossing(., year = yr) %>%
   left_join(env_data_fishing_areas, by = c("lon", "lat", "year")) %>%
-  left_join(access_data_loop) %>% # limit to areas that each flag can access here, so that predictions won't take as long.
-  left_join(access_data_hs_loop) %>%
+  # left_join(access_data_loop) %>% # limit to areas that each flag can access here, so that predictions won't take as long.
+  # left_join(access_data_hs_loop) %>%
   dplyr::select(-pixel_id) %>%
-    mutate(access = ifelse(is.na(access), 0, access),
-    access_fao = ifelse(is.na(access_fao), 0, access_fao)) %>% # only allow fishing where Watson says they can fish
-  mutate(access = ifelse(eez_sovereign == flag, 1, access)) %>% # always allow a country to fish in its own EEZ
-  mutate(access_fin = ifelse(eez_sovereign == "High seas", access_fao, access)) %>%
-  filter(access_fin == 1) %>% # filter for areas where this flag actually has access to fishing
-  dplyr::select(-fao_area_name) %>%
+  #   mutate(access = ifelse(is.na(access), 0, access),
+  #   access_fao = ifelse(is.na(access_fao), 0, access_fao)) %>% # only allow fishing where Watson says they can fish
+  # mutate(access = ifelse(eez_sovereign == flag, 1, access)) %>% # always allow a country to fish in its own EEZ
+  # mutate(access_fin = ifelse(eez_sovereign == "High seas", access_fao, access)) %>%
+ # filter(access_fin == 1) %>% # filter for areas where this flag actually has access to fishing
+  # dplyr::select(-fao_area_name) %>%
   na.omit()
 
 if(nrow(full_data) == 0){
@@ -363,7 +346,7 @@ if(nrow(all_preds) == 0){
 # plot(test_preds)
 # plot(log(test_preds+1)) # Cool!
 
-qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/predictions/yearly/model_preds_{flag}_{yr}.qs"))) # qs is smaller
+qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/predictions_flag_no_access/yearly/model_preds_{flag}_{yr}.qs"))) # qs is smaller
 
   }
 
@@ -398,7 +381,7 @@ registerDoParallel(cl)
 foreach(flag = flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
   # flag = "HKG"
   
-  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions/yearly/"), pattern = flag, full.names = TRUE)
+  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_flag_no_access/yearly/"), pattern = flag, full.names = TRUE)
   
     # Skip iteration if no files are found
   if (length(all_files_flag) == 0) next
@@ -425,13 +408,13 @@ foreach(flag = flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "country
            nom_hours_km2 = nom_active_fishing_hours/pixel_area_km2,
            nv_km2 = nv/pixel_area_km2) # calculate hours per km2 here too
   
-  qs::qsave(all_data_flag, file.path(rdsi_dir, glue("prep/random_forest/predictions/model_preds_1950_2017_{flag}.qs")))
+  qs::qsave(all_data_flag, file.path(rdsi_dir, glue("prep/random_forest/predictions_flag_no_access/model_preds_1950_2017_{flag}.qs")))
 }
 
 stopCluster(cl)
 
 
-test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/predictions/model_preds_1950_2017_BEN.qs") %>%
+test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/predictions/model_preds_1950_2017_CHN.qs") %>%
   dplyr::group_by(lon, lat) %>%
   summarise(nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
   ungroup() %>% 

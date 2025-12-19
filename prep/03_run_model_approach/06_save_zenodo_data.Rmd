@@ -47,7 +47,7 @@ Save csv files to upload to Zenodo and the app
 
 ```{r}
 
-  modelled_flags_original <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
+  modelled_flags_original <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions_flag_no_access/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
 
   modelled_flags_regional <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions_regional/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
   
@@ -74,7 +74,7 @@ foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "cou
   # flag = "TGO"
   
   
-  all_files_flag_original <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions/"), pattern = flag, full.names = TRUE)
+  all_files_flag_original <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_flag_no_access/"), pattern = flag, full.names = TRUE)
   all_files_flag_regional_gf <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_regional/"), pattern = flag, full.names = TRUE)
 
   
@@ -249,6 +249,46 @@ sum(test$modeled_nom_active_fishing_hours) #
 
 ```
 
+How much was gapfilled 
+
+```{r}
+all_data_grouped <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/industrial_effort_predictions_by_flag_eez_fao_gear_length_1950_2017.csv"))
+
+gapfill_df <- all_data_grouped %>%
+  group_by(flag_country_name, year, model_type) %>%
+  summarise(eff = sum(nom_active_fishing_days, na.rm = TRUE)) %>% 
+              ungroup() %>%
+  pivot_wider(names_from = "model_type", values_from = eff) %>%
+  janitor::clean_names() %>%
+mutate(across(everything(), ~ ifelse(is.na(.), 0, .)))
+
+sum(gapfill_df$regional_model)/sum(all_data_grouped$nom_active_fishing_hours)
+
+gapfill_df %>% filter(year == 2017) %>% pull(regional_model) %>% sum()/sum(all_data_grouped$nom_active_fishing_hours)
+
+
+full_predictions <- gapfill_df %>%
+  filter(flag_model == 0, regional_model > 0) %>%
+  filter(!(flag_country_name %in% c("Azores", "Madeira", "Mayotte", "Dominican Republic")))
+sum(full_predictions$regional_model)/sum(all_data_grouped$nom_active_fishing_hours)
+
+low_sample_flags <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
+  group_by(flag_fin) %>%
+  summarise(n_obs = n()) %>%
+  ungroup() %>%
+  filter(flag_fin %in% unique(all_data_grouped$flag_country_iso3c)) %>%
+  filter(n_obs < 100) %>%
+  pull(flag_fin) %>%
+  unique()
+              
+
+partial_preds <- gapfill_df %>%
+  filter(flag_model >0, regional_model > 0)
+sum(partial_preds$regional_model)/sum(all_data_grouped$nom_active_fishing_hours)
+
+```
+
+
 Figure out why HKG is so large
 
 
@@ -303,4 +343,12 @@ plot(log(test_2+1))
 
 ```
 
+Manually comparing to SAUP 2017
 
+Potential problem flags: 
+
+CHN (not dispersed enough, consider rerunning without access constraints), ECU (not dispersed enough), Fiji (not dispersed enough), GBR (not dispersed enough), GLP (too dispersed), GRC (not dispersed enough), IDN (not dispersed enough), ITA (not dispersed enough, need Africa), JPN (need Russia), Montenegro (too dispersed), MYS (not dispersed enough), NOR (need antarctica), RUS (need antarctica), THA (not dispersed enough), UKR (need more antarctica?), VNM (not dispersed enough)
+
+Look over after removing access layer for flag modelling: 
+
+CHN (potentially not dispersed enough), Ecuador (not enough DFW), GTM (not enough fishing in their own EEZ for 2017), GRC (need fishing in West Africa), IDN (not dispersed enough), JPN (need more Russia?), MYS (not dispersed enough), NOR (need Antarctica), STP (>2014 fishing in China? Not enough in EEZ), THA (not dispersed enough), VNM (not dispersed enough) 
