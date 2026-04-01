@@ -218,4 +218,16 @@ rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c
 
 qs::qsave(rousseau_eff, here("data/model_features/rousseau_ind_effort_nv_conversion.qs"))
 
+test <- rousseau_eff %>%
+  group_by(flag_fin, year) %>%
+  summarise(total = sum(nom_active_days, na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(year == 2017)
+
+
+# AUS: 3.400367e+08
+# NZL: 3.291176e+07
+
+3.400367e+08-3.291176e+07
+3.400367e+08/3.291176e+07
 ```

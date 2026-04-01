@@ -1,7 +1,7 @@
 ---
 title: "Save data for Zenodo publishing"
 output: html_document
-date: "2024-12-11"
+date: "2026-04-01"
 ---
 
 # Summary
@@ -125,10 +125,7 @@ if(nrow(all_data_flag_regional_gf) == 0){
   data_to_add <- all_data_flag_regional_gf %>%
     semi_join(missing_cats, by = c("flag_country_iso3c", "year", "gear", "length_category"))
   
-  # test <- data_to_add %>%
-  #   filter(nom_active_fishing_hours > 0) %>%
-  #   distinct(year, flag_country_iso3c, gear, length_category)
-  
+
   all_data_fin <- all_data_flag_original %>%
     filter(nom_active_fishing_hours > 0) %>%
     rbind(data_to_add) %>%
@@ -141,21 +138,9 @@ if(nrow(all_data_flag_regional_gf) == 0){
     )) %>%
     dplyr::select(-pixel_area_m2, -pixel_id, -eff_days_km2, -eff_hours_km2, -nom_days_km2, -nom_hours_km2, -nv_km2)
   
-  
-# 
-# test <- all_data_fin %>%
-#  filter(year == 2017) %>%
-#   group_by(lon, lat) %>%
-#   summarise(eff = sum(nom_active_fishing_hours)) %>%
-#   ungroup() %>%
-#   dplyr::select(lon, lat, eff) %>%
-#   rast(., type = "xyz")
-# 
-# plot(test)
-# plot(log(test+1))
 
   
-  write.csv(all_data_fin, file.path(rdsi_dir, glue("prep/random_forest/zenodo_data/mapped_by_flag_country/model_preds_1950_2017_{flag}.csv")), row.names = FALSE)
+  write.csv(all_data_fin, file.path(rdsi_dir, glue("prep/random_forest/zenodo_data/mapped_by_flag_country_industrial/model_preds_1950_2017_{flag}.csv")), row.names = FALSE)
 }
 
 stopCluster(cl)
@@ -163,13 +148,24 @@ stopCluster(cl)
 
 ## save as one large csv
 
-  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_by_flag_country/"), full.names = TRUE)
+  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_by_flag_country_industrial/"), full.names = TRUE)
 
     all_data <- lapply(all_files_flag, fread) %>%
       bind_rows()
     
 fwrite(all_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_industrial_effort_predictions_1950_2017.csv"), row.names = FALSE)
 
+##### Save the large map files as zip files too - use terminal for this:
+
+# cd /home/ubuntu/data_storage/prep/random_forest/zenodo_data
+## first do all the maps together
+# zip mapped_industrial_effort_predictions_1950_2017.zip mapped_industrial_effort_predictions_1950_2017.csv
+
+## next do the folder of country maps
+# zip -r mapped_by_flag_country_industrial.zip mapped_by_flag_country_industrial
+
+
+# now save grouped by 
 all_data_grouped <- all_data %>% 
   group_by(year, flag_country_iso3c, flag_country_name, gear, length_category, eez_sovereign_iso3c, eez_sovereign_name, fao_fishing_id, fao_major_fishing_area, sector, model_type = data_type) %>%
   summarise(eff_active_fishing_hours = sum(eff_active_fishing_hours, na.rm = TRUE), 
@@ -181,8 +177,14 @@ all_data_grouped <- all_data %>%
 
 fwrite(all_data_grouped, file.path(rdsi_dir, "prep/random_forest/zenodo_data/industrial_effort_predictions_by_flag_eez_fao_gear_length_1950_2017.csv"), row.names = FALSE)
 
+```
 
 
+Check to make sure we are not missing any effort 
+
+```{r}
+
+## check to make sure we are not missing any effort
   all_data_grouped <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/industrial_effort_predictions_by_flag_eez_fao_gear_length_1950_2017.csv"))
   
 all_data_grouped_2 <- all_data_grouped %>% 
@@ -230,22 +232,12 @@ hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
 
 missing_data <- hist_fish_data %>%
   filter(proportion_hours_modeled != 1) %>%
-  filter(proportion_hours_modeled < 0.9999) # should be 0 after our gapfilling
+  filter(proportion_hours_modeled < 0.9999) # should be 0 after our gapfilling. It is, so we actually do not need to save this file anymore. 
  
-fwrite(hist_fish_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/known_industrial_effort_rousseau.csv"), row.names = FALSE)
+# fwrite(hist_fish_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/known_industrial_effort_rousseau.csv"), row.names = FALSE) 
 
 
-fwrite(missing_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/effort_not_modelled.csv"), row.names = FALSE)
-
-test <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/effort_not_modelled.csv"))
-
-
-
-test <- hist_fish_data %>% filter(flag_country_iso3c == "UKR", year == 1950)
-
-sum(test$total_nominal_fishing_hours) # 
-sum(test$modeled_nom_active_fishing_hours) # 
-
+# fwrite(missing_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/effort_not_modelled.csv"), row.names = FALSE) # similarly, we modelled all effort, so dont need this file anymore
 
 ```
 
@@ -289,40 +281,9 @@ sum(partial_preds$regional_model)/sum(all_data_grouped$nom_active_fishing_hours)
 ```
 
 
-Figure out why HKG is so large
-
 
 ```{r}
-test_hkg_regional <- qread(file.path(rdsi_dir, "prep/random_forest/predictions_regional/model_preds_1950_2017_HKG.qs"))
-
-test_hkg_regular <- qread(file.path(rdsi_dir, "prep/random_forest/predictions/model_preds_1950_2017_HKG.qs"))
-
-test_hkg_regular_2017 <- test_hkg_regular %>%
-  filter(year == 2017) %>%
-  group_by(lon, lat) %>% 
-  summarise(nom = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
-  ungroup() 
-
-rast(test_hkg_regular_2017, type = "xyz") %>% plot() # interesting 
-
-
-test_hkg_regional_2017 <- test_hkg_regional %>%
-  filter(year == 2017) %>%
-  group_by(lon, lat) %>% 
-  summarise(nom = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
-  ungroup() 
-
-rast(test_hkg_regional_2017, type = "xyz") %>% plot() # ok, A LOT more spread out. Does HKG actually have access to those places according to Watson? Is something going wrong in our regional predictions?  
-
-
-test_hkg_regional_2017 <- test_hkg_regional %>%
-  filter(eez_sovereign_iso3c == "HKG") # hmmmm 0. Feels like there should be some allocated there. Are we using the updated EEZ file? 
-
-
-```
-
-```{r}
-test_aus <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_by_flag_country/model_preds_1950_2017_GAB.csv"))
+test_aus <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_by_flag_country_industrial/model_preds_1950_2017_GAB.csv"))
 
 test_pixel <- test_aus %>%
   distinct(lon, lat, pixel_area_km2)
@@ -343,12 +304,6 @@ plot(log(test_2+1))
 
 ```
 
-Manually comparing to SAUP 2017
 
-Potential problem flags: 
 
-CHN (not dispersed enough, consider rerunning without access constraints), ECU (not dispersed enough), Fiji (not dispersed enough), GBR (not dispersed enough), GLP (too dispersed), GRC (not dispersed enough), IDN (not dispersed enough), ITA (not dispersed enough, need Africa), JPN (need Russia), Montenegro (too dispersed), MYS (not dispersed enough), NOR (need antarctica), RUS (need antarctica), THA (not dispersed enough), UKR (need more antarctica?), VNM (not dispersed enough)
 
-Look over after removing access layer for flag modelling: 
-
-CHN (potentially not dispersed enough), Ecuador (not enough DFW), GTM (not enough fishing in their own EEZ for 2017), GRC (need fishing in West Africa), IDN (not dispersed enough), JPN (need more Russia?), MYS (not dispersed enough), NOR (need Antarctica), STP (>2014 fishing in China? Not enough in EEZ), THA (not dispersed enough), VNM (not dispersed enough) 
