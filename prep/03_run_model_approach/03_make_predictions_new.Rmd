@@ -172,12 +172,13 @@ env_grid_fishing_areas <- env_data_fishing_areas %>%
   dplyr::select(lon, lat) %>% distinct()
 
 ```
+Now let's run the stage 1 and 2 predictions ONCE and save the datasets. We can lower the size of the datasets by filtering for stage 1 p > 0, since we will never use the p = 0 cells. 
 
-First, we need to make an EEZ "accessibility" layer based on predictions for each flag from 2015-2017. This is necessary because we trust the predictions from 2015-2017 the most, as these line up with the AIS data years. Since we eventually make predictions for each flag with p>0 (or some other threshold...), we will need to limit the cells in which predictions can be made to the cells in which we strongly believe fishing could be in. Since fishing is likely to contract farther back in time, it is reasonable to assume that 2015-2017 cells where predictions are made are the "maximum" extent of fishing in each flag country. 
-
- - Problem: There are some countries for which we do not make predictions from 2015-2017, but do make predictions for earlier years (Yemen for example). In these cases, we use the positive predictions from maximum year they have in the data to as our accessibility layer. 
+ - Takes ~5 hours with 38 cores
+ - ONLY NEEDS TO BE RUN ONCE! (unless you've changed the source models) 
 
 ```{r}
+years <- c(1950:2017)
 stage_1_path <- file.path(rdsi_dir, "prep/random_forest/stage_1_models/")
 stage_1_files <- list.files(stage_1_path, full.names = TRUE)
 stage_1_flags <- unique(sub(".*stage_1_rf_model_full_data_([A-Z]{3})_.*", "\\1", stage_1_files))
@@ -191,16 +192,11 @@ diff_flags_2 <- setdiff(stage_2_flags, stage_1_flags)
 
 model_flags <- intersect(stage_1_flags, stage_2_flags) # 147
 
-setdiff(flags, model_flags) # [1] "DOM" "RAA" "RAM" "MYT";  missing 4; these will be gapfilled with regional modelling
-
-years <- c(2015:2017)
-
 cl <- makeCluster(38) 
 registerDoParallel(cl)
 
-
- foreach(flag = model_flags, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
-    #  flag = "BHR"
+ foreach(flag = model_flags, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger", "terra")) %dopar% {
+    #  flag = "VNM"
    
    #### Read in models 
    # read in stage 2 model! 
@@ -234,7 +230,89 @@ if (length(matching_files) > 0) {
 }
 
  for(yr in years) {
+  
+# yr = 1950
 
+# get combination of categories we need to run through our models
+model_data_flag <- hist_fish_data %>%
+  dplyr::select(flag_fin, gear, length_category, year, total_nominal_fishing_hours ) %>%
+  filter(flag_fin == flag, year == yr)
+
+distinct_cats <- model_data_flag %>%
+    distinct(flag_fin, gear, length_category) 
+
+full_data <- tidyr::crossing(env_grid_fishing_areas, distinct_cats) %>% 
+  crossing(., year = yr) %>%
+  left_join(env_data_fishing_areas, by = c("lon", "lat", "year")) %>%
+  na.omit()
+
+if(nrow(full_data) == 0){
+    cat("skipping", flag, yr, "check to make sure this is right")
+  next()
+}
+
+
+# now make predictions on the full dataset 
+stage1_preds <- full_data %>%
+  mutate(pred_presence = predict(stage1_model, data = .)$predictions[, "1"])
+
+stage1_preds_filt <- stage1_preds %>%
+  filter(pred_presence > 0) # we'll never use these cells, so can filter out now. Significantly lowers the number of rows we will need to save. 
+
+
+oos_preds <- full_data %>%
+  mutate(pred_prop = predict(stage2_model, data = .)$predictions) # these are stage 2 predictions
+
+oos_preds_filt <- oos_preds %>%
+  filter(pixel_id %in% c(unique(stage1_preds_filt$pixel_id)))
+
+
+qs::qsave(stage1_preds_filt, file.path(rdsi_dir, glue("prep/random_forest/stage_1_predictions/yearly/model_preds_{flag}_{yr}.qs"))) 
+
+qs::qsave(oos_preds_filt, file.path(rdsi_dir, glue("prep/random_forest/stage_2_predictions/yearly/model_preds_{flag}_{yr}.qs"))) 
+
+  }
+
+}
+
+stopCluster(cl)
+
+
+```
+
+First, we need to make an EEZ "accessibility" layer based on predictions for each flag from 2015-2017. This is necessary because we trust the predictions from 2015-2017 the most, as these line up with the AIS data years. Since we eventually make predictions for each flag with p>0 (for domestic fishing), we will need to limit the number of cells in which predictions can be made based on the maximum number that is allowed from 2015-2017. Since fishing is likely to contract farther back in time, it is reasonable to assume that the 2015-2017 number of cells where predictions are made are the "maximum" allowable number of cells for fishing in each flag country. 
+
+ - Problem: There are some countries for which we can not make predictions from 2015-2017, but do make predictions for earlier years (Yemen for example).  - Solution: In these cases, we use the positive predictions from maximum year they have in the data to as our accessibility layer. For example, Yemen has predictions for 2013, so we will use that as the maximum number of cells. 
+
+ 
+```{r}
+stage_1_path <- file.path(rdsi_dir, "prep/random_forest/stage_1_predictions/yearly/")
+stage_1_files <- list.files(stage_1_path, full.names = TRUE)
+stage_1_flags <- unique(sub(".*model_preds_([A-Z]{3})_.*", "\\1", stage_1_files))
+
+stage_2_path <- file.path(rdsi_dir, "prep/random_forest/stage_2_predictions/yearly/")
+stage_2_files <- list.files(stage_2_path, full.names = TRUE)
+stage_2_flags <- unique(sub(".*model_preds_([A-Z]{3})_.*", "\\1", stage_2_files))
+
+setdiff(stage_1_flags, stage_2_flags) # 0
+setdiff(stage_2_flags, stage_1_flags) # 0 
+
+model_flags <- intersect(stage_1_flags, stage_2_flags) # 147; perfect! 
+
+years <- c(2015:2017)
+
+env_data_loop <- env_data %>%
+  left_join(eez_lookup)
+
+
+cl <- makeCluster(38) 
+registerDoParallel(cl)
+
+
+ foreach(flag = model_flags, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
+
+ for(yr in years) {
+# flag = "VNM"
 # yr = 2017
 
 # get combination of categories we need to run through our models
@@ -255,54 +333,49 @@ if(nrow(model_data_flag) == 0){
       dplyr::select(flag_fin, gear, length_category, year, total_nominal_fishing_hours) %>%
       filter(flag_fin == flag, year == max_year)
   
+  
+stage1_preds <- qread(file.path(rdsi_dir, glue("prep/random_forest/stage_1_predictions/yearly/model_preds_{flag}_{max_year}.qs")))
+
+  
+}else{
+  stage1_preds <- qread(file.path(rdsi_dir, glue("prep/random_forest/stage_1_predictions/yearly/model_preds_{flag}_{yr}.qs")))
+
 }
 
-distinct_cats <- model_data_flag %>%
-  distinct(flag_fin, gear, length_category)
 
-full_data <- tidyr::crossing(env_grid_fishing_areas, distinct_cats) %>% 
-  crossing(year = yr) %>%
-  left_join(env_data_fishing_areas, by = c("lon", "lat", "year")) %>%
-  na.omit() %>%
-  filter(flag_fin == eez_sovereign) # we're only making domestic EEZ preds right now 
-
-if (nrow(full_data) == 0) {
-  cat("skipping", flag, yr, "check to make sure this is right\n")
-  next()
-}
-
-stage1_preds <- full_data %>%
-  mutate(pred_presence = predict(stage1_model, data = .)$predictions[, "1"])
 
 # distinct EEZ cells only
 eez_cells <- stage1_preds %>%
   filter(flag_fin == eez_sovereign) %>%
   distinct(pixel_id, lon, lat, year, flag_fin, eez_sovereign, pred_presence)
 
+# test <- eez_cells %>%
+#   distinct(pixel_id)
 
-eez_cells_distinct <- stage1_preds %>%
-  filter(flag_fin == eez_sovereign) %>%
+eez_cells_distinct <- env_data_loop %>%
+  filter(eez_sovereign == flag) %>%
   distinct(pixel_id, lon, lat)
 
 # accessible cells in own EEZ
 N_accessible <- nrow(eez_cells_distinct)
-m <- 0.25
+m <- 0.3
 
 k_min <- ceiling(m * N_accessible) # these are the minimum amount of cells we will allow
 
 # 99th percentile threshold inside own EEZ
-p99_eez <- stage1_preds %>%
+p95_eez <- stage1_preds %>%
     filter(flag_fin == eez_sovereign) %>%
-  distinct(pixel_id, lon, lat, pred_presence) %>%
-  summarise(p99 = quantile(pred_presence, probs = 0.99, na.rm = TRUE)) %>%
-  pull(p99)
+   distinct(pixel_id, lon, lat, pred_presence) %>%
+  summarise(p95 = quantile(pred_presence, probs = 0.95, na.rm = TRUE)) %>%
+  pull(p95)
 
-eez_limit <- min(p99_eez, 0.5) # this is the threshold for our predictions
+eez_limit <- min(p95_eez, 0.5) # this is the threshold for our predictions
 
 # cells retained by threshold rule
 eez_cells_thresh <- stage1_preds %>%
     filter(flag_fin == eez_sovereign) %>%
   filter(pred_presence >= eez_limit)
+  # filter(pred_presence > 0)
 
 # test <- eez_cells_thresh %>%
 #   dplyr::select(lon, lat, pixel_id) %>%
@@ -311,15 +384,20 @@ eez_cells_thresh <- stage1_preds %>%
 n_thresh <- nrow(eez_cells_thresh %>% distinct(lon, lat))
 
 # decide whether to use threshold rule or fallback top-K rule
-if (n_thresh < k_min) { # if we have less rows from our cutoff with 99th quantile than our minimum, we will select the top k_min cells to keep. This will really only happen for countries with really small EEZs that do not predict well. 
-  K_ref <- ceiling(m * N_accessible)
+if (n_thresh < k_min) { # if we have less rows from our cutoff with 99th quantile than our minimum, we will select the top k_min cells to keep. This will really only happen for countries with really small EEZs that do not predict well, or countries that just do not predict well/have a lot of AIS
+  
+  K_ref <- ceiling(0.3 * N_accessible)
   
   selected_eez_cells <- eez_cells %>%
+    group_by(pixel_id, lon, lat, year, flag_fin, eez_sovereign) %>%
+    summarise(pred_presence = max(pred_presence)) %>%
+    ungroup() %>%
     arrange(desc(pred_presence)) %>%
     slice_head(n = K_ref) %>%
     distinct(pixel_id, lon, lat, year, flag_fin, eez_sovereign) %>%
-    mutate(keep = 1)
-  
+    mutate(keep = 1) %>%
+    mutate(limit_type = "30% of EEZ")
+
 # test <- selected_eez_cells %>%
 #   dplyr::select(lon, lat, pixel_id) %>%
 #   rast(., type = "xyz")
@@ -330,13 +408,14 @@ if (n_thresh < k_min) { # if we have less rows from our cutoff with 99th quantil
   
   selected_eez_cells <- eez_cells_thresh %>%
     distinct(pixel_id, lon, lat, year, flag_fin, eez_sovereign) %>%
-        mutate(keep = 1)
+        mutate(keep = 1) %>%
+    mutate(limit_type = "Threshold of 0.5 or 95th quantile")
   
   cat(flag, yr, ": using threshold rule with", n_thresh, "cells\n")
 }
 
 
-qs::qsave(selected_eez_cells, file.path(rdsi_dir, glue("prep/random_forest/predictions_eez_2015_2017_access_layer/yearly/model_preds_{flag}_{yr}.qs")))
+qs::qsave(selected_eez_cells, file.path(rdsi_dir, glue("prep/random_forest/eez_2015_2017_reference_cells_p95/yearly/model_preds_{flag}_{yr}.qs")))
 
   }
 
@@ -344,72 +423,225 @@ qs::qsave(selected_eez_cells, file.path(rdsi_dir, glue("prep/random_forest/predi
 
 stopCluster(cl)
 
+```
+ 
+
+Now let's grab the year from 2015-2017 which produced the largest number of allowable cells
+
+```{r}
 # now loop over each country and bind each data set into one that we will read those in for a mask in the next prediction loop
 
 for(flag in model_flags){
-  # flag = "AGO"
-  files <- list.files( file.path(rdsi_dir, "prep/random_forest/predictions_eez_2015_2017_access_layer/yearly/"), pattern = flag, full.names = TRUE)
+  # flag = "VNM"
+  files <- list.files( file.path(rdsi_dir, "prep/random_forest/eez_2015_2017_reference_cells_p95/yearly/"), pattern = flag, full.names = TRUE)
   
   if (length(files) == 0) {
   cat("skipping check to make sure this is right")
   next()
   }
   
-  df <- lapply(files, qread) %>%
-    bind_rows() %>%
-    distinct(pixel_id, lon, lat, flag_fin, eez_sovereign, keep)
+df <- lapply(files, qread) %>%
+  bind_rows() %>%
+  dplyr::select(pixel_id, lon, lat, year, flag_fin, eez_sovereign, keep, limit_type)
+
+df_choose <- df %>% 
+  group_by(year) %>%
+  summarise(n_cells = n(), .groups = "drop")
+
+year_keep <- df_choose %>%
+  slice_max(order_by = n_cells, n = 1, with_ties = TRUE) %>%
+  slice_max(order_by = year, n = 1) %>%
+  pull(year)
+
+df_filtered <- df %>%
+  filter(year == year_keep) %>%
+  dplyr::distinct(pixel_id, lon, lat, year, flag_fin, eez_sovereign, keep, limit_type)
+ 
+
+  # test <- df_filtered %>%
+  #   dplyr::select(lon, lat, keep) %>%
+  #   rast(., type = "xyz")
+
   
-qs::qsave(df, file.path(rdsi_dir, glue("prep/random_forest/predictions_eez_2015_2017_access_layer/access_mask_2015_2017_{flag}.qs"))) 
+qs::qsave(df_filtered, file.path(rdsi_dir, glue("prep/random_forest/eez_2015_2017_reference_cells_p95/access_mask_2015_2017_{flag}.qs"))) 
 
 }
 
-path <- file.path(rdsi_dir, "prep/random_forest/predictions_eez_2015_2017_access_layer/")
-files <- list.files(path, full.names = TRUE)
-library(strex)
-flags_run <- str_before_first(str_after_last(files, "_"), "\\.qs")
+# test a couple to make sure they look OK
+test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells/access_mask_2015_2017_VNM.qs"))) # 24
+test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells/access_mask_2015_2017_IND.qs"))) # 77
+test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells/access_mask_2015_2017_IDN.qs"))) # 183
+test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells/access_mask_2015_2017_THA.qs"))) # only 11
+test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells/access_mask_2015_2017_BGD.qs")))  # only 5
+# OK so THA and BGD might be too small??
 
-setdiff(model_flags,flags_run) 
+# test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells/access_mask_2015_2017_YEM.qs")))  
+# 
+# test2 <- test %>%
+#   distinct(lon, lat, keep) %>%
+#   rast(., type = "xyz")
 
-# # [1] "BHR" "BLZ" "QAT" "YEM"; these were the problem flags, go through and see what their max year is
 ```
 
 
-After the models are fit, we make predictions on ALL DATA. So stage 1 is in sample predictions (since we fit the stage one model on all data), and stage two will contain out of sample predictions (since we fit the model on only data with fishing effort in it!)
+After fitting the models, we generated predictions for the full spatiotemporal prediction set. As a result, stage-1 predictions are in-sample, because the occurrence model was fit using all available data, whereas stage-2 predictions are effectively out-of-sample with respect to zero-effort cells, because the positive-effort model was fit only on cells with observed fishing effort. 
 
- - Takes ~3.5 hours with 38 cores.. Can we speed this up?!
- 
- 
- - run 2015-2017 with p > 99 quantile for each year and save that layer as our "accessible" layer for hindcasting. The layer will be the union of all cells predicted from 2015-2017; DONE
- - then run 1950-2014 with p > 0 but limit only to cells in the "accessible" layer from the AIS years
- - Do the ranked cells thing, where those closer to shore are more likely to contribute? If we don't do a ranked preference for cells, then the predictions will all just have the same extent as 2015-2017.
-  - I think we only need to do this for predictions in the EEZ? Because outside of EEZ already uses p>=0.5
-  
-Worst case/easiest: 
- - Create accessibility layer with 2015-2017 union of p>0.5
- - Run using p > min(0.5, 99th quantile)
- - limit that to the accessibility layer
- 
+First we calculated maximum domestic spatial footprint number of cells we will allow for allocation (above code): 
+
+N_ref was defined as the largest annual number of domestic cells retained in any year from 2015–2017, rather than the union of cells across all three years. This ensured that the reference footprint represented a plausible maximum annual domestic extent, while avoiding inflation of the footprint through aggregation of interannual shifts in fishing location across the reference period. This reference period was chosen because we assumed domestic fishing extent would be most fully represented in the most recent years, and because predictions from 2015 onward were considered the most reliable. To define the reference footprint, we retained cells with stage-1 predicted presence values of either p≥0.5 or above the 95th percentile of predicted presence, whichever criterion was more smaller.
+
+In some countries, however, this raw reference footprint was implausibly small relative to the size of the domestic EEZ, likely reflecting sparse AIS coverage or limited training data rather than a truly narrow fishing footprint. To avoid propagating these likely observation-driven artifacts into the hindcast, we imposed a minimum reference footprint equal to 30% of domestic EEZ cells whenever the calculated N_ref fell below that threshold. This floor was intended as a conservative safeguard against unrealistically small domestic footprints in data-poor cases, particularly in some small or weakly observed countries in South and Southeast Asia. For example, when no floor was applied, the procedure yielded an N_ref of only 3 cells for Vietnam, representing about 4% of cells in its EEZ, which we considered implausibly low.
+
+Ultimately, we chose N_ref for each flag from the year which had the most amount of cells present, and if all years have the same amount of cells, we chose the latest year (I think this stipulation is unneccessary since we aren't actually limiting to the extent, just taking the number of allowable cells). 
+
+Then we make annual predictions for 1950-2017: 
+For annual predictions from 1950–2017, only cells that had a non-zero stage-1 predicted presence probability (p > 0). For cells outside the domestic EEZ, we retained a stricter criterion and only allowed allocation where the stage-1 predicted presence probability was at least 0.5 (p ≥ 0.5).
+
+Within the domestic mask, eligible cells were ranked from highest to lowest stage-1 predicted presence probability. We then calculated the total number of domestic cells allowed to receive allocation in a given year as:
+
+N_(year,total) = min(N_ref, N_ref*((E_year/E_ref))^alpha)
+
+$N_{year,total} = \min\left(N_{ref},\; N_{ref}\left(\frac{E_{year}}{E_{ref}}\right)^{\alpha}\right)$
+
+
+where N_ref is the number of cells in the maximum domestic spatial footprint mask, E_year is the total effort for the flag state in the that year, E_ref is the reference effort for that flag state (defined as the maximum annual effort observed during 2015–2017), and α = 0.5, such that spatial extent expands sublinearly with total effort. This formulation allows historical fishing footprints to be smaller than the modern reference footprint while avoiding unrealistically small hindcast footprints.
+
+Because predictions were generated separately by gear and vessel length class, the annual domestic footprint constraint was applied independently within each gear. For a given flag-year, we first calculated the total allowable annual footprint size, N_(year,total). This value was then used as the maximum number of domestic cells that could receive allocation within each gear. Within gear, the allowable number of cells was apportioned across vessel length classes according to each length class’s share of total effort in that gear and year, rounding up to the nearest whole number:
+
+$N_{year,g,l} = \left\lceil N_{year,total}\left(\frac{E_{year,g,l}}{E_{year,g}}\right)\right\rceil$
+
+where E_(year,g,l) is the effort for the gear g and length class l in that flag-year, and E_(year,g) is the total effort across all length calsses for gear g inthat flag-year. Within each gear-length group, eligible domestic cells were ranked by stage-1 predicted presence probability, and the highest-ranked cells were retained up to the group-specific limit N_(year,g,l), Effort was then allocated across the retained cells.We applied the footprint limit independently by gear because gears were modeled separately and may occupy overlapping but distinct spatial footprints within the same flag-year; using a single shared pool of cells across all gears would have imposed artificial competition among gear groups for space.
+
+
+First create master datasets with N_ref, N_year,total, so we don't have to calculate it in the forloop each time for each country. 
+
 ```{r}
-stage_1_path <- file.path(rdsi_dir, "prep/random_forest/stage_1_models/")
+## Now lets create a master dataset that has N_ref, and N_year,total in it, so that we don't have to calculate it in the forloop below. 
+
+# grab N_ref
+path <- file.path(rdsi_dir, "prep/random_forest/eez_2015_2017_reference_cells_0")
+files <- list.files(path, full.names = TRUE)[-148] # remove the "yearly" folder
+
+all_n_ref_data <- lapply(files, qread) %>%
+  bind_rows()
+
+n_ref_group <- all_n_ref_data %>%
+  group_by(flag_fin) %>%
+  summarise(n_ref = n()) %>%
+  ungroup() # should be 147
+
+# now calculate N_year,total
+## for this we need to grab the effort for the corresponding years
+
+## these were the four countries that we had to use different predictions for. Lets grab their reference effort:
+# "BHR", "YEM", "BLZ", "QAT"
+years <- 2015:2017
+
+flags_to_run <- c("BHR", "YEM", "BLZ", "QAT")
+
+eff_ref_missing <- data.frame(flag_fin = NA, year = NA, eff_ref = NA)
+
+for(flag in flags_to_run){
+
+ for(yr in years) {
+# flag = "YEM"
+# yr = 2017
+
+# get combination of categories we need to run through our models
+model_data_flag <- hist_fish_data %>%
+    filter(flag_fin == flag, year == yr) %>%
+  dplyr::select(flag_fin, gear, length_category, year, total_nominal_fishing_hours)
+
+if(nrow(model_data_flag) == 0){
+  
+  model_data_flag <- hist_fish_data %>%
+      dplyr::select(flag_fin, gear, length_category, year, total_nominal_fishing_hours) %>%
+      filter(flag_fin == flag)
+  
+   max_year <- max(model_data_flag$year)
+   
+     
+  model_data_flag <- hist_fish_data %>%
+      dplyr::select(flag_fin, gear, length_category, year, total_nominal_fishing_hours) %>%
+      filter(flag_fin == flag, year == max_year) %>%
+    group_by(flag_fin, year) %>%
+    summarise(eff_ref = sum(total_nominal_fishing_hours, na.rm = TRUE)) %>%
+    ungroup()
+  
+}
+
+eff_ref_missing <- rbind(eff_ref_missing, model_data_flag)
+
+ }
+}
+
+eff_ref_missing <- eff_ref_missing %>%
+  filter(!is.na(flag_fin)) %>%
+  distinct()
+
+
+max_eff_ref <- hist_fish_data %>%
+  filter(year %in% c(2015:2017)) %>%
+      group_by(flag_fin, year) %>%
+    summarise(nom_sum = sum(total_nominal_fishing_hours, na.rm = TRUE)) %>%
+    ungroup() %>%
+  group_by(flag_fin) %>%
+  summarise(eff_ref = max(nom_sum, na.rm = TRUE)) %>%
+  ungroup() %>%
+    filter(!(flag_fin %in% c("YEM", "BLZ", "BHR", "QAT"))) %>%
+  rbind(eff_ref_missing %>%
+          dplyr::select(-year))
+
+# now get total effort for every year
+eff_ref_df <- hist_fish_data %>%
+  dplyr::group_by(flag_fin, year) %>%
+  summarise(eff_year = sum(total_nominal_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() 
+
+eez_size_df <- env_data_loop %>%
+  filter(eez_sovereign != "High seas") %>%
+  distinct(pixel_id, lon, lat, eez_sovereign) %>%
+  group_by(flag_fin = eez_sovereign) %>%
+    summarise(n_cells_eez = n()) %>%
+    ungroup()
+
+# now calculate n_year_total
+n_year_total_df <- eff_ref_df %>%
+  left_join(max_eff_ref) %>%
+  left_join(n_ref_group) %>%
+  left_join(eez_size_df) %>%
+  filter(!is.na(n_ref)) %>% # these are the ones we regional model
+  mutate(n_year_total_1 = ceiling(n_ref *((eff_year/eff_ref)^0.5))) %>%
+  mutate(n_year_total_fin = pmin(n_ref, n_year_total_1)) %>% # take the rowwise minimum of n_ref and n_year_total to get the final value. We don't want n_year_total to exceed the maximum reference number of cells
+  mutate(n_year_total_floor = pmax(ceiling(0.1*n_ref), n_year_total_fin),
+         n_year_total_floor_eez = pmax(ceiling(0.1*n_cells_eez), n_year_total_fin)) # apply a floor of 10% of n_ref. This way we won't allow n_ref to get all the way down to 1. 
+
+```
+
+
+Now we can rank the p>0 predictions and limit them n_year_total_fin by selecting the top n_year_total probability values. 
+
+After that, we can join to stage 2 predictions and allocate national effort to the predicted cells. 
+
+```{r}
+stage_1_path <- file.path(rdsi_dir, "prep/random_forest/stage_1_predictions/yearly/")
 stage_1_files <- list.files(stage_1_path, full.names = TRUE)
-stage_1_flags <- unique(sub(".*stage_1_rf_model_full_data_([A-Z]{3})_.*", "\\1", stage_1_files))
+stage_1_flags <- unique(sub(".*model_preds_([A-Z]{3})_.*", "\\1", stage_1_files))
 
-stage_2_path <- file.path(rdsi_dir, "prep/random_forest/stage_2_models/")
+stage_2_path <- file.path(rdsi_dir, "prep/random_forest/stage_2_predictions/yearly/")
 stage_2_files <- list.files(stage_2_path, full.names = TRUE)
-stage_2_flags <- unique(sub(".*stage_2_rf_model_full_data_([A-Z]{3})_.*", "\\1", stage_2_files))
+stage_2_flags <- unique(sub(".*model_preds_([A-Z]{3})_.*", "\\1", stage_2_files))
 
-diff_flags_1 <- setdiff(stage_1_flags, stage_2_flags)
-diff_flags_2 <- setdiff(stage_2_flags, stage_1_flags)
+setdiff(stage_1_flags, stage_2_flags) # 0
+setdiff(stage_2_flags, stage_1_flags) # 0 
 
-model_flags <- intersect(stage_1_flags, stage_2_flags) # 147
-
-setdiff(flags, model_flags) # [1] "DOM" "RAA" "RAM" "MYT";  missing 4; these will be gapfilled with regional modelling
+model_flags <- intersect(stage_1_flags, stage_2_flags) # 147; perfect! 
 
 years <- c(1950:2017)
 
-out_dir <- file.path(rdsi_dir, "prep/random_forest/predictions_flag_no_access_revised/yearly")
+out_dir <- file.path(rdsi_dir, "prep/random_forest/predictions_industrial_flag_revised_floor_0/yearly")
 
-tasks <- CJ(flag = flags, year = years)
+tasks <- CJ(flag = model_flags, year = years)
 tasks[, out_file := file.path(out_dir, sprintf("model_preds_%s_%d.qs", flag, year))]
 tasks <- tasks[!file.exists(out_file)]
 
@@ -425,125 +657,75 @@ years_to_run <- unique(data_to_run$year)
 cl <- makeCluster(38) 
 registerDoParallel(cl)
 
- foreach(flag = model_flags, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
-    #  flag = "BGD"
-   
-   #### Read in models 
-   # read in stage 2 model! 
-# Get the list of matching files
-matching_files <- list.files(
-  path = file.path(rdsi_dir, "prep/random_forest/stage_2_models/"), 
-  pattern = glue::glue("stage_2_rf_model_full_data_{flag}_.*\\.qs$"),
-  full.names = TRUE
-)
-
-# Check if a matching file exists
-if (length(matching_files) > 0) {
-  stage2_model <- qs::qread(matching_files[1])  # Read the first matching file
-} else {
-  stop("No matching file found for flag: ", flag)
-}
-
-## read in stage 1 model! 
-# Get the list of matching files
-matching_files <- list.files(
-  path = file.path(rdsi_dir, "prep/random_forest/stage_1_models/"), 
-  pattern = glue::glue("stage_1_rf_model_full_data_{flag}_.*\\.qs$"),
-  full.names = TRUE
-)
-
-# Check if a matching file exists
-if (length(matching_files) > 0) {
-  stage1_model <- qs::qread(matching_files[1])  # Read the first matching file
-}  else {
-  stop("No matching file found for flag: ", flag)
-}
-
-
- #foreach(yr = years, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
+ foreach(flag = model_flags, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger", "terra")) %dopar% {
 
  for(yr in years) {
-    
-   ## uncheck this if you arent doing a full rerun 
-   # if(file.exists(file.path(rdsi_dir, glue("prep/random_forest/predictions/yearly/model_preds_{flag}_{yr}.qs")))){
-   #   cat("skipping", "exists")
-   #   next()
-   # }
+# flag = "GAB"
+# yr = 2016
 
-# yr = 2017
-
-# get combination of categories we need to run through our models
+# grab country level fishing effort data for flag and year
 model_data_flag <- hist_fish_data %>%
   dplyr::select(flag_fin, gear, length_category, year, total_nominal_fishing_hours ) %>%
   filter(flag_fin == flag, year == yr)
 
-distinct_cats <- model_data_flag %>%
-    distinct(flag_fin, gear, length_category) 
-
-full_data <- tidyr::crossing(env_grid_fishing_areas, distinct_cats) %>% 
-  crossing(., year = yr) %>%
-  left_join(env_data_fishing_areas, by = c("lon", "lat", "year")) %>%
-  dplyr::select(-pixel_id) %>%
-  na.omit()
-
-if(nrow(full_data) == 0){
+if(nrow(model_data_flag) == 0){
     cat("skipping", flag, yr, "check to make sure this is right")
   next()
 }
 
 
-stage1_preds <- full_data %>%
-  mutate(pred_presence = predict(stage1_model, data = .)$predictions[, "1"])
-
-# stage_1_preds_rescale <- stage1_preds %>%
-#   left_join(eez_lookup) %>%
-#     mutate(pred_presence_rescale = case_when(
-#         (flag_fin == eez_sovereign & pred_presence > 0) ~ 1,
-#         pred_presence >= 0.5 ~ 1, 
-#         TRUE ~ 0
-#     )) 
-# 
-# test <- stage_1_preds_rescale %>%
-#   distinct(lon, lat, pred_presence_rescale) %>%
-#   rast(., type = "xyz")
-# plot(test)
+# grab the number of cells we'll allow for allocation
+n_year_total <- n_year_total_df %>%
+  filter(flag_fin == flag,
+         year == yr) %>%
+  pull(n_year_total_floor_eez)
+ 
+# now grab stage 1 predictions
+stage1_preds <- qread(file.path(rdsi_dir, glue("prep/random_forest/stage_1_predictions/yearly/model_preds_{flag}_{yr}.qs")))
 
 
-# ##### fallback option # calculate the 95th percentile using only cells inside the flag's own EEZ
-p99_eez <- stage1_preds %>%
-  left_join(eez_lookup) %>%
+# Run simulation where we only allow the top n_year_total cells to be allocated in for domestic fishing
+
+stage1_preds_no_limit <- stage1_preds %>%
+    mutate(pred_presence_rescale = case_when(
+        flag_fin == eez_sovereign & pred_presence > 0 ~ 1,
+        pred_presence >= 0.5 ~ 1,
+        TRUE ~ 0
+    ))
+
+## now we need to figure out how many cells we will allocate to each gear and length class
+gear_length_breakdown <- model_data_flag %>%
+  group_by(gear) %>%
+  mutate(total_effort_gear = sum(total_nominal_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(n_cells_allowed = ceiling(n_year_total*(total_nominal_fishing_hours/total_effort_gear))) %>%
+  dplyr::select(flag_fin, year, gear, length_category, n_cells_allowed)
+
+stage1_preds_no_limit_choose_dom <- stage1_preds_no_limit %>%
   filter(flag_fin == eez_sovereign) %>%
-  distinct(lon, lat, pred_presence) %>%
-  summarise(p99 = quantile(pred_presence, probs = 0.99, na.rm = TRUE),
-            p975 = quantile(pred_presence, probs = 0.975, na.rm = TRUE),
-            p95 = quantile(pred_presence, probs = 0.95, na.rm = TRUE)) %>%
-  pull(p99)
-
-eez_limit <- min(p99_eez, 0.5)
-
-stage_1_preds_rescale <- stage1_preds %>%
-  left_join(eez_lookup) %>%
+  left_join(gear_length_breakdown) %>%
+  group_by(flag_fin, year, gear, length_category) %>%
+  arrange(desc(pred_presence), .by_group = TRUE) %>%
   mutate(
-    pred_presence_rescale = case_when(
-      flag_fin == eez_sovereign & pred_presence >= eez_limit ~ 1,
-      flag_fin != eez_sovereign & pred_presence >= 0.5 ~ 1,
-      TRUE ~ 0
-    )
-  )
+    pred_rank = row_number(),
+    pred_presence_rescale = if_else(pred_rank <= dplyr::first(n_cells_allowed), 1, 0)
+  ) %>%
+  ungroup() 
 
-test <- stage_1_preds_rescale %>%
-  distinct(lon, lat, pred_presence_rescale) %>%
-  rast(type = "xyz")
+# test <- stage1_preds_no_limit_choose_dom %>%
+#   filter(pred_presence_rescale == 1) %>%
+#   dplyr::select(lon, lat, pred_presence_rescale) %>%
+#   rast(., type = "xyz")
 
-plot(test)
+stage_1_preds_no_limit_final <- stage1_preds_no_limit %>%
+  filter(flag_fin != eez_sovereign) %>%
+  rbind(., stage1_preds_no_limit_choose_dom %>% dplyr::select(colnames(stage1_preds_no_limit)))
 
-oos_preds <- full_data %>%
-  mutate(pred_prop = predict(stage2_model, data = .)$predictions) # these are stage 2 predictions
+stage2_preds <- qread(file.path(rdsi_dir, glue("prep/random_forest/stage_2_predictions/yearly/model_preds_{flag}_{yr}.qs")))
 
-## join stage 1 and 2 preds together and multiply 
-all_preds <- oos_preds %>%
+all_preds_no_limit <- stage2_preds %>%
   dplyr::select(lat, lon, gear, length_category, year, flag_fin, pred_prop) %>% # probably select lat, lon, gear, length, year, flag here?
-  left_join(., stage_1_preds_rescale) %>% 
+  left_join(., stage_1_preds_no_limit_final) %>% 
     dplyr::select(lon, lat, flag_fin,gear, length_category, year, fao_id, eez_id, eez_sovereign, eez_country_name, pred_prop, pred_presence_rescale) %>% 
   mutate(pred_prop_final = pred_prop*pred_presence_rescale) %>%
   filter(pred_prop_final > 0) %>%
@@ -561,30 +743,29 @@ all_preds <- oos_preds %>%
   filter(nom_active_fishing_hours > 0) %>%
   mutate(sector = "Industrial")
 
-
-if(nrow(all_preds) == 0){
-    cat("skipping", flag, yr, "no predictions made...")
-  next()
-}
-
-# test_preds <- all_preds %>%
-#   #filter(gear == "Dredges") %>%
-#   #filter(eez_sovereign != "High seas") %>%
+# test_preds_no_limit <- all_preds_no_limit %>%
+#   # filter(gear == "Trawl_Bottom") %>%
 #   dplyr::group_by(lon, lat) %>%
 #   summarise(nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
 #   ungroup() %>%
 #   rast(., type = "xyz")
-# 
-# plot(test_preds)
-# plot(log(test_preds+1)) # Cool!
+# plot(test_preds_no_limit)
 
-qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/predictions_flag_no_access/yearly/model_preds_{flag}_{yr}.qs"))) # qs is smaller
+
+
+if(nrow(all_preds_no_limit) == 0){
+    cat("skipping", flag, yr, "no predictions made...")
+  next()
+}
+
+qs::qsave(all_preds_no_limit, file.path(rdsi_dir, glue("prep/random_forest/predictions_industrial_flag_revised_floor_0/yearly/model_preds_{flag}_{yr}.qs"))) # qs is smaller
 
   }
 
 }
 
 stopCluster(cl)
+
 
 ```
 
@@ -596,6 +777,8 @@ Combine all years for flag and save
     -  `nv = nominal_effort / (days_at_sea*mean_engine_p)`
  
 ```{r}
+library(strex)
+flags <- unique(str_after_nth(str_before_last(list.files(file.path("/home/ubuntu/data_storage/prep/random_forest/predictions_industrial_flag_revised_floor_0/yearly")),"_"), "_", 2)) # 147 flags, cool.
 
 days_to_hours_conversion <- qs::qread(here("data/int/hours_to_days_conversion.qs")) %>%
   rename(lon = x, lat = y) %>%
@@ -603,9 +786,8 @@ days_to_hours_conversion <- qs::qread(here("data/int/hours_to_days_conversion.qs
 
 nv_conversion <- qs::qread(here("data/model_features/rousseau_ind_effort_nv_conversion.qs"))
 
-
 data_grid_area <- data_grid_area %>%
-st_drop_geometry()
+  st_drop_geometry()
 
 cl <- makeCluster(30)  # could probably increase this? 
 registerDoParallel(cl)
@@ -613,14 +795,12 @@ registerDoParallel(cl)
 foreach(flag = flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
   # flag = "HKG"
   
-  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_flag_no_access/yearly/"), pattern = flag, full.names = TRUE)
+  all_files_flag_no_limit <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_industrial_flag_revised_floor_0/yearly/"), pattern = flag, full.names = TRUE)
   
-    # Skip iteration if no files are found
-  if (length(all_files_flag) == 0) next
   
   # hours / hours/day = hours * day/hours = days
 
-  all_data_flag <- lapply(all_files_flag, qread) %>%
+  all_data_flag_no_limit <- lapply(all_files_flag_no_limit, qread) %>%
     bind_rows() %>%
     left_join(eez_lookup) %>%
     mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name")) %>%
@@ -640,13 +820,16 @@ foreach(flag = flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "country
            nom_hours_km2 = nom_active_fishing_hours/pixel_area_km2,
            nv_km2 = nv/pixel_area_km2) # calculate hours per km2 here too
   
-  qs::qsave(all_data_flag, file.path(rdsi_dir, glue("prep/random_forest/predictions_flag_no_access/model_preds_1950_2017_{flag}.qs")))
+  qs::qsave(all_data_flag_no_limit, file.path(rdsi_dir, glue("prep/random_forest/predictions_industrial_flag_revised_floor_0/model_preds_1950_2017_{flag}.qs")))
+  
 }
 
 stopCluster(cl)
 
 
-test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/predictions/model_preds_1950_2017_CHN.qs") %>%
+test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/predictions_industrial_flag_revised_floor_0/model_preds_1950_2017_AUS.qs") %>%
+  filter(year == 1950) %>%
+  filter(flag_country_iso3c == eez_sovereign_iso3c) %>%
   dplyr::group_by(lon, lat) %>%
   summarise(nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
   ungroup() %>% 
@@ -656,44 +839,40 @@ test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/prediction
   rast(., type = "xyz")
 
 plot(test_preds)
-plot(log(test_preds+1)) # Cool!
 
-test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/predictions/yearly/model_preds_COG_2015.qs") %>%
-  dplyr::group_by(lon, lat) %>%
-  summarise(nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
-  ungroup() %>% 
-  left_join(data_grid_area) %>%
-  mutate(hours_km2 = nom_active_fishing_hours/(pixel_area_m2/1000000)) %>%
-  dplyr::select(lon, lat, hours_km2) %>%
-  rast(., type = "xyz")
-
-plot(test_preds)
-plot(log(test_preds+1)) # Cool!
+## earlier predictions might be TOO constricted now... But i think still better than before...
 
 ```
 
 ```{r}
-test <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
-  mutate(year = as.numeric(year)) # i think we need to adjust the prepared data to include cells which have no fishing effort in them. We can do this in the loop below? 
 
-test_cog <- test %>% 
-  filter(flag_fin == "COG") %>%
-  #filter(year == 2017) %>% 
-  full_join(data_grid_area) %>%
-  dplyr::select(lon, lat, prop_fishing_hours_cell) %>% 
-  rast(., type = "xyz")
+codes <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv")
 
-plot(test_cog)
+ind_df <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/effort_mapped/mapped_1950_I.csv")
 
-test_sample_size <- test %>%
-  group_by(flag_fin) %>%
-  summarise(sample_size = n()) %>%
-  ungroup() %>%
-  filter(flag_fin %in% flags)
+ind_df_filt <- ind_df %>%
+  filter(SAUP == 356)
+  
+test <- ind_df_filt %>%
+  group_by(Lon, Lat) %>%
+  summarise(NomActive = sum(NomActive, na.rm = TRUE)) %>%
+  ungroup()
 
+test2 <- test %>%
+  rast(., type = "xyz") # yeah, Rousseau IND is pretty spread across the coastline for 1950. 
+  
 ```
 
 
+
+Other option for allocation:
+
+Worst case/easiest: 
+ - Create maximum accessibility/extent layer with 2015-2017 union
+ - Run using p > min(0.5, 99th quantile)
+ - limit those predictions to the accessibility layer
+    - Problem is that most hindcast years will probably look similar to the maximum extent layer if allocating in many cells
+ 
 
 
 

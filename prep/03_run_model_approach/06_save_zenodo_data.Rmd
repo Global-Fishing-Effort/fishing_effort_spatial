@@ -46,8 +46,9 @@ Save csv files to upload to Zenodo and the app
 
 
 ```{r}
+# predictions_industrial_flag_revised_floor_0
 
-  modelled_flags_original <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions_flag_no_access/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
+  modelled_flags_original <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions_industrial_flag_revised_floor_0/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
 
   modelled_flags_regional <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions_regional/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
   
@@ -69,12 +70,11 @@ low_sample_flags <- readRDS(here("data/model_features/prepared_data_1deg.rds")) 
 cl <- makeCluster(24)  # could probably increase this? 
 registerDoParallel(cl)
 
-
 foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
-  # flag = "TGO"
+  # flag = "IRQ"
   
   
-  all_files_flag_original <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_flag_no_access/"), pattern = flag, full.names = TRUE)
+  all_files_flag_original <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_industrial_flag_revised_floor_0/"), pattern = flag, full.names = TRUE)
   all_files_flag_regional_gf <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_regional/"), pattern = flag, full.names = TRUE)
 
   
@@ -85,12 +85,6 @@ foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "cou
   all_data_flag_original <- lapply(all_files_flag_original, qread) %>%
     bind_rows() %>%
     mutate(data_type = "flag model")
-  
-  if(flag == "GAB"){
-    
-    all_data_flag_original <- all_data_flag_original %>%
-      filter(year != 2017)
-  }
 
   
   all_data_flag_regional_gf <- lapply(all_files_flag_regional_gf, qread) %>%
@@ -171,7 +165,8 @@ all_data_grouped <- all_data %>%
   summarise(eff_active_fishing_hours = sum(eff_active_fishing_hours, na.rm = TRUE), 
             eff_active_fishing_days = sum(eff_active_fishing_days, na.rm = TRUE), 
             nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE), 
-            nom_active_fishing_days = sum(nom_active_fishing_days, na.rm = TRUE)) %>%
+            nom_active_fishing_days = sum(nom_active_fishing_days, na.rm = TRUE),
+            nv = sum(nv, na.rm = TRUE)) %>%
   ungroup()
 
 
@@ -304,6 +299,35 @@ plot(log(test_2+1))
 
 ```
 
+```{r}
+# check china. Looks like not enough effort in earlier years? 
+test_chn <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_by_flag_country_industrial/model_preds_1950_2017_CHN.csv"))
+
+ test_chn %>%
+   filter(year == 1950) %>%
+   pull(nom_active_fishing_hours) %>%
+   sum() # 7141969
+ 
+ /home/ubuntu/data_storage/prep/random_forest/predictions_flag_no_access
+ 
+test_chn2 <- qread(file.path(rdsi_dir, "prep/random_forest/predictions_flag_no_access/model_preds_1950_2017_CHN.qs"))
+
+ test_chn2 %>%
+   filter(year == 1950) %>%
+   pull(nom_active_fishing_hours) %>%
+   sum() # 7141969
+ # perfect
+ 
+# Industrial notes:
+ 
+# VNM too sparse now
+# IDN going back in time
+# IND going back in time? 
+# Thailand in general 
+
+ 
+ 
+```
 
 
 

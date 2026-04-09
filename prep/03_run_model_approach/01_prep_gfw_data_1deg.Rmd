@@ -231,3 +231,17 @@ test <- rousseau_eff %>%
 3.400367e+08-3.291176e+07
 3.400367e+08/3.291176e+07
 ```
+
+```{r}
+test <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FishingCountry_LengthBoat_Gear_Sector.csv")
+
+test2 <- test %>%
+  filter(Sector == "I", Country == "AUS") %>%
+  filter(Year %in% c(2003, 2015:2017)) %>%
+  group_by(Country, Year) %>%
+  summarise(nom_hours = sum(NomActiveHours, na.rm = TRUE)) %>%
+  ungroup()
+  
+
+```
+

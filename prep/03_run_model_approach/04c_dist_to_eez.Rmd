@@ -13,9 +13,9 @@ editor_options:
 
 # Summary 
 
-Prep a layer which describes the distance of each cell from each home EEZ for the countries which need to use regional models for. Those countries are (you can determine these countries in `05_predictions_gapfill.Rmd`: 
-  - [1] "DOM" "RAA" "RAM" "LBN" "BHS" "WLF" "GLP" "TGO" "MYT" "BEN" "STP" "IRQ" "SYR" "JAM" "LCA" "DJI" "GTM" "GUF" "COG" "GAB" "BGD" "BRN" "COD"
-[24] "CUB" "GMB" "GNB" "GNQ" "GUY" "KWT" "MDG" "MNE" "ROU" "SUR" "SVN" "TON" 
+Prep a layer which describes the distance of each cell from each home EEZ for the countries which need to use regional models for. Those countries are (you can determine these countries below)
+ [1] "DOM" "RAA" "RAM" "MYT" "BEN" "BGD" "BHS" "BRN" "COD" "COG" "CUB" "DJI" "GLP" "GMB" "GNB" "GNQ" "GUF" "GUY" "JAM" "KWT" "LBN" "LCA" "MDG" "MNE" "ROU"
+[26] "SUR" "SVN" "SYR" "TGO" "TON" "WLF"
 
 The reason we need this information, is because we are going to create a "reachability" layer. Because these flags are gapfilled with larger regional models, sometimes the predictive spatial spread is too far (e.g., when modelling DOM, some effort is being allocated to the meditteraen). This happens because some flags in that region might have distant water fleets, so allocation will still happen in those places. To fix this, we will create a reachability exclusion layer based on: 
 
@@ -67,6 +67,112 @@ data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_
 
 ```
 
+
+First lets check to see what predictions need to be gapfilled. We'll do this by reading in the flag country predictions and comparing to the Rousseau data. If any effort is missing for a flag, we will run the predictions here for gapfilling. 
+
+```{r}
+  hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
+    ## remove artisanal
+    filter(sector == "I") %>%
+    group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
+    summarize(
+      total_nominal_fishing_hours = sum(nom_active_hours, na.rm = TRUE),
+      total_effective_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    dplyr::select(flag_fin, year, gear, length_category, total_nominal_fishing_hours, total_effective_fishing_hours) %>%
+        filter(total_nominal_fishing_hours > 0) %>%
+  mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name"))
+
+  
+ modelled_flags_original <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions_flag_revised_no_limit/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
+
+  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_flag_revised_no_limit/"), full.names = TRUE)
+
+    all_data <- lapply(all_files_flag[-148], qread) %>%
+      bind_rows()
+
+all_data_grouped_2 <- all_data %>% 
+  group_by(year, flag_country_iso3c, flag_country_name, gear, length_category) %>%
+    summarise(modeled_eff_active_fishing_hours = sum(eff_active_fishing_hours, na.rm = TRUE), 
+            modeled_eff_active_fishing_days = sum(eff_active_fishing_days, na.rm = TRUE), 
+            modeled_nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE), 
+            modeled_nom_active_fishing_days = sum(nom_active_fishing_days, na.rm = TRUE)) %>%
+  ungroup() %>%
+    mutate(flag_country_name = case_when(
+          flag_country_iso3c == "RAM" ~ "Madeira",
+          flag_country_iso3c == "RAA" ~ "Azores", 
+          TRUE ~ flag_country_name
+  ))
+
+check_rousseau_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
+    ## remove artisanal
+    filter(sector == "I") %>%
+    group_by(year, flag_fin = country, gear = gear_new, length_category) %>%
+    summarize(
+      total_nominal_fishing_hours = sum(nom_active_hours, na.rm = TRUE),
+      total_effective_fishing_hours = sum(eff_active_hours, na.rm = TRUE),
+      total_nominal_fishing_days = sum(nom_active, na.rm = TRUE),
+      total_effective_fishing_days = sum(eff_active, na.rm = TRUE)
+    ) %>%
+  ungroup() %>%
+    dplyr::select(flag_country_iso3c = flag_fin, year, gear, length_category, total_nominal_fishing_hours, total_effective_fishing_hours, total_nominal_fishing_days, total_effective_fishing_days) %>%
+        filter(total_nominal_fishing_hours > 0) %>%
+  mutate(flag_country_name = countrycode(flag_country_iso3c, origin = "iso3c", destination = "country.name")) %>%
+  mutate(flag_country_name = case_when(
+          flag_country_iso3c == "RAM" ~ "Madeira",
+          flag_country_iso3c == "RAA" ~ "Azores", 
+          TRUE ~ flag_country_name
+  )) %>% 
+  left_join(all_data_grouped_2) %>%
+  mutate(modeled_eff_active_fishing_hours = ifelse(is.na(modeled_eff_active_fishing_hours), 0, modeled_eff_active_fishing_hours),
+         modeled_eff_active_fishing_days = ifelse(is.na(modeled_eff_active_fishing_days), 0, modeled_eff_active_fishing_days), 
+         modeled_nom_active_fishing_hours = ifelse(is.na(modeled_nom_active_fishing_hours), 0, modeled_nom_active_fishing_hours),
+         modeled_nom_active_fishing_days = ifelse(is.na(modeled_nom_active_fishing_days), 0, modeled_nom_active_fishing_days)) %>%
+  mutate(proportion_hours_modeled = modeled_nom_active_fishing_hours/total_nominal_fishing_hours)
+
+missing_data <- check_rousseau_data %>%
+  filter(proportion_hours_modeled != 1) %>%
+  filter(proportion_hours_modeled < 0.9999)
+
+flags_missing <- unique(missing_data$flag_country_iso3c) # 4 flags missing
+
+regions_missing_df <- hist_fish_data %>% 
+  filter(flag_fin %in% c(flags_missing)) %>%
+  distinct(flag_fin, region)
+  
+regions_missing <- hist_fish_data %>% 
+  filter(flag_fin %in% c(flags_missing)) %>%
+  pull(region) %>%
+  unique() # ok only 7 regions missing, so that's good 
+  
+
+years_missing <- unique(missing_data$year) # all years missing, because of DOM for example
+
+regions_missing_df_2 <- hist_fish_data %>%
+  filter(flag_fin %in% c(flags_missing)) %>%
+  distinct(flag_fin, year)
+
+## now read get sample size based flags that we need to fill. Any flag with <100 observations will be fully gapfilled, so we need to run those models here. 
+
+# Load prepared data
+model_data <- readRDS(here("data/model_features/prepared_data_1deg.rds")) %>%
+  mutate(year = as.numeric(year)) # i think we need to adjust the prepared data to include cells which have no fishing effort in them. We can do this in the loop below? 
+
+
+sample_size_flags <- model_data %>%
+  group_by(flag_fin) %>%
+  summarise(n_obs = n()) %>%
+  ungroup() %>%
+  filter(flag_fin %in% unique(hist_fish_data$flag_fin)) %>%
+  filter(n_obs < 100) %>%
+  pull(flag_fin) %>%
+  unique()
+
+flags_missing_fin <- unique(c(flags_missing, sample_size_flags))
+
+```
+
 ## Calculate distance to each EEZ
 
 We will first calculate the distance to each EEZ for flag countries that need to be gapfilled using larger regional models
@@ -75,13 +181,8 @@ We will first calculate the distance to each EEZ for flag countries that need to
 [24] "CUB" "GMB" "GNB" "GNQ" "GUY" "KWT" "MDG" "MNE" "ROU" "SUR" "SVN" "TON"
  
 ```{r}
-eez_to_calculate <- c(
-  "DOM", "RAA", "RAM", "LBN", "BHS", "WLF", "GLP", "TGO", "MYT", "BEN", 
-  "STP", "IRQ", "SYR", "JAM", "LCA", "DJI", "GTM", "GUF", "COG", "GAB", 
-  "BGD", "BRN", "COD", "CUB", "GMB", "GNB", "GNQ", "GUY", "KWT", "MDG", 
-  "MNE", "ROU", "SUR", "SVN", "TON"
-)
-                
+eez_to_calculate <- flags_missing_fin
+
 # read in eez data 
 eez_id <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_lookup_fix.csv"))
 eez_df <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_fix.csv")) %>%
@@ -184,6 +285,14 @@ res_long <- res_df %>%
 
 fwrite(res_long, here("data/int/dist_from_home_eez.csv"))
 
+unique(res_long$eez_id) # 31 good
+test <- res_long %>%
+  filter(eez_id == 2139) %>%
+  dplyr::select(lon, lat, dist_km) %>%
+  rast(., type = "xyz")
+
+plot(test)
+
 ```
  
 ## Days at sea
@@ -202,7 +311,7 @@ Now we need median transit speed per length. We can probably get this from GFW s
 
 ```{r}
 library(doParallel)
-# i think we will need to use the sentinel-2 data 
+# i think we will need to use the sentinel-2 data since it has speed info
 
 eez_df_full <- read.csv(here("data/model_features/deg_1_x_1/eez/eez_fix.csv")) %>%
   left_join(eez_id)
@@ -212,7 +321,7 @@ sentinel_files <- list.files(file.path(rdsi_raw_dir, "global_fishing_watch/senti
 cl <- makeCluster(12) # or however many cores you want
 registerDoParallel(cl)
 
-foreach(file = sentinel_files[2:13],
+foreach(file = sentinel_files[1:13],
         .packages = c("dplyr", "stringr", "tools")) %dopar% {
           
  # file = sentinel_files[[13]]
@@ -349,7 +458,7 @@ Determine f_transit
 gfw_year <- qread(file.path(rdsi_raw_dir, glue("global_fishing_watch/apparent_fishing_hours_mmsi/v3_aggregated/all_effort_2012.qs"))) # ok i think we can get f_transit from this 
 
 
-test <- fread("/home/ubuntu/data_storage/raw_data/global_fishing_watch/apparent_fishing_hours_mmsi/v3/mmsi-daily-csvs-10-v3-2022/mmsi-daily-csvs-10-v3-2022-09-20.csv")
+# test <- fread("/home/ubuntu/data_storage/raw_data/global_fishing_watch/apparent_fishing_hours_mmsi/v3/mmsi-daily-csvs-10-v3-2022/mmsi-daily-csvs-10-v3-2022-09-20.csv")
 
 gfw_ports <- read.csv("/home/ubuntu/data_storage/raw_data/global_fishing_watch/anchorages/named_anchorages_v2_20221206.csv")
 
