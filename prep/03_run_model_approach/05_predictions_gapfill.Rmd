@@ -246,9 +246,9 @@ First lets check to see what predictions need to be gapfilled. We'll do this by 
 
 ```{r}
 
- modelled_flags_original <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions_industrial_flag_revised/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
+ modelled_flags_original <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions_industrial_flag_revised_floor_0/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
 
-  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_industrial_flag_revised/"), full.names = TRUE)
+  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_industrial_flag_revised_floor_0/"), full.names = TRUE)
 
     all_data <- lapply(all_files_flag[-148], qread) %>%
       bind_rows()
@@ -372,11 +372,11 @@ flags_finished <- unique(str_after_last(str_before_last(list.files(file.path(rds
 flags_to_run <- sort(setdiff(flags_missing_fin, flags_finished))
 
 
-cl <- parallel::makeCluster(15)
+cl <- parallel::makeCluster(4)
 doParallel::registerDoParallel(cl)
   
  foreach(flag = flags_to_run, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
-    #  flag = "TGO"
+    #  flag = "GAB"
    
    regional_name <- hist_fish_data %>%
      filter(flag_fin == flag) %>%
@@ -419,7 +419,7 @@ if (length(matching_files) > 0) {
 }
 
  for(yr in years) {
-# yr = 2017
+# yr = 2016
     
 # get combination of categories we need to run through our models
 model_data_flag <- hist_fish_data %>%

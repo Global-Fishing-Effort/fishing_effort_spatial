@@ -14,8 +14,8 @@ editor_options:
 # Summary 
 
 Prep a layer which describes the distance of each cell from each home EEZ for the countries which need to use regional models for. Those countries are (you can determine these countries below)
- [1] "DOM" "RAA" "RAM" "MYT" "BEN" "BGD" "BHS" "BRN" "COD" "COG" "CUB" "DJI" "GLP" "GMB" "GNB" "GNQ" "GUF" "GUY" "JAM" "KWT" "LBN" "LCA" "MDG" "MNE" "ROU"
-[26] "SUR" "SVN" "SYR" "TGO" "TON" "WLF"
+ [1] "BEN" "BGD" "BHS" "BRN" "COD" "COG" "CUB" "DJI" "DOM" "GAB" "GLP" "GMB" "GNB" "GNQ" "GTM" "GUF" "GUY" "IRQ" "JAM" "KWT" "LBN" "LCA" "MDG" "MNE" "MYT"
+[26] "RAA" "RAM" "ROU" "STP" "SUR" "SVN" "SYR" "TGO" "TON" "WLF"
 
 The reason we need this information, is because we are going to create a "reachability" layer. Because these flags are gapfilled with larger regional models, sometimes the predictive spatial spread is too far (e.g., when modelling DOM, some effort is being allocated to the meditteraen). This happens because some flags in that region might have distant water fleets, so allocation will still happen in those places. To fix this, we will create a reachability exclusion layer based on: 
 
@@ -43,6 +43,8 @@ library(terra)
 library(janitor)
 library(qs)
 library(data.table)
+library(countrycode)
+library(strex)
 
 source(here("R/dir.R"))
 
@@ -71,6 +73,9 @@ data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_
 First lets check to see what predictions need to be gapfilled. We'll do this by reading in the flag country predictions and comparing to the Rousseau data. If any effort is missing for a flag, we will run the predictions here for gapfilling. 
 
 ```{r}
+regions <- fread(here("data/int/larger_regions_iso3c.csv")) %>%
+  rename(flag_fin = Country)
+
   hist_fish_data <- qs::qread(here("data/int/rousseau_gear_fix.qs")) %>%
     ## remove artisanal
     filter(sector == "I") %>%
@@ -82,12 +87,13 @@ First lets check to see what predictions need to be gapfilled. We'll do this by 
     ) %>%
     dplyr::select(flag_fin, year, gear, length_category, total_nominal_fishing_hours, total_effective_fishing_hours) %>%
         filter(total_nominal_fishing_hours > 0) %>%
-  mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name"))
+  mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name")) %>%
+    left_join(regions)
 
   
- modelled_flags_original <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions_flag_revised_no_limit/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
+ modelled_flags_original <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/predictions_industrial_flag_revised_floor_0/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
 
-  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_flag_revised_no_limit/"), full.names = TRUE)
+  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/predictions_industrial_flag_revised_floor_0/"), full.names = TRUE)
 
     all_data <- lapply(all_files_flag[-148], qread) %>%
       bind_rows()
@@ -171,14 +177,15 @@ sample_size_flags <- model_data %>%
 
 flags_missing_fin <- unique(c(flags_missing, sample_size_flags))
 
+sort(flags_missing_fin)
 ```
 
 ## Calculate distance to each EEZ
 
 We will first calculate the distance to each EEZ for flag countries that need to be gapfilled using larger regional models
 
- -  [1] "DOM" "RAA" "RAM" "LBN" "BHS" "WLF" "GLP" "TGO" "MYT" "BEN" "STP" "IRQ" "SYR" "JAM" "LCA" "DJI" "GTM" "GUF" "COG" "GAB" "BGD" "BRN" "COD"
-[24] "CUB" "GMB" "GNB" "GNQ" "GUY" "KWT" "MDG" "MNE" "ROU" "SUR" "SVN" "TON"
+ [1] "BEN" "BGD" "BHS" "BRN" "COD" "COG" "CUB" "DJI" "DOM" "GAB" "GLP" "GMB" "GNB" "GNQ" "GTM" "GUF" "GUY" "IRQ" "JAM" "KWT" "LBN" "LCA" "MDG" "MNE" "MYT"
+[26] "RAA" "RAM" "ROU" "STP" "SUR" "SVN" "SYR" "TGO" "TON" "WLF"
  
 ```{r}
 eez_to_calculate <- flags_missing_fin
@@ -444,6 +451,9 @@ transit_by_region <- transit_by_region %>%
 
 write.csv(transit_by_region, here("data/int/transit_speed/transit_speed_by_region.csv"), row.names = FALSE)
 
+test <- fread( here("data/int/transit_speed/transit_speed_by_eez.csv"))
+test <- fread(here("data/int/transit_speed/transit_speed_global.csv"))
+test <- fread( here("data/int/transit_speed/transit_speed_by_region.csv"))
 ```
 
 ## Transit fraction
@@ -625,12 +635,14 @@ f_region_len_full <- f_region_len %>%
 
 fwrite(f_region_len_full, here("data/int/transit_prop/f_transit_region_length_all_years.csv"))
 
+test <- fread(here("data/int/transit_prop/f_transit_region_length_all_years.csv"))
+
 ```
 
 
 ## calculate reachability layer
 
-Now we will calculate our reachability layer for the 20 countries that require regional gapfilling
+Now we will calculate our reachability layer for the 35 countries that require regional gapfilling
 
 reachability = 0.5 * f_transit * DAS * 24 * transit_speed * 1.852
 
@@ -638,6 +650,7 @@ reachability = 0.5 * f_transit * DAS * 24 * transit_speed * 1.852
 
 f_region_len_full <- fread(here("data/int/transit_prop/f_transit_region_length_all_years.csv"))
 transit_by_region <- fread(here("data/int/transit_speed/transit_speed_by_region.csv"))
+larger_regions <- fread(here("data/int/larger_regions_iso3c.csv"))
 
 
 # the rousseau DAS represents annual days at sea. We need a per-trip days at sea, so we will just make this assumption: 

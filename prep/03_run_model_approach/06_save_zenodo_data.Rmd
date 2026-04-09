@@ -86,6 +86,12 @@ foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "cou
     bind_rows() %>%
     mutate(data_type = "flag model")
 
+    if(flag == "GAB"){
+    
+    all_data_flag_original <- all_data_flag_original %>%
+      filter(year != 2017)
+  } # we're going to use regional predictions for GAB 2017, because country predictions are horrible.
+  
   
   all_data_flag_regional_gf <- lapply(all_files_flag_regional_gf, qread) %>%
     bind_rows()  %>%
