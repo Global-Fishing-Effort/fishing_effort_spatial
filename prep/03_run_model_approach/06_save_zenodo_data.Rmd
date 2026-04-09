@@ -184,7 +184,6 @@ fwrite(all_data_grouped, file.path(rdsi_dir, "prep/random_forest/zenodo_data/ind
 Check to make sure we are not missing any effort 
 
 ```{r}
-
 ## check to make sure we are not missing any effort
   all_data_grouped <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/industrial_effort_predictions_by_flag_eez_fao_gear_length_1950_2017.csv"))
   
