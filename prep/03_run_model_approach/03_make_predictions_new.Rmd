@@ -890,6 +890,78 @@ test2 <- test %>%
 Make predictions for a specific example country (IDN perhaps?) to show why we need Nref for the supplemental 
 
 ```{r}
+years <- c(1950:2017)
+
+
+pixel_areas <- env_data %>%
+  distinct(pixel_id, lon, lat, pixel_area_m2)
+
+# flag = "IDN"
+# yr = 1950
+
+# grab country level fishing effort data for flag and year
+model_data_flag <- hist_fish_data %>%
+  dplyr::select(flag_fin, gear, length_category, year, total_nominal_fishing_hours) %>%
+  filter(flag_fin == flag, year == yr)
+
+
+
+# now grab stage 1 predictions
+stage1_preds <- qread(file.path(rdsi_dir, glue("prep/random_forest/stage_1_predictions/yearly/model_preds_{flag}_{yr}.qs")))
+
+
+# Run simulation where we only allow the top n_year_total cells to be allocated in for domestic fishing
+
+stage1_preds_no_limit <- stage1_preds %>%
+    mutate(pred_presence_rescale = case_when(
+        flag_fin == eez_sovereign & pred_presence > 0 ~ 1,
+        pred_presence >= 0.5 ~ 1,
+        TRUE ~ 0
+    )) 
+# %>%
+#   mutate(pred_presence_rescale = 
+#            ifelse(pixel_id == 20644, 1, 0))
+
+
+#lon= 115
+#lat= -13
+# 20644
+
+
+stage2_preds <- qread(file.path(rdsi_dir, glue("prep/random_forest/stage_2_predictions/yearly/model_preds_{flag}_{yr}.qs")))
+
+all_preds_no_limit <- stage2_preds %>%
+  dplyr::select(lat, lon, gear, length_category, year, flag_fin, pred_prop) %>% # probably select lat, lon, gear, length, year, flag here?
+  left_join(., stage1_preds_no_limit) %>% 
+    dplyr::select(lon, lat, flag_fin,gear, length_category, year, fao_id, eez_id, eez_sovereign, eez_country_name, pred_prop, pred_presence_rescale) %>% 
+  mutate(pred_prop_final = pred_prop*pred_presence_rescale) %>%
+  filter(pred_prop_final > 0) %>%
+  filter(!is.na(pred_prop_final)) %>%
+ group_by(year, flag_fin, gear, length_category) %>%
+  mutate(prop_fishing_hours_cell_predict_rescaled = pred_prop_final / sum(pred_prop_final, na.rm = TRUE)) %>%
+ ungroup() %>% # need to rescale the predictions to be between 0 and 1 here so that we can allocate effort
+  left_join(hist_fish_data) %>%
+  mutate(nom_active_fishing_hours = prop_fishing_hours_cell_predict_rescaled*total_nominal_fishing_hours,
+         eff_active_fishing_hours = prop_fishing_hours_cell_predict_rescaled*total_effective_fishing_hours) %>%
+  left_join(global_grid) %>%
+  left_join(fao_lookup) %>%
+  left_join(eez_lookup) %>%
+    dplyr::select(pixel_id, lon, lat, year, flag_fin, gear, length_category, eez_sovereign, fao_id, fao_major_fishing_area, nom_active_fishing_hours, eff_active_fishing_hours) %>%
+  filter(nom_active_fishing_hours > 0) %>%
+  mutate(sector = "Industrial") %>%
+  left_join(pixel_areas)
+
+# test_preds_no_limit <- all_preds_no_limit %>%
+#   dplyr::group_by(lon, lat) %>%
+#   summarise(nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
+#   ungroup() %>%
+#   rast(., type = "xyz")
+# 
+# plot(test_preds_no_limit)
+
+
+qs::qsave(all_preds_no_limit, here(glue("data/int/IDN_sensitivity/model_preds_{flag}_{yr}_p_0.qs")))
+
 
 ```
 
