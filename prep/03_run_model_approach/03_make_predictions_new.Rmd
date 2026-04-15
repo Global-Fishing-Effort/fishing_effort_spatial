@@ -363,19 +363,19 @@ m <- 0.3
 k_min <- ceiling(m * N_accessible) # these are the minimum amount of cells we will allow
 
 # 99th percentile threshold inside own EEZ
-p95_eez <- stage1_preds %>%
-    filter(flag_fin == eez_sovereign) %>%
-   distinct(pixel_id, lon, lat, pred_presence) %>%
-  summarise(p95 = quantile(pred_presence, probs = 0.95, na.rm = TRUE)) %>%
-  pull(p95)
+# p95_eez <- stage1_preds %>%
+#     filter(flag_fin == eez_sovereign) %>%
+#    distinct(pixel_id, lon, lat, pred_presence) %>%
+#   summarise(p95 = quantile(pred_presence, probs = 0.95, na.rm = TRUE)) %>%
+#   pull(p95)
 
-eez_limit <- min(p95_eez, 0.5) # this is the threshold for our predictions
+# eez_limit <- min(p95_eez, 0.5) # this is the threshold for our predictions
 
 # cells retained by threshold rule
 eez_cells_thresh <- stage1_preds %>%
     filter(flag_fin == eez_sovereign) %>%
-  filter(pred_presence >= eez_limit)
-  # filter(pred_presence > 0)
+ # filter(pred_presence >= eez_limit)
+  filter(pred_presence > 0)
 
 # test <- eez_cells_thresh %>%
 #   dplyr::select(lon, lat, pixel_id) %>%
@@ -409,7 +409,7 @@ if (n_thresh < k_min) { # if we have less rows from our cutoff with 99th quantil
   selected_eez_cells <- eez_cells_thresh %>%
     distinct(pixel_id, lon, lat, year, flag_fin, eez_sovereign) %>%
         mutate(keep = 1) %>%
-    mutate(limit_type = "Threshold of 0.5 or 95th quantile")
+    mutate(limit_type = "Threshold of p > 0")
   
   cat(flag, yr, ": using threshold rule with", n_thresh, "cells\n")
 }
@@ -433,7 +433,7 @@ Now let's grab the year from 2015-2017 which produced the largest number of allo
 
 for(flag in model_flags){
   # flag = "VNM"
-  files <- list.files( file.path(rdsi_dir, "prep/random_forest/eez_2015_2017_reference_cells_p95/yearly/"), pattern = flag, full.names = TRUE)
+  files <- list.files( file.path(rdsi_dir, "prep/random_forest/eez_2015_2017_reference_cells_0/yearly/"), pattern = flag, full.names = TRUE)
   
   if (length(files) == 0) {
   cat("skipping check to make sure this is right")
@@ -463,19 +463,19 @@ df_filtered <- df %>%
   #   rast(., type = "xyz")
 
   
-qs::qsave(df_filtered, file.path(rdsi_dir, glue("prep/random_forest/eez_2015_2017_reference_cells_p95/access_mask_2015_2017_{flag}.qs"))) 
+qs::qsave(df_filtered, file.path(rdsi_dir, glue("prep/random_forest/eez_2015_2017_reference_cells_0/access_mask_2015_2017_{flag}.qs"))) 
 
 }
 
 # test a couple to make sure they look OK
-test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells/access_mask_2015_2017_VNM.qs"))) # 24
-test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells/access_mask_2015_2017_IND.qs"))) # 77
-test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells/access_mask_2015_2017_IDN.qs"))) # 183
-test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells/access_mask_2015_2017_THA.qs"))) # only 11
-test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells/access_mask_2015_2017_BGD.qs")))  # only 5
+test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells_0/access_mask_2015_2017_VNM.qs"))) 
+test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells_0/access_mask_2015_2017_IND.qs"))) 
+test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells_0/access_mask_2015_2017_IDN.qs")))
+test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells_0/access_mask_2015_2017_THA.qs"))) 
+test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells_0/access_mask_2015_2017_BGD.qs"))) 
 # OK so THA and BGD might be too small??
 
-# test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells/access_mask_2015_2017_YEM.qs")))  
+# test <- qs::qread(file.path(rdsi_dir, ("prep/random_forest/eez_2015_2017_reference_cells_0/access_mask_2015_2017_YEM.qs")))  
 # 
 # test2 <- test %>%
 #   distinct(lon, lat, keep) %>%
@@ -488,7 +488,7 @@ After fitting the models, we generated predictions for the full spatiotemporal p
 
 First we calculated maximum domestic spatial footprint number of cells we will allow for allocation (above code): 
 
-N_ref was defined as the largest annual number of domestic cells retained in any year from 2015–2017, rather than the union of cells across all three years. This ensured that the reference footprint represented a plausible maximum annual domestic extent, while avoiding inflation of the footprint through aggregation of interannual shifts in fishing location across the reference period. This reference period was chosen because we assumed domestic fishing extent would be most fully represented in the most recent years, and because predictions from 2015 onward were considered the most reliable. To define the reference footprint, we retained cells with stage-1 predicted presence values of either p≥0.5 or above the 95th percentile of predicted presence, whichever criterion was more smaller.
+N_ref was defined as the largest annual number of domestic cells retained in any year from 2015–2017, rather than the union of cells across all three years. This ensured that the reference footprint represented a plausible maximum annual domestic extent, while avoiding inflation of the footprint through aggregation of interannual shifts in fishing location across the reference period. This reference period was chosen because we assumed domestic fishing extent would be most fully represented in the most recent years, and because predictions from 2015 onward were considered the most reliable. To define the reference footprint, we retained cells with stage-1 predicted presence values of p > 0. 
 
 In some countries, however, this raw reference footprint was implausibly small relative to the size of the domestic EEZ, likely reflecting sparse AIS coverage or limited training data rather than a truly narrow fishing footprint. To avoid propagating these likely observation-driven artifacts into the hindcast, we imposed a minimum reference footprint equal to 30% of domestic EEZ cells whenever the calculated N_ref fell below that threshold. This floor was intended as a conservative safeguard against unrealistically small domestic footprints in data-poor cases, particularly in some small or weakly observed countries in South and Southeast Asia. For example, when no floor was applied, the procedure yielded an N_ref of only 3 cells for Vietnam, representing about 4% of cells in its EEZ, which we considered implausibly low.
 
@@ -504,7 +504,9 @@ N_(year,total) = min(N_ref, N_ref*((E_year/E_ref))^alpha)
 $N_{year,total} = \min\left(N_{ref},\; N_{ref}\left(\frac{E_{year}}{E_{ref}}\right)^{\alpha}\right)$
 
 
-where N_ref is the number of cells in the maximum domestic spatial footprint mask, E_year is the total effort for the flag state in the that year, E_ref is the reference effort for that flag state (defined as the maximum annual effort observed during 2015–2017), and α = 0.5, such that spatial extent expands sublinearly with total effort. This formulation allows historical fishing footprints to be smaller than the modern reference footprint while avoiding unrealistically small hindcast footprints.
+where N_ref is the number of cells in the maximum domestic spatial footprint mask, E_year is the total effort for the flag state in the that year, E_ref is the reference effort for that flag state (defined as the maximum annual effort observed during 2015–2017), and α = 0.5, such that spatial extent expands sublinearly with total effort. 
+
+To prevent implausibly small domestic fishing footprints in early years, we imposed a minimum extent equal to (i) the greater of 10% of domestic EEZ cells or (ii) the number of cells with depths less than or equal to 200 meters within the domestic EEZ. We used the 200 meter threshold as a heuristic proxy for shelf-associated fishing grounds that were more likely to remain accessible to domestic fleets in earlier years of the hindcast, when fishing distributions were likely more spatially constrained (Chuenpagdee et al., 2006; Watson & Tidd, 2018; Pauly et al., 2020). The 10% threshold serves as a fallback for EEZs with very narrow shelves, such as oceanic islands, where a strict shelf-based constraint would likely underestimate the spatial extent of historically adapted domestic fisheries. This allows historical domestic fishing footprints to contract relative to the modern reference period while maintaining plausible minimum extents. Although this is not a standard approach in fisheries modelling, where constraints are more often based on technological or operational factors such as fuel capacity or travel distance, it is conceptually analogous to bounded allocation approaches used in land-use allocation models (Rahman & Szabó, 2021).
 
 Because predictions were generated separately by gear and vessel length class, the annual domestic footprint constraint was applied independently within each gear. For a given flag-year, we first calculated the total allowable annual footprint size, N_(year,total). This value was then used as the maximum number of domestic cells that could receive allocation within each gear. Within gear, the allowable number of cells was apportioned across vessel length classes according to each length class’s share of total effort in that gear and year, rounding up to the nearest whole number:
 
@@ -605,16 +607,38 @@ eez_size_df <- env_data_loop %>%
     summarise(n_cells_eez = n()) %>%
     ungroup()
 
+
+
+# calculate floor based on limit of 20m of depth per EEZ
+
+depth_floor_df <- env_data_fishing_areas %>%
+  distinct(pixel_id, lon, lat, flag_fin = eez_sovereign, elevation_m) %>%
+  filter(elevation_m >= -200,
+         flag_fin != "High seas") %>%
+  group_by(flag_fin) %>%
+  summarise(n_cells_depth = n()) %>%
+  ungroup() %>%
+  right_join(eez_size_df) %>%
+  mutate(n_cells_eez_10 = ceiling(0.1*n_cells_eez)) %>%
+  mutate(n_cells_depth = ifelse(is.na(n_cells_depth), 0, n_cells_depth)) %>%
+  mutate(n_cells_depth_constraint = pmax(n_cells_eez_10, n_cells_depth)) %>%
+  dplyr::select(flag_fin, n_cells_depth_constraint)
+
+
 # now calculate n_year_total
+
 n_year_total_df <- eff_ref_df %>%
   left_join(max_eff_ref) %>%
   left_join(n_ref_group) %>%
   left_join(eez_size_df) %>%
+  left_join(depth_floor_df) %>%
   filter(!is.na(n_ref)) %>% # these are the ones we regional model
   mutate(n_year_total_1 = ceiling(n_ref *((eff_year/eff_ref)^0.5))) %>%
   mutate(n_year_total_fin = pmin(n_ref, n_year_total_1)) %>% # take the rowwise minimum of n_ref and n_year_total to get the final value. We don't want n_year_total to exceed the maximum reference number of cells
   mutate(n_year_total_floor = pmax(ceiling(0.1*n_ref), n_year_total_fin),
-         n_year_total_floor_eez = pmax(ceiling(0.1*n_cells_eez), n_year_total_fin)) # apply a floor of 10% of n_ref. This way we won't allow n_ref to get all the way down to 1. 
+         n_year_total_floor_eez = pmax(ceiling(0.1*n_cells_eez), n_year_total_fin),
+         n_year_total_depth = pmax(ceiling(n_cells_depth_constraint), n_year_total_fin)) # apply a floor of 10% of n_ref or the number of cells with dpeth >200m. This way we won't allow n_ref to get all the way down to 1. 
+
 
 ```
 
@@ -639,7 +663,7 @@ model_flags <- intersect(stage_1_flags, stage_2_flags) # 147; perfect!
 
 years <- c(1950:2017)
 
-out_dir <- file.path(rdsi_dir, "prep/random_forest/predictions_industrial_flag_revised_floor_0/yearly")
+out_dir <- file.path(rdsi_dir, "prep/random_forest/predictions_industrial_flag_revised_floor_depth/yearly")
 
 tasks <- CJ(flag = model_flags, year = years)
 tasks[, out_file := file.path(out_dir, sprintf("model_preds_%s_%d.qs", flag, year))]
@@ -665,7 +689,7 @@ registerDoParallel(cl)
 
 # grab country level fishing effort data for flag and year
 model_data_flag <- hist_fish_data %>%
-  dplyr::select(flag_fin, gear, length_category, year, total_nominal_fishing_hours ) %>%
+  dplyr::select(flag_fin, gear, length_category, year, total_nominal_fishing_hours) %>%
   filter(flag_fin == flag, year == yr)
 
 if(nrow(model_data_flag) == 0){
@@ -678,7 +702,7 @@ if(nrow(model_data_flag) == 0){
 n_year_total <- n_year_total_df %>%
   filter(flag_fin == flag,
          year == yr) %>%
-  pull(n_year_total_floor_eez)
+  pull(n_year_total_depth)
  
 # now grab stage 1 predictions
 stage1_preds <- qread(file.path(rdsi_dir, glue("prep/random_forest/stage_1_predictions/yearly/model_preds_{flag}_{yr}.qs")))
@@ -758,7 +782,7 @@ if(nrow(all_preds_no_limit) == 0){
   next()
 }
 
-qs::qsave(all_preds_no_limit, file.path(rdsi_dir, glue("prep/random_forest/predictions_industrial_flag_revised_floor_0/yearly/model_preds_{flag}_{yr}.qs"))) # qs is smaller
+qs::qsave(all_preds_no_limit, file.path(rdsi_dir, glue("prep/random_forest/predictions_industrial_flag_revised_floor_depth/yearly/model_preds_{flag}_{yr}.qs"))) # qs is smaller
 
   }
 
@@ -827,7 +851,7 @@ foreach(flag = flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "country
 stopCluster(cl)
 
 
-test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/predictions_industrial_flag_revised_floor_0/model_preds_1950_2017_AUS.qs") %>%
+test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/predictions_industrial_flag_revised_floor_depth/model_preds_1950_2017_IDN.qs") %>%
   filter(year == 1950) %>%
   filter(flag_country_iso3c == eez_sovereign_iso3c) %>%
   dplyr::group_by(lon, lat) %>%
@@ -861,6 +885,12 @@ test <- ind_df_filt %>%
 test2 <- test %>%
   rast(., type = "xyz") # yeah, Rousseau IND is pretty spread across the coastline for 1950. 
   
+```
+
+Make predictions for a specific example country (IDN perhaps?) to show why we need Nref for the supplemental 
+
+```{r}
+
 ```
 
 
