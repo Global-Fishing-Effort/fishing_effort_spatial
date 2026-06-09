@@ -1,5 +1,5 @@
 ---
-title: "Data wrangling - Spatial measures 1 degree"
+title: "Calculate distance to each EEZ for regional models"
 author: "Gage Clawson (IMAS)"
 date: '`r format(Sys.time(), "%m/%d/%Y")`'
 output: 

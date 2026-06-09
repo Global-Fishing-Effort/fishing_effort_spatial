@@ -192,7 +192,7 @@ registerDoParallel(cl)
 # Run the loop in parallel
 foreach(flag = flags_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "ranger")) %dopar% {
   
-    # flag = "GUF"
+    # flag = "CHN"
   model_data_flag <- model_data %>%
     dplyr::select(lon, lat, flag_fin, gear, length_category, year, presence) %>%
     filter(flag_fin == flag)

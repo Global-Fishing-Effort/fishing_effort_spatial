@@ -67,16 +67,6 @@ proportion in each cell (per those same categories).
 The model can be used to predict historical fishing effort distributions
 under the following assumptions:
 
-#### Key Assumptions: 
-
-1.  The relationships between environmental conditions and fishing
-    effort distribution are relatively stable over time
-
-2.  The influence of total fishing effort on spatial distribution
-    patterns remains consistent
-
-3.  The basic responses of fish and fishers to environmental conditions
-    are similar across decades
 
 #### **Implementation Details**
 
